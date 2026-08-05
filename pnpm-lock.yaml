@@ -12,8 +12,8 @@ importers:
         specifier: ^1.13.0
         version: 1.19.17(hono@4.13.0)
       '@meso.ai/let-it-flow':
-        specifier: ^0.3.0
-        version: 0.3.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: ^0.3.2
+        version: 0.3.2
       ai:
         specifier: ^6.0.0
         version: 6.0.243(zod@3.25.76)
@@ -282,19 +282,12 @@ packages:
   '@meso.ai/client@0.1.1':
     resolution: {integrity: sha512-mAmRPpECIG5USSRnvscgdHqu3UXei9obSLW9ypIXfvlMi3WhBI1zil4vp+rjjsUg2u2NsFBxqhOBLSjvTtZDnA==}
 
-  '@meso.ai/let-it-flow@0.3.0':
-    resolution: {integrity: sha512-qc4ZZjZp8sA6RSNneog1SZj1oERv/sePW/eIou6gQSQJaXtepqw0KHxUfm/1fXMLDOcLogvqTWqeQwGsuX3pgA==}
+  '@meso.ai/let-it-flow@0.3.2':
+    resolution: {integrity: sha512-bR1988jjptt0RBmXGTGJSR3fV8D1j7dpte4M5MLurz6g50mBliAY1AHbOitwAKqQvzOGqZp7eWjqPuZvYgy73g==}
     engines: {node: '>=20'}
 
   '@meso.ai/types@2.2.0':
     resolution: {integrity: sha512-yYuWd3KFrA0/wgf0QtWRTo2Tpx4dY03SSOwipJ9Bj+flymQDKBsDmZotSpmjYfKuMK1Y8bpjvDliBcJwMwKwow==}
-
-  '@meso.ai/ui@3.3.1':
-    resolution: {integrity: sha512-3gb9Y5BT4eCJGK/PKcEOHUNRsILTAo6kYA2jlhpEbOeJDwwXKflNQkcGR13/Br1TBqvdcVyqXdhKjq9uqYd5jA==}
-    peerDependencies:
-      '@meso.ai/types': '>=2.2.0'
-      react: '>=18.0.0'
-      react-dom: '>=18.0.0'
 
   '@modelcontextprotocol/sdk@1.30.0':
     resolution: {integrity: sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==}
@@ -642,15 +635,6 @@ packages:
     resolution: {integrity: sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==}
     engines: {node: '>= 0.10'}
 
-  react-dom@19.2.8:
-    resolution: {integrity: sha512-rVprimfGBG3DR+Tq0IQG2DT5PxKth1WIGDmj5yPmlzr4YBe7uyE+Du4oVqTDXZSHGGGXRtTJEGSSePyQCMBglQ==}
-    peerDependencies:
-      react: ^19.2.8
-
-  react@19.2.8:
-    resolution: {integrity: sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw==}
-    engines: {node: '>=0.10.0'}
-
   require-from-string@2.0.2:
     resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
     engines: {node: '>=0.10.0'}
@@ -661,9 +645,6 @@ packages:
 
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
-
-  scheduler@0.27.0:
-    resolution: {integrity: sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==}
 
   send@1.2.1:
     resolution: {integrity: sha512-1gnZf7DFcoIcajTjTwjwuDjzuz4PPcY2StKPlsGAQ1+YH20IRVrBaXSWmdjowTJ6u8Rc01PoYOGHXfP1mYcZNQ==}
@@ -914,7 +895,7 @@ snapshots:
     dependencies:
       '@meso.ai/types': 2.2.0
 
-  '@meso.ai/let-it-flow@0.3.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@meso.ai/let-it-flow@0.3.2':
     dependencies:
       '@ai-sdk/anthropic': 3.0.105(zod@3.25.76)
       '@ai-sdk/azure': 3.0.95(zod@3.25.76)
@@ -922,7 +903,6 @@ snapshots:
       '@hono/node-server': 1.19.17(hono@4.13.0)
       '@meso.ai/client': 0.1.1
       '@meso.ai/types': 2.2.0
-      '@meso.ai/ui': 3.3.1(@meso.ai/types@2.2.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@modelcontextprotocol/sdk': 1.30.0(zod@3.25.76)
       ai: 6.0.243(zod@3.25.76)
       dompurify: 3.4.13
@@ -934,17 +914,9 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@3.25.76)
     transitivePeerDependencies:
       - '@cfworker/json-schema'
-      - react
-      - react-dom
       - supports-color
 
   '@meso.ai/types@2.2.0': {}
-
-  '@meso.ai/ui@3.3.1(@meso.ai/types@2.2.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
-    dependencies:
-      '@meso.ai/types': 2.2.0
-      react: 19.2.8
-      react-dom: 19.2.8(react@19.2.8)
 
   '@modelcontextprotocol/sdk@1.30.0(zod@3.25.76)':
     dependencies:
@@ -1315,13 +1287,6 @@ snapshots:
       iconv-lite: 0.7.3
       unpipe: 1.0.0
 
-  react-dom@19.2.8(react@19.2.8):
-    dependencies:
-      react: 19.2.8
-      scheduler: 0.27.0
-
-  react@19.2.8: {}
-
   require-from-string@2.0.2: {}
 
   router@2.2.0:
@@ -1335,8 +1300,6 @@ snapshots:
       - supports-color
 
   safer-buffer@2.1.2: {}
-
-  scheduler@0.27.0: {}
 
   send@1.2.1:
     dependencies:

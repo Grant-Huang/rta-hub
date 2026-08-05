@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
-    "@meso.ai/let-it-flow": "^0.3.0",
+    "@meso.ai/let-it-flow": "^0.3.2",
     "ai": "^6.0.0",
     "dotenv": "^17.4.2",
     "hono": "^4.6.0",
