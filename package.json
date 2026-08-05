@@ -14,8 +14,9 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
@@ -25,11 +26,6 @@
     "hono": "^4.6.0",
     "nodemailer": "^6.9.0",
     "zod": "^3.23.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "@meso.ai/types": "^2.2.0"
-    }
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

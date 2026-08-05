@@ -42,7 +42,8 @@ pnpm dev
 对应 REQUIREMENTS.md 里的一小部分。多租户、四视图渲染、报价闸门等按文档逐步补齐。
 
 平台能力从 `@meso.ai/let-it-flow/runtime` 引入（`LlmService`、`loadConfig`、
-`createTavilyProvider`/`createNativeProvider`、`extractHtml`）。
+`createTavilyProvider`/`createNativeProvider`）；`extractHtml` 目前为本地实现
+（`src/html-extract.ts`），待上游导出后可改为从 runtime 引入。
 
 ## 关于发送邮件（请先读这段）
 

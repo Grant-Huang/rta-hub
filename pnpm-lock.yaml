@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@meso.ai/types': ^2.2.0
-
 importers:
 
   .:
@@ -282,8 +279,8 @@ packages:
     peerDependencies:
       jsep: ^0.4.0||^1.0.0
 
-  '@meso.ai/client@0.1.0':
-    resolution: {integrity: sha512-dHfov7LhQOKT631ffDOtPu4SJ9D2qgtG+6lwTttcr2YeQpLz2FP0AxgxeiGRpKZrX7RPp//kfCJ3ujRdJS3kFA==}
+  '@meso.ai/client@0.1.1':
+    resolution: {integrity: sha512-mAmRPpECIG5USSRnvscgdHqu3UXei9obSLW9ypIXfvlMi3WhBI1zil4vp+rjjsUg2u2NsFBxqhOBLSjvTtZDnA==}
 
   '@meso.ai/let-it-flow@0.3.0':
     resolution: {integrity: sha512-qc4ZZjZp8sA6RSNneog1SZj1oERv/sePW/eIou6gQSQJaXtepqw0KHxUfm/1fXMLDOcLogvqTWqeQwGsuX3pgA==}
@@ -295,7 +292,7 @@ packages:
   '@meso.ai/ui@3.3.1':
     resolution: {integrity: sha512-3gb9Y5BT4eCJGK/PKcEOHUNRsILTAo6kYA2jlhpEbOeJDwwXKflNQkcGR13/Br1TBqvdcVyqXdhKjq9uqYd5jA==}
     peerDependencies:
-      '@meso.ai/types': ^2.2.0
+      '@meso.ai/types': '>=2.2.0'
       react: '>=18.0.0'
       react-dom: '>=18.0.0'
 
@@ -913,7 +910,7 @@ snapshots:
     dependencies:
       jsep: 1.4.0
 
-  '@meso.ai/client@0.1.0':
+  '@meso.ai/client@0.1.1':
     dependencies:
       '@meso.ai/types': 2.2.0
 
@@ -923,7 +920,7 @@ snapshots:
       '@ai-sdk/azure': 3.0.95(zod@3.25.76)
       '@ai-sdk/openai': 2.0.117(zod@3.25.76)
       '@hono/node-server': 1.19.17(hono@4.13.0)
-      '@meso.ai/client': 0.1.0
+      '@meso.ai/client': 0.1.1
       '@meso.ai/types': 2.2.0
       '@meso.ai/ui': 3.3.1(@meso.ai/types@2.2.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@modelcontextprotocol/sdk': 1.30.0(zod@3.25.76)
