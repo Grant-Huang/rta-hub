@@ -1,0 +1,40 @@
+{
+  "name": "rta-hub",
+  "version": "0.1.0",
+  "description": "RTA-Hub — 多租户橱柜设计与报价市场平台（基于 @meso.ai/let-it-flow 构建）",
+  "type": "module",
+  "license": "MIT",
+  "author": "Grant-Huang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Grant-Huang/rta-hub.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@meso.ai/let-it-flow": "^0.3.0",
+    "ai": "^6.0.0",
+    "dotenv": "^17.4.2",
+    "hono": "^4.6.0",
+    "nodemailer": "^6.9.0",
+    "zod": "^3.23.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@meso.ai/types": "^2.2.0"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/nodemailer": "^6.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
