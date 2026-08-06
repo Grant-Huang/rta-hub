@@ -37,7 +37,7 @@
 ```bash
 pnpm install
 cp .env.example .env
-pnpm test          # 402 passing
+pnpm test          # 428 passing
 pnpm typecheck
 pnpm dev           # 打开 http://localhost:8790
 ```
@@ -55,7 +55,7 @@ pnpm ops:prospects help
 
 ## 当前代码状态
 
-**MVP-1 ~ MVP-3 均已完成**，402 个测试用例覆盖。端到端可跑：
+**MVP-1 ~ MVP-3 均已完成**，428 个测试用例覆盖。端到端可跑：
 
 聊需求 → `@` 公司问规格 → 上传户型图 → 补齐尺寸 → **自动排布出四视图** →
 生成报价（含税/运费/折扣/有效期）→ **多公司比价** → 发送前披露 → 确认 →
@@ -96,6 +96,37 @@ pnpm ops:prospects help
 原先的"搜索公司列表 → 勾选 → 群发询价"功能**已删除**（与 CASL 冲突）；抓取能力保留为
 运营侧的公司发现工具（`src/ops/`，手动触发），用途见
 [docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md)。
+
+## 关于对外暴露（请先读这段）
+
+**默认只适合跑在本地。** 账号鉴权目前是 `X-Account-Id` 请求头，服务端不做校验——
+在 localhost 上这是已知的 MVP 取舍（检查清单 E1），但放到公网上，任何人把这个头
+改成别的账号 id 就能读那个账号的数据，而系统里存的是姓名、邮箱、户型图这类
+PIPEDA 管辖的信息。
+
+对外暴露前**至少**要加上整站访问口令：
+
+```bash
+SITE_PASSWORD=一个够长的口令 NODE_ENV=production pnpm start
+```
+
+- 没配 `SITE_PASSWORD` 且 `NODE_ENV=production` 时，**服务拒绝启动**。这是刻意的：
+  让配置失误变成一次启动失败，而不是一次数据泄露。
+- 本地开发不配口令可以照常跑，但每次启动都会打印「未启用」的警告。
+- `/unsubscribe` 与 `/health` 免于口令——CASL 要求退订链接**真的能用**，
+  一个需要先输密码才能退订的链接不算有效退订机制。
+- 整站口令与 `ADMIN_TOKEN` 是**叠加**的两道锁，前者不替代后者。
+
+再次强调：这道口令**不是登录态**。口令后面的人仍然可以互相冒充账号。
+要让真实客户使用，检查清单 E1 绕不过去。
+
+### 关于 Serverless 平台（Vercel 等）
+
+现在的持久化是平面文件（`writeFileSync` + `renameSync`）。Vercel 这类 serverless
+平台的文件系统只读、`/tmp` 逐实例且冷启动即清空、并发请求落在不同实例上——
+直接搬上去会**丢数据，且不同用户看到的数据不一致**。要部署到这类平台，先把
+`JsonCollection` 换成托管数据库；或者选一个有持久磁盘的长驻进程平台
+（Fly.io / Railway / Render），现有代码几乎不用改。
 
 ## 关于发送邮件（请先读这段）
 

@@ -71,6 +71,11 @@ import {
   resolvePreferences, validatePreferences, type CustomerPreferences,
 } from "./preferences/questions.js";
 import { disputeWindowEndsAt, isWithinDisputeWindow } from "./billing/lead-events.js";
+import {
+  checkPassword, cookieHeader, issueToken, rateLimit, resolveSiteGate,
+  siteGate, siteGateDisabledExplicitly, SiteGateMisconfigured, startupNotice, unlockPage,
+  type SiteGateConfig,
+} from "./app/site-gate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -97,6 +102,38 @@ async function jsonBody<T extends object>(c: Ctx): Promise<Partial<T>> {
 }
 
 const app = new Hono<{ Variables: AppVars }>();
+
+/**
+ * 整站访问口令 —— **外层**闸门，挂在所有路由之前。
+ *
+ * 它把"谁能碰到这个系统"收敛到知道口令的人；但它不是登录态，口令后面的人
+ * 仍然可以互相冒充账号。检查清单 E1 依然待办，见 `app/site-gate.ts` 的说明。
+ */
+let gate: SiteGateConfig = { secret: "", enabled: false };
+app.use("*", (c, next) => siteGate(gate)(c, next));
+
+/** 口令校验。限速按来源 IP，挡住字典爆破。 */
+app.post("/__unlock", async (c) => {
+  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  const limit = rateLimit(ip);
+  if (!limit.allowed) {
+    return c.html(unlockPage(`尝试次数过多，请 ${Math.ceil(limit.retryAfterSec / 60)} 分钟后再试。`), 429);
+  }
+
+  // 登录页是普通表单提交；同时接受 JSON，便于脚本化测试
+  const ct = c.req.header("content-type") ?? "";
+  const password = ct.includes("json")
+    ? (await jsonBody<{ password: string }>(c as Ctx)).password
+    : (await c.req.parseBody())["password"];
+
+  if (!checkPassword(gate, password)) {
+    return c.html(unlockPage("口令不正确。"), 401);
+  }
+
+  const secure = new URL(c.req.url).protocol === "https:";
+  c.header("set-cookie", cookieHeader(issueToken(gate), secure));
+  return c.redirect("/", 303);
+});
 
 /**
  * MVP-1 的最小鉴权：`X-Account-Id` 头标识调用方。
@@ -1291,11 +1328,23 @@ function renderQuoteText(q: Quote): string {
 
 export async function createApp(opts: Parameters<typeof createAppContext>[0] = {}) {
   appCtx = await createAppContext(opts);
+  gate = siteGateDisabledExplicitly()
+    ? { secret: "", enabled: false }
+    : resolveSiteGate();
   return app;
 }
 
 export async function start(port = Number(process.env.PORT || 8790)) {
-  await createApp();
+  try {
+    await createApp();
+  } catch (e) {
+    // 配置失误要响亮地失败，而不是静默地把站点全开着
+    if (e instanceof SiteGateMisconfigured) {
+      console.error(`\n[rta-hub] 启动中止：\n${e.message}\n`);
+      process.exit(1);
+    }
+    throw e;
+  }
   return serve({ fetch: app.fetch, port }, (info) => {
     const smtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
     const company = appCtx.repos.companies.all()[0];
@@ -1304,6 +1353,7 @@ export async function start(port = Number(process.env.PORT || 8790)) {
     console.log(`[rta-hub] 试点公司：${company?.name ?? "（无）"}（${bundle?.modules.length ?? 0} 个型号）`);
     console.log(`[rta-hub] LLM：${appCtx.llm ? "已接入" : "未配置 —— 对话降级为确定性问答"}`);
     console.log(`[rta-hub] SMTP：${smtp ? "已配置" : "未配置 —— 发送为 dry-run"}`);
+    console.log(`[rta-hub] ${startupNotice(gate)}`);
   });
 }
 
