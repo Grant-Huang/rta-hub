@@ -193,6 +193,26 @@ export interface ModuleSpec {
    */
   faceTemplateId?: string;
   assemblyOptions: AssemblyOption[];
+  /**
+   * 商家**直接声明**的能力标签（CATALOG_MODEL.md §2）。
+   *
+   * 缺省时由 `spec/capabilities.ts` 从 type + 脸型模板推断，推不准的走待确认队列。
+   * 排布算法只读这一层，不读 `code`——能力可以跨商家对齐，编码不能。
+   *
+   * 类型是结构化的字面量而不是引入 `ModuleCapabilities`，是为了不让 domain 层
+   * 反向依赖 spec 层；`capabilities.ts` 里的类型与这里逐字段一致。
+   */
+  capabilities?: {
+    roles: (
+      | "doorStorage" | "drawerStorage" | "sinkBase" | "cooktopBase"
+      | "applianceHousing" | "cornerAccess" | "openDisplay" | "trim"
+    )[];
+    servesAppliance?:
+      | "refrigerator" | "range" | "cooktop" | "wallOven"
+      | "rangeHood" | "microwave" | "dishwasher";
+    stacking?: { asLower: boolean; asUpper: boolean };
+    monolithic?: boolean;
+  };
 }
 
 export interface PriceGroup {

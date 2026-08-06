@@ -28,7 +28,7 @@
 - [docs/SCENARIOS.md](./docs/SCENARIOS.md) —— 场景走查 A–L（公司入驻、冷启动、@ 路由、四视图、比价发送、贸易账号、销售信号、招商引流、家电排布、商家规格差异、换花色比价）
 - [docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md) —— 公司发现与招商引流的合规路径（爬虫定位、社媒获客、CASL/邮件列表）
 - [docs/RENDERING.md](./docs/RENDERING.md) —— 二维视图渲染方案（脸型文法、模板清单、SKU 规则匹配、规范文档核实结果、统一绘图内核）
-- [docs/CATALOG_MODEL.md](./docs/CATALOG_MODEL.md) —— **产品目录模型**：为什么不做「通用码↔商家码」映射表、能力标签、叠装吊柜求解、报价的唯一数据源
+- [docs/CATALOG_MODEL.md](./docs/CATALOG_MODEL.md) —— **产品目录模型**：为什么不做「通用码↔商家码」映射表、能力标签（已实现）、叠装吊柜求解、报价的唯一数据源
 - [docs/APPLIANCES.md](./docs/APPLIANCES.md) —— **家电与水槽**：采集（家电是客户的输入不是常数）、配套柜、排布、图纸标注
 - [docs/PRE_LAUNCH_CHECKLIST.md](./docs/PRE_LAUNCH_CHECKLIST.md) —— 上线前检查清单（税率核验、FR-2 抽样量、合规、安全、计费）
 - [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) —— MVP-1 ~ MVP-5 开发计划与进度（已完成 / 未完成 / 下一轮顺序）
@@ -42,7 +42,7 @@
 ```bash
 pnpm install
 cp .env.example .env
-pnpm test          # 531 passing
+pnpm test          # 550 passing
 pnpm typecheck
 pnpm gates         # 上线闸门状态（有阻断项时退出码 1）
 pnpm simulate out 4  # 4 个场景走完整链路，产出图纸与解释到 out/
@@ -77,7 +77,7 @@ pnpm ops:prospects help
 
 ## 当前代码状态
 
-**MVP-1 ~ MVP-3 均已完成**，531 个测试用例覆盖。端到端可跑：
+**MVP-1 ~ MVP-3 均已完成**，550 个测试用例覆盖。端到端可跑：
 
 聊需求 → `@` 公司问规格 → 上传户型图 → 补齐尺寸 → **先问要不要出图** →
 **全局俯视图（多轮修改）** → 客户认可排布 → **完整四视图 + 解释** →
@@ -132,10 +132,22 @@ pnpm ops:prospects help
 - **争议裁定**：公司侧看得到线索来源与剩余争议窗口（但看不到客户身份）；
   运营侧裁定台带审计事件链与内容哈希一致性标记，不凭一面之词
 
-### v0.7：已写设计、**尚未开发**
+### MVP-5 进行中（v0.7 设计的落地）
 
-第三轮审查（读模拟产出本身，而不是读代码）提出四组问题，设计已写完并合入，
-代码还没动。任务拆解见 [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) §5.1（MVP-5）：
+任务拆解与进度见 [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) §5.1。
+
+**已做：**
+
+- **M5-1 报告改成单一时间线**。图纸出现在它真正被产出的那一刻。上一版按数据种类
+  分节，读起来像"先确认后看图"——**产出物的结构本身会传达因果关系**
+- **M5-2 能力标签**（`src/spec/capabilities.ts`）。排布算法改问「给我一个能当抽屉柜
+  用的地柜」，不再问「码是不是以 3DB 开头」。**编码不映射，能力才映射**——
+  连体 pantry 与分体叠装 pantry 之间件数、价格构成、外观、安装全不同，一张码映射表
+  存不下这种差异 → [docs/CATALOG_MODEL.md](./docs/CATALOG_MODEL.md)。
+  顺带修掉一个已经存在的 bug 类：第二家试点公司用 `NW-` 前缀命名，
+  `/^(\d)DB/` 这类正则一个也命不中，于是"高频区优先抽屉柜"在那家公司上**静默失效**
+
+**待做：**
 
 - **家电是客户的输入，不是常数**。现在冰箱一律按 36" 留空且从不问客户；
   要改成问种类/尺寸/位置，答"不确定"合法但推定值必须标注出来
@@ -144,11 +156,9 @@ pnpm ops:prospects help
   `moduleCode`，于是它们是几个没有文字的灰色方块 → FR-5.2
 - **两组图看起来像两个软件画的**。技术相同（都是自己拼 SVG，没用绘图库），
   但配色/标注/尺寸链的约定不同，要抽出共用绘图内核 → FR-5.3
-- **产品目录：编码不映射，能力才映射**。连体 pantry 与分体叠装 pantry 之间件数、
-  价格构成、外观、安装全不同，一张码映射表存不下这种差异
-  → [docs/CATALOG_MODEL.md](./docs/CATALOG_MODEL.md)
 - **换花色比价**：同一套方案换门板的重算价，逐行算不乘系数；填缝/收口/踢脚跟着
   换色，塑料地脚不换 → FR-6.3
+- **叠装吊柜**与**第三家试点公司**（设计与前两家不同）→ CATALOG_MODEL §3
 
 尚未做的：NKBA 净空数值的正式核实（阻断项）、生产级鉴权、留存清除的定时任务接线。
 详见 [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) 与

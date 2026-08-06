@@ -122,6 +122,17 @@ const MODULE_DEFS: [string, ModuleSpec["type"], number[], number[], number[], st
  */
 const FACELESS_TYPES: ReadonlySet<ModuleSpec["type"]> = new Set(["leg", "toeKick", "crown"]);
 
+/**
+ * 试点公司**直接声明**的能力（CATALOG_MODEL §2.2 的第一档可信度）。
+ *
+ * 只声明推不出来的那些。`OC3084` 从脸型只能推出"是个家电柜"，推不出配哪种
+ * 家电——而开洞高度、周边配件都取决于这一点。按行业惯例 `OC` = oven cabinet，
+ * 但靠码前缀猜正是能力标签这层要消除的东西，所以在这里显式写下来。
+ */
+const PILOT_CAPABILITIES: Record<string, ModuleSpec["capabilities"]> = {
+  OC3084: { roles: ["applianceHousing"], servesAppliance: "wallOven" },
+};
+
 export const pilotModules: ModuleSpec[] = MODULE_DEFS.map(([code, type, w, h, d]) => {
   const faceless = FACELESS_TYPES.has(type);
   const match = matchFaceTemplate(code);
@@ -138,6 +149,7 @@ export const pilotModules: ModuleSpec[] = MODULE_DEFS.map(([code, type, w, h, d]
     heightOptions: h,
     depthOptions: d,
     ...(match ? { faceTemplateId: match.templateId } : {}),
+    ...(PILOT_CAPABILITIES[code] ? { capabilities: PILOT_CAPABILITIES[code] } : {}),
     assemblyOptions: type === "base" || type === "sinkBase" ? ["RTA", "assembled"] : ["RTA"],
   };
 });
