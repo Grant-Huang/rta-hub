@@ -34,6 +34,11 @@ jobs:
       - name: 类型检查
         run: pnpm typecheck
 
+      # 编译一遍：typecheck 是 noEmit 的，编译期才独有的问题（比如 tsconfig
+      # 选项与「真的产出文件」互斥）只有这一步能发现
+      - name: 编译
+        run: pnpm build
+
       - name: 单元测试
         run: pnpm test
 
