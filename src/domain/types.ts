@@ -116,6 +116,14 @@ export interface CabinetCompany {
   currentPublishedSpecVersionId?: string;
   /** 曾经 active 后被停用。status 由此标记与发布/订阅状态共同派生。 */
   deactivated?: boolean;
+  /**
+   * 公司侧端点的访问令牌（`X-Company-Token`）。
+   *
+   * 没有它，`/api/company/:companyId/*` 就是「谁填哪个 id 就读哪家数据」，
+   * 租户隔离只是装饰。这**不是**公司账号体系（那属于检查清单 E1），
+   * 只是让隔离先真的成立。
+   */
+  accessToken?: string;
   createdAt: Timestamp;
 }
 

@@ -848,7 +848,9 @@ test("计费透明度 → 公司提出争议 → 运营带证据裁定（完整�
   const billingEventId = sendBody.billingEventId;
 
   // ── 公司侧：这条线索是什么、还剩几天能争议 ──
-  const view = await req2("/api/company/co_pilot/billing/disputes");
+  const view = await req2("/api/company/co_pilot/billing/disputes", {
+    headers: { "x-admin-token": "test-admin-token" },
+  });
   assert.equal(view.status, 200);
   const viewBody = await view.json() as {
     events: {
@@ -869,13 +871,15 @@ test("计费透明度 → 公司提出争议 → 运营带证据裁定（完整�
 
   // ── 公司提出争议 ──
   const opened = await req2(`/api/company/co_pilot/billing/${billingEventId}/dispute`, {
-    method: "POST",
+    method: "POST", headers: { "x-admin-token": "test-admin-token" },
     body: JSON.stringify({ reason: "duplicate", evidence: "同一客户上周问过", openedBy: "company" }),
   });
   assert.equal(opened.status, 200, await opened.clone().text());
 
   // 争议中不能再重复提
-  const after = await (await req2("/api/company/co_pilot/billing/disputes")).json() as {
+  const after = await (await req2("/api/company/co_pilot/billing/disputes", {
+    headers: { "x-admin-token": "test-admin-token" },
+  })).json() as {
     events: { event: { id: string }; canDispute: boolean }[];
   };
   assert.equal(after.events.find((e) => e.event.id === billingEventId)!.canDispute, false);
@@ -1087,4 +1091,215 @@ test("对话回复里带上本轮的选择题", async () => {
   assert.equal(body.questionCompanyId, "co_pilot");
   assert.ok(body.questions.length > 0);
   assert.ok(body.questions.every((q) => q.options.length > 0), "不出没有选项的题");
+});
+
+// ── 户型特征录入（窗/上下水）—— 没有它就永远排不出水槽柜 ──────────────────
+
+test("客户能补充窗户与上下水位置，排布据此放水槽柜", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  const added = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+  });
+  const runId = (await added.json() as {
+    floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };
+  }).floorPlan.parsedGeometry.wallRuns[0]!.id;
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+
+  // 没有上下水时排不出水槽柜
+  const before = await (await req(`/api/floorplans/${floorPlan.id}/layout`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  })).json() as { moduleCounts: { moduleCode: string }[] };
+  assert.ok(!before.moduleCounts.some((m) => m.moduleCode.startsWith("SB")),
+    "没告诉系统上下水在哪时，排不出水槽柜");
+
+  // 补上窗与上下水
+  for (const f of [
+    { kind: "window", offset: 54, width: 36 },
+    { kind: "plumbing", offset: 60, width: 24 },
+  ]) {
+    const r = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+      method: "POST", accountId: CONSUMER,
+      body: JSON.stringify({ addFeature: { wallRunId: runId, ...f } }),
+    });
+    assert.equal(r.status, 200, await r.clone().text());
+  }
+
+  const after = await (await req(`/api/floorplans/${floorPlan.id}/layout`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  })).json() as {
+    moduleCounts: { moduleCode: string }[];
+    explanation: { perRun: { text: string }[] };
+  };
+  assert.ok(after.moduleCounts.some((m) => m.moduleCode.startsWith("SB")),
+    "补上上下水后应该排出水槽柜");
+  // 解释里应当提到水槽与窗的关系
+  assert.match(after.explanation.perRun[0]!.text, /水槽/);
+});
+
+test("超出墙长或缺字段的特征被拒", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  const added = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addRun: { label: "北墙", length: 100 } }),
+  });
+  const runId = (await added.json() as {
+    floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };
+  }).floorPlan.parsedGeometry.wallRuns[0]!.id;
+
+  const tooFar = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addFeature: { wallRunId: runId, kind: "window", offset: 90, width: 36 } }),
+  });
+  assert.equal(tooFar.status, 400);
+  assert.match((await tooFar.json() as { error: string }).error, /超出了/);
+
+  const badRun = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addFeature: { wallRunId: "wr_nope", kind: "window", offset: 0, width: 36 } }),
+  });
+  assert.equal(badRun.status, 400);
+
+  const noWidth = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addFeature: { wallRunId: runId, kind: "window", offset: 0, width: 0 } }),
+  });
+  assert.equal(noWidth.status, 400);
+});
+
+test("组装偏好套到不提供该形式的柜体上时不再整单被拒", async () => {
+  const { conversationId, floorPlanId } = await readyProject(CONSUMER);
+  await req(`/api/conversations/${conversationId}/preferences`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", doorStyleId: "ds_shaker_white", assembly: "assembled",
+    }),
+  });
+  const layout = await (await req(`/api/floorplans/${floorPlanId}/layout`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  })).json() as {
+    selections: { moduleId: string; assembly: string }[];
+    unappliedPreferences: string[];
+  };
+
+  // 吊柜只提供 RTA，不能被强行改成 assembled
+  const wall = layout.selections.find((s) => s.moduleId.startsWith("m_w"));
+  if (wall) assert.equal(wall.assembly, "RTA");
+  assert.ok(layout.unappliedPreferences.length > 0, "没落实的偏好要如实说明");
+
+  const r = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId, selections: layout.selections,
+    }),
+  });
+  assert.equal(r.status, 201, await r.clone().text());
+});
+
+test("助手不会连着问同一个问题两遍", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+
+  const say = async (text: string) => {
+    const r = await req(`/api/conversations/${conversation.id}/messages`, {
+      method: "POST", accountId: CONSUMER, body: JSON.stringify({ text }),
+    });
+    return (await r.json() as { replies: { content: string }[] }).replies[0]!.content;
+  };
+
+  const first = await say("多伦多，一字型厨房，12 尺");
+  // 客户答了风格，但用的是我们关键词表里没有的说法
+  const second = await say("想要质感好一点的，门板选深色");
+
+  assert.notEqual(second, first, "同样的问题不能原样再问一遍");
+  assert.match(second, /没问清楚|直接选/);
+});
+
+// ── 公司侧租户隔离：先证明身份，再按身份过滤 ──────────────────────────────
+
+test("公司侧端点没有令牌一律拒绝 —— 隔离不能靠 URL 里的 companyId", async () => {
+  // 原来的实现只用 TenantScope 按 URL 里的 companyId 过滤，
+  // 而那个 id 是调用方自己填的：换一个 id 就能读到别家的计费事件。
+  for (const [p, init] of [
+    ["/api/company/co_pilot/billing", {}],
+    ["/api/company/co_pilot/billing/disputes", {}],
+    ["/api/company/co_pilot/billing/evt_x/dispute", { method: "POST" }],
+  ] as [string, RequestInit][]) {
+    const r = await req(p, init);
+    assert.equal(r.status, 401, `${p} 不该在无令牌时放行`);
+    assert.match((await r.json() as { error: string }).error, /X-Company-Token/);
+  }
+});
+
+test("拿 A 公司的令牌读不到 B 公司的数据", async () => {
+  // 用固定数据目录，好让测试能读到与 app 实例同一批公司的令牌
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = await import("node:path");
+  const dataDir = mkdtempSync(nodePath.join(tmpdir(), "rta-tenant-"));
+
+  const mod = await import("../src/server.js");
+  const app2 = await mod.createApp({ dataDir, llm: undefined });
+
+  const { openRepositories } = await import("../src/store/repositories.js");
+  const repos = openRepositories(dataDir);
+  const pilotToken = repos.companies.byId("co_pilot")?.accessToken;
+  const lakesideToken = repos.companies.byId("co_lakeside")?.accessToken;
+
+  assert.ok(pilotToken, "种子应为每家公司发令牌");
+  assert.ok(lakesideToken);
+  assert.notEqual(pilotToken, lakesideToken, "每家公司应有各自的令牌");
+
+  const raw = (p: string, headers: Record<string, string>) =>
+    app2.fetch(new Request(base + p, { headers: { "content-type": "application/json", ...headers } }));
+
+  assert.equal((await raw("/api/company/co_pilot/billing",
+    { "x-company-token": pilotToken! })).status, 200, "自家令牌读自家数据应放行");
+  assert.equal((await raw("/api/company/co_pilot/billing",
+    { "x-company-token": lakesideToken! })).status, 401, "别家的令牌不能读本家数据");
+  assert.equal((await raw("/api/company/co_lakeside/billing",
+    { "x-company-token": pilotToken! })).status, 401);
+});
+
+test("公司目录不暴露访问令牌", async () => {
+  const raw = await (await req("/api/companies")).text();
+  assert.ok(!raw.includes("accessToken"), "令牌绝不能出现在客户可达的端点上");
+});
+
+test("运营令牌可以代公司操作（客服场景），但不存在的公司仍是 404", async () => {
+  const ok = await req("/api/company/co_pilot/billing", {
+    headers: { "x-admin-token": "test-admin-token", "content-type": "application/json" },
+  });
+  assert.equal(ok.status, 200);
+
+  const missing = await req("/api/company/co_nope/billing", {
+    headers: { "x-admin-token": "test-admin-token", "content-type": "application/json" },
+  });
+  assert.equal(missing.status, 404);
+});
+
+test("不存在的公司与令牌不对返回同样的说法 —— 不让人枚举出有哪些公司", async () => {
+  const wrongToken = await req("/api/company/co_pilot/billing", {
+    headers: { "x-company-token": "not-the-token", "content-type": "application/json" },
+  });
+  const noSuchCompany = await req("/api/company/co_totally_fake/billing", {
+    headers: { "x-company-token": "not-the-token", "content-type": "application/json" },
+  });
+  assert.equal(wrongToken.status, 401);
+  assert.equal(noSuchCompany.status, 401);
+  assert.deepEqual(await wrongToken.json(), await noSuchCompany.json());
 });

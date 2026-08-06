@@ -21,6 +21,7 @@ import type { ChatMessage, Conversation, CustomerAccount, Quote } from "./domain
 import type { FloorPlan } from "./floorplan/types.js";
 import type { GeneratedLayout } from "./layout/generate.js";
 import { TenantScope } from "./tenancy/scoped-repo.js";
+import { authorizeCompany } from "./tenancy/company-auth.js";
 import {
   aggregateSignals, buildMentionSignal, clientFacingMessage, parseMentions, routeByText,
 } from "./routing/mention.js";
@@ -41,12 +42,12 @@ import { buildQuoteEmail, deIdentifySignal, resolveSenderIdentity, sendEmail } f
 import { buildHtmlQuoteEmail } from "./email/html-quote.js";
 import { buildComparison, renderComparisonHtml, renderComparisonText } from "./quote/comparison.js";
 import {
-  addWallRun, createFloorPlan, pendingQuestions, resolveCeilingHeight, resolveItem,
+  addFeature, addWallRun, createFloorPlan, pendingQuestions, resolveCeilingHeight, resolveItem,
   resolveWallLength,
 } from "./floorplan/parse.js";
-import { isLayoutReady } from "./floorplan/types.js";
+import { isLayoutReady, type WallFeature } from "./floorplan/types.js";
 import { generateLayout, regenerateRun, toSelections } from "./layout/generate.js";
-import { renderFourViews } from "./render/views.js";
+import { formatInches, renderFourViews } from "./render/views.js";
 import {
   explainDesign, explainViews, renderRationaleHtml, renderRationaleText,
   renderViewGuideHtml, renderViewGuideText,
@@ -73,7 +74,7 @@ import {
 import { buildQuotePdf, quoteFilename } from "./pdf/quote-pdf.js";
 import {
   applyPreferencesToSelections, buildQuestionSet, drawerBiasFor, PreferenceError,
-  resolvePreferences, validatePreferences, type CustomerPreferences,
+  resolvePreferences, unappliedPreferences, validatePreferences, type CustomerPreferences,
 } from "./preferences/questions.js";
 import { disputeWindowEndsAt, isWithinDisputeWindow } from "./billing/lead-events.js";
 import {
@@ -161,6 +162,24 @@ async function requireAdmin(c: Ctx, next: Next) {
   if (!expected || c.req.header("x-admin-token") !== expected) {
     return c.json({ error: "未授权：需要有效的 X-Admin-Token" }, 401);
   }
+  await next();
+}
+
+/**
+ * 公司侧端点的鉴权。
+ *
+ * 关键：**先证明你是这家公司，再按你的身份过滤**。原来只有 `TenantScope` 过滤，
+ * 而 companyId 来自 URL——那是拿调用方可控的输入做过滤，等于没有隔离。
+ */
+async function requireCompany(c: Ctx, next: Next) {
+  const companyId = c.req.param("companyId") ?? "";
+  const result = authorizeCompany({
+    company: appCtx.repos.companies.byId(companyId),
+    presented: c.req.header("x-company-token"),
+    adminPresented: c.req.header("x-admin-token"),
+    adminExpected: process.env.ADMIN_TOKEN,
+  });
+  if (!result.ok) return c.json({ error: result.error }, result.status);
   await next();
 }
 
@@ -369,9 +388,11 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       turnsWithoutProgress: turnsWithoutProgress(conv),
       justParsedFloorPlan: false,
     });
+    // 上一轮是否已经问过同样的缺失字段——是的话改口去用选择题，别原样再问一遍
+    const repeatedAsk = askedSameFieldsBefore(conv, designRequirementsAfter(conv, text));
     const reply = await orchestratorReply(appCtx.llm,
       { conversationId: conv.id, requirements: conv.designRequirements, history: conv.messages.map(toHistory) },
-      text, { profile: interactionProfile(effective), escalation });
+      text, { profile: interactionProfile(effective), escalation, repeatedAsk });
     designRequirements = reply.requirements ?? designRequirements;
     replies.push({ role: "assistant", content: reply.content, at });
   } else {
@@ -806,6 +827,7 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   const body = await jsonBody<{
     itemId: string; wallRunId: string; length: number; ceilingHeight: number;
     addRun: { label: string; length: number };
+    addFeature: { wallRunId: string; kind: WallFeature["kind"]; offset: number; width: number };
   }>(c);
 
   let next = plan;
@@ -815,6 +837,25 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
       next = resolveWallLength(next, body.wallRunId, body.length, now());
     }
     if (typeof body.ceilingHeight === "number") next = resolveCeilingHeight(next, body.ceilingHeight, now());
+    // 窗户、上下水、家电位。**没有这个入口，没有视觉模型时就永远排不出水槽柜**——
+    // 排布引擎靠 run.features 决定水槽放哪、哪段墙不放吊柜。
+    if (body.addFeature) {
+      const f = body.addFeature;
+      const run = next.parsedGeometry.wallRuns.find((r) => r.id === f.wallRunId);
+      if (!run) return c.json({ error: `墙段 ${f.wallRunId} 不存在` }, 400);
+      if (typeof f.offset !== "number" || typeof f.width !== "number" || f.width <= 0) {
+        return c.json({ error: "特征需要 offset 与正的 width（英寸）" }, 400);
+      }
+      if (f.offset < 0 || f.offset + f.width > run.length) {
+        return c.json({
+          error: `${f.kind} 落在 ${formatInches(f.offset)}–${formatInches(f.offset + f.width)}，` +
+            `超出了 ${run.label} 的 ${formatInches(run.length)}`,
+        }, 400);
+      }
+      next = addFeature(next, f.wallRunId, {
+        kind: f.kind, offset: f.offset, width: f.width,
+      }, now());
+    }
     if (body.itemId) next = resolveItem(next, body.itemId, now());
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
@@ -869,6 +910,8 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     // 直接可喂给 /api/quotes（结构里没有任何价格字段，FR-8）。
     // 五金/配件按 appliesTo* 过滤后才加上——加到装不了的柜体上会被定价校验整单拒绝
     selections: applyPreferencesToSelections(toSelections(layout), prefs, bundle),
+    // 偏好没能完全落实时如实说明——静默地部分落实最坏（客户拆箱才发现吊柜是平板的）
+    unappliedPreferences: unappliedPreferences(toSelections(layout), prefs, bundle),
     views: viewsFor(plan, layout, company.id),
     // 图纸配解释：这是什么图、为什么这么排（全部来自算出来的结果）
     explanation: explanationFor(plan, layout, company.id, prefs),
@@ -909,6 +952,7 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
     aesthetics: next.aesthetics,
     acceptable: next.acceptable,
     selections: applyPreferencesToSelections(toSelections(next), prefs, bundle),
+    unappliedPreferences: unappliedPreferences(toSelections(next), prefs, bundle),
     views: viewsFor(plan, next, companyId),
     explanation: explanationFor(plan, next, companyId, prefs),
     appliedPreferences: prefs,
@@ -998,12 +1042,12 @@ app.get("/unsubscribe", async (c) => {
 
 // ── 公司侧：计费透明度与争议（FR-7 / 8.1）─────────────────────────────────
 
-app.get("/api/company/:companyId/billing", (c) => {
+app.get("/api/company/:companyId/billing", requireCompany, (c) => {
   const scope = new TenantScope(param(c, "companyId"));
   return c.json({ events: scope.filter(appCtx.repos.billingEvents.all()) });
 });
 
-app.post("/api/company/:companyId/billing/:eventId/dispute", async (c) => {
+app.post("/api/company/:companyId/billing/:eventId/dispute", requireCompany, async (c) => {
   const scope = new TenantScope(param(c, "companyId"));
   const event = scope.find(appCtx.repos.billingEvents.all(), (e) => e.id === param(c, "eventId"));
   if (!event) return c.json({ error: "计费事件不存在" }, 404);
@@ -1220,7 +1264,7 @@ app.post("/api/admin/verifications/:accountId/review", requireAdmin, async (c) =
  * 每条计费对应的报价摘要——公司要判断"这条线索是不是真的"，
  * 光有一个 id 和金额是判断不了的。
  */
-app.get("/api/company/:companyId/billing/disputes", (c) => {
+app.get("/api/company/:companyId/billing/disputes", requireCompany, (c) => {
   const companyId = param(c, "companyId");
   const scope = new TenantScope(companyId);
   const at = now();
@@ -1352,6 +1396,26 @@ function explanationFor(
 
 function toHistory(m: ChatMessage): { role: "user" | "assistant"; content: string } {
   return { role: m.role, content: m.content };
+}
+
+/**
+ * 上一轮助手是否已经问过同样的缺失字段。
+ *
+ * 判据是「缺失字段集合没变，且上一轮助手确实提过这些字段」——说明客户答了，
+ * 但说法对不上我们的关键词（"质感优先" 匹配不到 "风格"）。这时候原样再问
+ * 一遍最伤：客户会觉得没在听。
+ */
+function askedSameFieldsBefore(conv: Conversation, nextRequirements: string): boolean {
+  const lastAssistant = [...conv.messages].reverse().find((m) => m.role === "assistant" && !m.companyId);
+  if (!lastAssistant) return false;
+  const stillMissing = missingFields(nextRequirements);
+  if (stillMissing.length === 0) return false;
+  return stillMissing.some((f) => lastAssistant.content.includes(f));
+}
+
+/** 把这一轮的输入并进需求摘要后的样子——用于判断本轮是否有进展。 */
+function designRequirementsAfter(conv: Conversation, text: string): string {
+  return mergeRequirements(conv.designRequirements, text);
 }
 
 /**

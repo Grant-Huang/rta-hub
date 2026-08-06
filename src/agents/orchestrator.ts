@@ -54,6 +54,14 @@ export interface OrchestratorOptions {
    * 不传就按轻量层走——绝大多数轮次都该走轻量层，那是这套分层存在的理由。
    */
   escalation?: EscalationDecision;
+  /**
+   * 上一轮是否已经问过同样的缺失字段。
+   *
+   * 客户答了却没被识别出来时（"质感优先""门板选深色的" 匹配不上"风格"的关键词），
+   * 再原样问一遍只会让人以为没被听见。这时候改口去用选择题——
+   * 那本来就是为「客户答不上开放式问题」设计的（FR-1.1）。
+   */
+  repeatedAsk?: boolean;
 }
 
 /** 只有账号类型、没有 profile 时的便捷入口（测试与脚本用）。 */
@@ -76,7 +84,7 @@ export async function orchestratorReply(
   const requirements = mergeRequirements(ctx.requirements, userText);
 
   if (!client) {
-    return { content: fallbackPrompt(requirements, opts.profile), requirements };
+    return { content: fallbackPrompt(requirements, opts.profile, opts.repeatedAsk), requirements };
   }
 
   // 日常轮次走轻量模型；只有确定性触发（要出方案、多约束修改…）才上主力。
@@ -90,7 +98,10 @@ export async function orchestratorReply(
     temperature: 0.3,
     callSite: tierForTurn(decision) === "reasoning" ? "layoutRevision" : "orchestratorChat",
   });
-  return { content: content.trim() || fallbackPrompt(requirements, opts.profile), requirements };
+  return {
+    content: content.trim() || fallbackPrompt(requirements, opts.profile, opts.repeatedAsk),
+    requirements,
+  };
 }
 
 /** 还缺哪些关键字段——同时用于兜底话术与前端进度提示。 */
@@ -106,12 +117,24 @@ export function missingFields(requirements: string): string[] {
   return checks.filter(([, re]) => !re.test(text)).map(([name]) => name);
 }
 
-function fallbackPrompt(requirements: string, profile: TradeInteractionProfile): string {
+function fallbackPrompt(
+  requirements: string,
+  profile: TradeInteractionProfile,
+  repeatedAsk = false,
+): string {
   const missing = missingFields(requirements);
   if (missing.length === 0) {
     return "需求信息已经比较完整了。你可以 @ 某家公司问具体产品，或者直接让我出一版方案与报价。";
   }
   const ask = missing.slice(0, profile.maxQuestionsPerTurn);
+
+  // 已经问过一遍还是没识别出来——多半是客户答了但说法对不上关键词。
+  // 与其原样再问一遍（显得没在听），不如改用选择题，让他点一下就行。
+  if (repeatedAsk) {
+    return `可能是我没问清楚。${ask.join("、")}这几项，下面直接选就行——` +
+      `选项里带了价格影响，比打字省事。`;
+  }
+
   if (!profile.explainJargon) {
     return `还需要：${ask.join("、")}。一次给全就行。`;
   }

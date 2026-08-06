@@ -11,7 +11,7 @@ import {
   accessoryQuestion, applyPreferencesToSelections, assemblyQuestion, budgetQuestion,
   buildQuestionSet, describeImpact, doorStyleQuestion, drawerBiasFor, hardwareQuestion,
   PreferenceError, priceGroupPremiums, resolvePreferences, storageQuestion,
-  validatePreferences, type CustomerPreferences,
+  unappliedPreferences, validatePreferences, type CustomerPreferences,
 } from "../src/preferences/questions.js";
 import { emptyBundle, type SpecBundle } from "../src/spec/bundle.js";
 import {
@@ -289,4 +289,54 @@ test("没有偏好时不动原选择", () => {
     { moduleId: "m_b30", qty: 1, hardwareOptionIds: ["hw_handle_bar"], accessoryOptionIds: [], assembly: "RTA" },
   ];
   assert.deepEqual(applyPreferencesToSelections(selections, {}, bundle()), selections);
+});
+
+// ── 回归：模拟跑出来的两个真 bug ──────────────────────────────────────────
+
+test("组装偏好只套到提供该形式的柜体上——套错了会整单被拒", () => {
+  // 试点公司：地柜提供 RTA + assembled，吊柜只有 RTA
+  const b = bundle();
+  const out = applyPreferencesToSelections(
+    [
+      { moduleId: "m_b36", qty: 1, hardwareOptionIds: [], accessoryOptionIds: [], assembly: "RTA" },
+      { moduleId: "m_w3630", qty: 1, hardwareOptionIds: [], accessoryOptionIds: [], assembly: "RTA" },
+    ],
+    { assembly: "assembled" },
+    b,
+  );
+  assert.equal(out[0]!.assembly, "assembled", "地柜提供组装");
+  assert.equal(out[1]!.assembly, "RTA",
+    "吊柜不提供组装：保持原值，而不是让整单被 ASSEMBLY_NOT_OFFERED 拒掉");
+});
+
+test("没落实的偏好要如实说出来，不能静默部分落实", () => {
+  const b = bundle();
+  const notes = unappliedPreferences(
+    [{ moduleId: "m_b36" }, { moduleId: "m_w3630" }],
+    { assembly: "assembled" },
+    b,
+  );
+  assert.equal(notes.length, 1);
+  assert.match(notes[0]!, /W3630/);
+  assert.match(notes[0]!, /组装好发货/);
+});
+
+test("全都能落实时不报无谓的提示", () => {
+  assert.deepEqual(
+    unappliedPreferences([{ moduleId: "m_b36" }], { assembly: "assembled" }, bundle()),
+    [],
+  );
+  assert.deepEqual(unappliedPreferences([{ moduleId: "m_b36" }], {}, bundle()), []);
+});
+
+test("配件在这版方案里一个都装不了时如实说明", () => {
+  // 抽拉层板只装地柜；全是吊柜的方案就装不了
+  const notes = unappliedPreferences(
+    [{ moduleId: "m_w3630" }],
+    { accessoryOptionIds: ["ac_rollout"] },
+    bundle(),
+  );
+  assert.equal(notes.length, 1);
+  assert.match(notes[0]!, /抽拉层板/);
+  assert.match(notes[0]!, /未计入报价/);
 });
