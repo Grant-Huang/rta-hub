@@ -13,6 +13,7 @@ import type { SpecBundle } from "../spec/bundle.js";
 import { stripPriceFields } from "../spec/validation.js";
 import { interactionProfile, type TradeInteractionProfile } from "../trade/interaction.js";
 import type { AgentContext, AgentReply, CompletionClient, DesignIntent } from "./types.js";
+import { escalationDecision, tierForTurn, type EscalationDecision } from "./model-tiers.js";
 
 function orchestratorSystem(profile: TradeInteractionProfile): string {
   const lines = [
@@ -47,6 +48,12 @@ function orchestratorSystem(profile: TradeInteractionProfile): string {
  */
 export interface OrchestratorOptions {
   profile: TradeInteractionProfile;
+  /**
+   * 本轮的升级判断（model-tiers.ts）。
+   *
+   * 不传就按轻量层走——绝大多数轮次都该走轻量层，那是这套分层存在的理由。
+   */
+  escalation?: EscalationDecision;
 }
 
 /** 只有账号类型、没有 profile 时的便捷入口（测试与脚本用）。 */
@@ -72,10 +79,16 @@ export async function orchestratorReply(
     return { content: fallbackPrompt(requirements, opts.profile), requirements };
   }
 
+  // 日常轮次走轻量模型；只有确定性触发（要出方案、多约束修改…）才上主力。
+  // 判断逻辑在 model-tiers.ts，刻意不交给模型自己决定。
+  const decision = opts.escalation ?? escalationDecision({
+    userText, turnsWithoutProgress: 0,
+  });
   const content = await client.complete({
     system: orchestratorSystem(opts.profile),
     messages: [...ctx.history, { role: "user", content: userText }],
     temperature: 0.3,
+    callSite: tierForTurn(decision) === "reasoning" ? "layoutRevision" : "orchestratorChat",
   });
   return { content: content.trim() || fallbackPrompt(requirements, opts.profile), requirements };
 }
@@ -160,6 +173,8 @@ export async function companyAgentReply(
     system: buildCompanyAgentSystem(companyName, bundle),
     messages: [...ctx.history, { role: "user", content: userText }],
     temperature: 0.2,
+    // 查自家规格库属于事实问答，上下文已经把答案摆在眼前了，用轻量层足够
+    callSite: "companySpecQa",
   });
   return {
     content: content.trim() || deterministicSpecAnswer(companyName, bundle, userText),
@@ -233,6 +248,8 @@ export async function proposeDesign(
     messages: [{ role: "user", content: `客户需求：\n${requirements}` }],
     schemaHint: DESIGN_SCHEMA_HINT,
     temperature: 0.2,
+    // 需求 → 设计意图是错了代价最大的一步，走主力层
+    callSite: "designIntent",
   });
 
   if (!raw) {

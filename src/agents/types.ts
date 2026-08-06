@@ -8,13 +8,20 @@
  *   3. **Agent 不产出价格。** 它只输出「选择」，价格由 PricingEngine 算（FR-8 第 1 条）。
  */
 import type { ModuleSelection } from "../domain/types.js";
+import type { CallSite } from "./model-tiers.js";
 
-/** 对话完成接口——把具体 LLM 客户端隔离在外，便于测试替身。 */
+/**
+ * 对话完成接口——把具体 LLM 客户端隔离在外，便于测试替身。
+ *
+ * `callSite` 决定用哪一层模型（轻量/主力/视觉，见 model-tiers.ts）。
+ * 它是可选的：不传就走默认模型，老的调用方不用改。
+ */
 export interface CompletionClient {
   complete(input: {
     system: string;
     messages: { role: "user" | "assistant"; content: string }[];
     temperature?: number;
+    callSite?: CallSite;
   }): Promise<string>;
 
   /** 结构化输出。返回 undefined 表示模型未能产出合法结构。 */
@@ -23,6 +30,7 @@ export interface CompletionClient {
     messages: { role: "user" | "assistant"; content: string }[];
     schemaHint: string;
     temperature?: number;
+    callSite?: CallSite;
   }): Promise<T | undefined>;
 }
 

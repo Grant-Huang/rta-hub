@@ -47,6 +47,10 @@ import {
 import { isLayoutReady } from "./floorplan/types.js";
 import { generateLayout, regenerateRun, toSelections } from "./layout/generate.js";
 import { renderFourViews } from "./render/views.js";
+import {
+  explainDesign, explainViews, renderRationaleHtml, renderRationaleText,
+  renderViewGuideHtml, renderViewGuideText,
+} from "./render/explain.js";
 import { subscribe, SubscriptionError, unsubscribeByToken } from "./marketing/subscriptions.js";
 import {
   deIdentifyBillingEvent, deIdentifyQuote, executeDeletionRequest, exportAccountData,
@@ -61,6 +65,7 @@ import {
 } from "./layout/store.js";
 import { listProjects, summarizePortfolio } from "./trade/projects.js";
 import { interactionProfile } from "./trade/interaction.js";
+import { escalationDecision, resolveModelTiers, tierReport } from "./agents/model-tiers.js";
 import {
   canSeeTradePricing, effectiveAccountType, looksLikeGstNumber, reviewVerification,
   submitVerification, VerificationError, type TradeVerification,
@@ -71,6 +76,9 @@ import {
   resolvePreferences, validatePreferences, type CustomerPreferences,
 } from "./preferences/questions.js";
 import { disputeWindowEndsAt, isWithinDisputeWindow } from "./billing/lead-events.js";
+import {
+  assertLaunchReady, launchGateReport, launchGateSummary, LaunchGatesNotMet,
+} from "./app/launch-gates.js";
 import {
   checkPassword, cookieHeader, issueToken, rateLimit, resolveSiteGate,
   siteGate, siteGateDisabledExplicitly, SiteGateMisconfigured, startupNotice, unlockPage,
@@ -352,9 +360,18 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     // 交互口吻按**生效**账号类型走：资质没过审的 trade 账号按 consumer 定价，
     // 说话方式也应该一致，否则会出现"按零售价报价却全程行话"的错位
     const effective = effectiveAccountType(account, verificationFor(account.id));
+
+    // 日常轮次走轻量模型，只有确定性触发才上主力（model-tiers.ts）。
+    // 「连续几轮没进展」是兜底：轻量模型可能在原地打转，客户已经说了三轮
+    // 却一个字段都没被收集到。
+    const escalation = escalationDecision({
+      userText: text,
+      turnsWithoutProgress: turnsWithoutProgress(conv),
+      justParsedFloorPlan: false,
+    });
     const reply = await orchestratorReply(appCtx.llm,
       { conversationId: conv.id, requirements: conv.designRequirements, history: conv.messages.map(toHistory) },
-      text, { profile: interactionProfile(effective) });
+      text, { profile: interactionProfile(effective), escalation });
     designRequirements = reply.requirements ?? designRequirements;
     replies.push({ role: "assistant", content: reply.content, at });
   } else {
@@ -853,6 +870,8 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     // 五金/配件按 appliesTo* 过滤后才加上——加到装不了的柜体上会被定价校验整单拒绝
     selections: applyPreferencesToSelections(toSelections(layout), prefs, bundle),
     views: viewsFor(plan, layout, company.id),
+    // 图纸配解释：这是什么图、为什么这么排（全部来自算出来的结果）
+    explanation: explanationFor(plan, layout, company.id, prefs),
     appliedPreferences: prefs,
   }, 201);
 });
@@ -891,6 +910,7 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
     acceptable: next.acceptable,
     selections: applyPreferencesToSelections(toSelections(next), prefs, bundle),
     views: viewsFor(plan, next, companyId),
+    explanation: explanationFor(plan, next, companyId, prefs),
     appliedPreferences: prefs,
   });
 });
@@ -1034,6 +1054,14 @@ app.get("/api/admin/mention-signals", requireAdmin, (c) =>
       outreachLine: deIdentifySignal(a.count),
     })),
   }));
+
+/**
+ * 上线闸门状态（docs/LAUNCH_BLOCKERS.md）。
+ *
+ * 放在运营端点里，是为了让「还差哪几项才能上线」随时查得到，
+ * 而不是等到某次部署时才想起来。
+ */
+app.get("/api/admin/launch-gates", requireAdmin, (c) => c.json(launchGateSummary()));
 
 /** 留存清除：返回**计划**而不是直接执行，便于预演与审计（FR-13 第 4 条）。 */
 app.get("/api/admin/retention/plan", requireAdmin, (c) =>
@@ -1272,8 +1300,72 @@ function viewsFor(plan: FloorPlan, layout: GeneratedLayout, companyId: string) {
   }));
 }
 
+/**
+ * 图纸的解释 —— 「这是什么图」+「为什么这么排」。
+ *
+ * 四视图对客户是陌生的表达形式。没有解释，他只能凭直觉说「感觉怪怪的」，
+ * 说不出哪里怪，修改意见就无从提起。
+ *
+ * 解释全部来自实际算出来的结果（几何、人体工程检查、美观评分），不是模板文案。
+ */
+function explanationFor(
+  plan: FloorPlan,
+  layout: GeneratedLayout,
+  companyId: string,
+  prefs: CustomerPreferences,
+) {
+  const { construction, overlay } = renderStyleFor(appCtx, companyId);
+  const guide = explainViews({
+    construction, overlay,
+    hasWallCabinets: layout.placements.some((p) => p.layer === "wall"),
+    hasFillers: layout.placements.some((p) => p.kind === "filler"),
+    hasAppliances: layout.placements.some((p) => p.kind === "appliance"),
+  });
+
+  const perRun = plan.parsedGeometry.wallRuns.map((run) => {
+    const score = layout.aesthetics.find((a) => a.wallRunId === run.id)?.score;
+    const rationale = explainDesign({
+      run,
+      placements: layout.placements,
+      ...(score ? { aesthetics: score } : {}),
+      ergonomics: layout.ergonomics.filter((v) => !v.wallRunId || v.wallRunId === run.id),
+      warnings: layout.warnings.filter((w) => !w.wallRunId || w.wallRunId === run.id),
+      acceptable: layout.acceptable,
+      ...(prefs.storage ? { storagePreference: prefs.storage } : {}),
+    });
+    return {
+      runId: run.id,
+      runLabel: run.label,
+      rationale,
+      text: renderRationaleText(rationale),
+      html: renderRationaleHtml(rationale),
+    };
+  });
+
+  return {
+    viewGuide: guide,
+    viewGuideText: renderViewGuideText(guide),
+    viewGuideHtml: renderViewGuideHtml(guide),
+    perRun,
+  };
+}
+
 function toHistory(m: ChatMessage): { role: "user" | "assistant"; content: string } {
   return { role: m.role, content: m.content };
+}
+
+/**
+ * 连续几轮没有新信息被收集。
+ *
+ * 判据是**需求摘要有没有变长**——`mergeRequirements` 只在真的有新内容时才追加。
+ * 用它当「有没有进展」的代理指标，比让模型自述可靠。
+ */
+function turnsWithoutProgress(conv: Conversation): number {
+  const userTurns = conv.messages.filter((m) => m.role === "user").length;
+  if (userTurns === 0) return 0;
+  // 需求摘要按行累积；行数明显少于用户轮次，说明有若干轮没带来新信息
+  const lines = conv.designRequirements.split("\n").filter((l) => l.trim()).length;
+  return Math.max(0, userTurns - lines);
 }
 
 /** 组装 PDF 报价单的输入。邮件附件与下载端点共用，保证两边是同一份。 */
@@ -1336,10 +1428,13 @@ export async function createApp(opts: Parameters<typeof createAppContext>[0] = {
 
 export async function start(port = Number(process.env.PORT || 8790)) {
   try {
+    // 生产环境有未核实的阻断项就不启动。这些项错了不会报错，只会安静地
+    // 产出错误结果（税率、NKBA 净空），所以必须在这里拦住。
+    assertLaunchReady();
     await createApp();
   } catch (e) {
-    // 配置失误要响亮地失败，而不是静默地把站点全开着
-    if (e instanceof SiteGateMisconfigured) {
+    // 配置/流程的疏漏要响亮地失败，而不是静默地跑起来
+    if (e instanceof SiteGateMisconfigured || e instanceof LaunchGatesNotMet) {
       console.error(`\n[rta-hub] 启动中止：\n${e.message}\n`);
       process.exit(1);
     }
@@ -1354,6 +1449,8 @@ export async function start(port = Number(process.env.PORT || 8790)) {
     console.log(`[rta-hub] LLM：${appCtx.llm ? "已接入" : "未配置 —— 对话降级为确定性问答"}`);
     console.log(`[rta-hub] SMTP：${smtp ? "已配置" : "未配置 —— 发送为 dry-run"}`);
     console.log(`[rta-hub] ${startupNotice(gate)}`);
+    for (const line of tierReport(resolveModelTiers())) console.log(`[rta-hub] ${line}`);
+    for (const line of launchGateReport()) console.log(`[rta-hub] ${line}`);
   });
 }
 

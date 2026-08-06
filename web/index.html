@@ -73,6 +73,20 @@
   .opt .rec { color:#7bd88f; font-size:10.5px; }
   .qskip { background:none; border:none; color:#6a7382; font-size:11.5px;
            cursor:pointer; padding:6px 0 0; text-decoration:underline; }
+  .x-rationale h4, .x-guide h4 { font-size:12.5px; margin:12px 0 5px; color:#9aa4b2; }
+  .x-guide h5 { font-size:12.5px; margin:10px 0 3px; }
+  .x-rationale .x-head { font-size:13px; margin:0 0 4px; }
+  .x-rationale ul, .x-guide ul { margin:0; padding-left:16px; }
+  .x-rationale li, .x-guide li, .x-guide p { font-size:12.5px; line-height:1.65; margin:2px 0; }
+  .x-rationale li { list-style:none; position:relative; padding-left:14px; margin-left:-16px; }
+  .x-rationale li::before { position:absolute; left:0; }
+  .x-fact { color:#8b94a3; } .x-fact::before { content:"·"; color:#6a7382; }
+  .x-good { color:#c6cdd6; } .x-good::before { content:"✓"; color:#7bd88f; }
+  .x-tradeoff { color:#c6cdd6; } .x-tradeoff::before { content:"△"; color:#d8c37b; }
+  .x-warn { color:#e0b4b4; } .x-warn::before { content:"!"; color:#d87b7b; font-weight:700; }
+  .x-guide p { color:#8b94a3; }
+  details.x-more { margin-top:10px; }
+  details.x-more > summary { cursor:pointer; font-size:12px; color:#7bc0d8; }
 </style>
 </head>
 <body>
@@ -491,6 +505,12 @@ function renderLayout(body) {
       <p class="hint" style="margin-top:8px">评分只影响观感，不影响能否下单；上面的 ⛔ 项才是硬性要求。</p>
     </div>`;
   }).join('');
+  // 图纸解释：这是什么图（全局一份）+ 为什么这么排（每段墙一份）。
+  // 服务端已经算好并转义好了，这里直接插入。
+  const exp = body.explanation || {};
+  const rationaleOf = (runId) =>
+    (exp.perRun || []).find((x) => x.runId === runId)?.html || '';
+
   const viewBlocks = body.views.map((r) => `
     <div class="card">
       <h3>${esc(r.runLabel)}</h3>
@@ -498,10 +518,19 @@ function renderLayout(body) {
         ${['front','topBase','topWall','side'].map((k) => `
           <div class="view">${r.views[k]}<div class="cap">${VIEW_NAMES[k]}</div></div>`).join('')}
       </div>
+      ${rationaleOf(r.runId)}
       <div style="margin-top:8px">
         <button class="ghost" data-run="${esc(r.runId)}" onclick="regen(this.dataset.run)">重新排布这段墙</button>
       </div>
     </div>`).join('');
+
+  // 「怎么看这几张图」默认折叠——第一次看的人需要，看过的人不需要每次都看
+  const guideBlock = exp.viewGuideHtml
+    ? `<div class="card"><details class="x-more" open>
+         <summary>第一次看这几张图？点开有说明</summary>
+         ${exp.viewGuideHtml}
+       </details></div>`
+    : '';
 
   $('content').innerHTML = `
     ${ergoBlock}
@@ -512,6 +541,7 @@ function renderLayout(body) {
     </div>
     ${scoreBlock}
     ${advisoryBlock}
+    ${guideBlock}
     ${viewBlocks}`;
 
   // 硬约束没过就不让往下走
