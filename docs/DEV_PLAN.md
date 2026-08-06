@@ -284,7 +284,8 @@ effectiveAccountType(account, verification)  // 未过门槛的 trade → "consu
 - ✅ **B5** 销售外联去标识化 —— 看板与邀约邮件均不含客户身份，有测试断言
 - ✅ **B7** 7 年留存数据的去标识化
 - ✅ **B8** 数据主体权利入口 + 30 天 SLA 计算
-- 🟡 **E1** 鉴权 —— 账号与管理员两级最小实现，**生产仍需真正的登录态与令牌**
+- 🟡 **E1** 鉴权 —— 账号与管理员两级最小实现 + 整站访问口令（外层闸门，
+  生产未配置时**拒绝启动**）。**真正的登录态仍未做**：口令后面的人可互相冒充账号
 - 🟡 **B6** 到期清除 —— 计划生成已实现并测试，**定时任务尚未接**（需部署侧配 cron）
 - ⬜ **A1/A2** 税率核对 —— 结构已数据驱动，**数字仍需运营逐条核实**
 - ⬜ **A4** `GenericCatalog` 数据来源 —— 未定案，故 disclaimer 目前如实标注为占位数据
@@ -299,7 +300,7 @@ effectiveAccountType(account, verification)  // 未过门槛的 trade → "consu
 ```bash
 pnpm install
 pnpm typecheck     # 无错
-pnpm test          # 402 passing
+pnpm test          # 428 passing
 pnpm dev           # http://localhost:8790
 ```
 
