@@ -14,9 +14,11 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "ops:prospects": "tsx src/ops/prospects-cli.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

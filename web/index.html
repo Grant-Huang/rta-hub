@@ -2,217 +2,254 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>加拿大橱柜报价助手 · let-it-flow</title>
+<title>RTA-Hub · 橱柜设计与报价</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: #0f1216; color: #e6e8eb; height: 100vh; display: flex; flex-direction: column;
-  }
-  header { padding: 14px 20px; border-bottom: 1px solid #262b33; display: flex; align-items: center; gap: 10px; }
-  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
-  header .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #262b33; color: #9aa4b2; }
-  main { flex: 1; display: grid; grid-template-columns: 380px 1fr; overflow: hidden; }
-  .chat { display: flex; flex-direction: column; border-right: 1px solid #262b33; min-width: 0; }
-  .chat-log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { max-width: 90%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
-  .msg.user { align-self: flex-end; background: #2a5bd7; color: white; }
-  .msg.assistant { align-self: flex-start; background: #1c2129; }
-  .chat-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #262b33; }
-  .chat-input input { flex: 1; background: #1c2129; border: 1px solid #262b33; color: inherit; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
-  .chat-input button, .toolbar button, .lead-row button {
-    background: #2a5bd7; border: none; color: white; padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer;
-  }
-  .chat-input button:disabled, .toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .req-box { padding: 10px 12px; font-size: 12px; color: #9aa4b2; border-top: 1px solid #262b33; white-space: pre-wrap; }
-  .panel { display: flex; flex-direction: column; overflow: hidden; }
-  .toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #262b33; flex-wrap: wrap; }
-  .toolbar .status { font-size: 12px; color: #9aa4b2; }
-  .content { flex: 1; overflow-y: auto; padding: 12px 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #1c2129; vertical-align: top; }
-  th { color: #9aa4b2; font-weight: 500; font-size: 12px; }
-  .drafts { margin-top: 20px; }
-  .draft-card { background: #1c2129; border: 1px solid #262b33; border-radius: 10px; padding: 12px; margin-bottom: 10px; font-size: 13px; }
-  .draft-card .to { color: #9aa4b2; font-size: 12px; margin-bottom: 4px; }
-  .draft-card .subject { font-weight: 600; margin-bottom: 6px; }
-  .draft-card .body { white-space: pre-wrap; color: #cbd2db; }
-  .draft-card .status { display: inline-block; margin-top: 8px; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #262b33; }
-  .draft-card .status.sent { background: #1c4d2b; color: #7bd88f; }
-  .draft-card .status.failed { background: #4d1c1c; color: #d87b7b; }
-  .draft-card .status.skipped { background: #4d3f1c; color: #d8c37b; }
-  .warn { font-size: 12px; color: #d8c37b; padding: 8px 16px; border-bottom: 1px solid #262b33; }
-  small.hint { color: #6a7382; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:#0f1216; color:#e6e8eb; height:100vh; display:flex; flex-direction:column; }
+  header { padding:14px 20px; border-bottom:1px solid #262b33; display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#262b33; color:#9aa4b2; }
+  main { flex:1; display:grid; grid-template-columns:400px 1fr; overflow:hidden; }
+  .chat { display:flex; flex-direction:column; border-right:1px solid #262b33; min-width:0; }
+  .chat-log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:92%; padding:8px 12px; border-radius:10px; font-size:13px; line-height:1.55; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; background:#2a5bd7; color:#fff; }
+  .msg.assistant { align-self:flex-start; background:#1c2129; }
+  .chat-input { display:flex; gap:8px; padding:12px; border-top:1px solid #262b33; }
+  .chat-input input { flex:1; background:#1c2129; border:1px solid #262b33; color:inherit;
+                      padding:8px 10px; border-radius:8px; font-size:13px; }
+  button { background:#2a5bd7; border:none; color:#fff; padding:8px 14px; border-radius:8px;
+           font-size:13px; cursor:pointer; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.ghost { background:#262b33; }
+  .panel { display:flex; flex-direction:column; overflow:hidden; }
+  .toolbar { display:flex; align-items:center; gap:10px; padding:12px 16px;
+             border-bottom:1px solid #262b33; flex-wrap:wrap; }
+  .content { flex:1; overflow-y:auto; padding:16px; }
+  select { background:#1c2129; border:1px solid #262b33; color:inherit; padding:7px 8px;
+           border-radius:8px; font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:7px 6px; border-bottom:1px solid #1c2129; }
+  th { color:#9aa4b2; font-weight:500; font-size:12px; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .totals { margin-top:14px; margin-left:auto; width:300px; font-size:13px; }
+  .totals div { display:flex; justify-content:space-between; padding:4px 0; }
+  .totals .grand { border-top:1px solid #262b33; margin-top:6px; padding-top:8px; font-weight:600; font-size:15px; }
+  .hint { color:#6a7382; font-size:12px; }
+  .warn { font-size:12px; color:#d8c37b; padding:8px 16px; border-bottom:1px solid #262b33; }
+  .disclosure { background:#1c2129; border:1px solid #3a4250; border-radius:10px; padding:14px; margin-bottom:14px; }
+  .disclosure h3 { margin:0 0 8px; font-size:13px; }
+  .disclosure ul { margin:6px 0; padding-left:18px; font-size:12px; color:#cbd2db; }
+  .status-pill { font-size:11px; padding:2px 8px; border-radius:10px; background:#262b33; }
+  .status-pill.confirmed { background:#1c3a4d; color:#7bc0d8; }
+  .status-pill.sent { background:#1c4d2b; color:#7bd88f; }
+  .status-pill.failed { background:#4d3f1c; color:#d8c37b; }
+  .svg-preview { background:#fff; border-radius:8px; padding:8px; display:inline-block; margin:4px; }
+  .err { color:#d87b7b; font-size:12px; white-space:pre-wrap; }
 </style>
 </head>
 <body>
 <header>
-  <h1>加拿大橱柜报价助手</h1>
+  <h1>RTA-Hub · 橱柜设计与报价</h1>
+  <span class="badge" id="acctBadge">consumer</span>
+  <span style="flex:1"></span>
   <span class="badge" id="sendBadge">检查发信配置中…</span>
 </header>
 <main>
   <section class="chat">
     <div class="chat-log" id="chatLog">
-      <div class="msg assistant">你好！我是橱柜设计顾问。先聊聊你的项目吧——厨房大概多大？喜欢什么风格（现代/传统/简约）？预算范围大概是多少？</div>
+      <div class="msg assistant">你好，我是橱柜设计顾问。先聊聊你的项目——厨房大概多大？喜欢什么风格？预算范围？所在省份？
+
+想问某家公司的具体细节，用 <b>@公司名</b> 直接点名（例如 @枫岭橱柜）。</div>
     </div>
-    <div class="req-box" id="reqBox"><small class="hint">需求摘要会在这里逐步汇总…</small></div>
     <form class="chat-input" id="chatForm">
-      <input id="chatInput" placeholder="说说你的需求…" autocomplete="off" />
+      <input id="chatInput" placeholder="说说你的需求，或 @某家公司…" autocomplete="off" />
       <button type="submit">发送</button>
     </form>
   </section>
+
   <section class="panel">
-    <div class="warn">发送询价邮件前请务必人工核对草稿内容与收件人；本页不会未经确认自动群发。</div>
+    <div class="warn">报价发送前会列出将要提供给该公司的全部信息，需你确认后才会发出。系统不会自动发送。</div>
     <div class="toolbar">
-      <button id="searchBtn">搜索加拿大橱柜报价公司</button>
-      <span class="status" id="searchStatus"></span>
+      <select id="companySel"></select>
+      <select id="doorSel"></select>
+      <button id="quoteBtn">生成报价</button>
       <span style="flex:1"></span>
-      <button id="composeBtn" disabled>为选中公司生成询价邮件草稿</button>
+      <span class="status-pill" id="quoteStatus" style="display:none"></span>
     </div>
-    <div class="content">
-      <table id="leadsTable">
-        <thead>
-          <tr><th></th><th>公司</th><th>联系人</th><th>邮箱</th><th>电话</th><th>城市</th><th>来源</th></tr>
-        </thead>
-        <tbody id="leadsBody"></tbody>
-      </table>
-      <div class="drafts" id="draftsSection" style="display:none">
-        <div class="toolbar" style="padding:0 0 10px 0; border:none;">
-          <strong>询价邮件草稿</strong>
-          <span style="flex:1"></span>
-          <button id="sendBtn">确认并发送选中草稿</button>
-        </div>
-        <div id="draftsList"></div>
-      </div>
+    <div class="content" id="content">
+      <p class="hint">选择公司与门板样式后生成报价。门板样式决定整单落在哪个价格组——这是 RTA 定价的主维度。</p>
     </div>
   </section>
 </main>
-<script>
-const chatLog = document.getElementById('chatLog');
-const reqBox = document.getElementById('reqBox');
-const leadsBody = document.getElementById('leadsBody');
-const draftsSection = document.getElementById('draftsSection');
-const draftsList = document.getElementById('draftsList');
-const sendBadge = document.getElementById('sendBadge');
 
-let leads = [];
-let drafts = [];
+<script>
+const ACCOUNT = 'ca_demo_consumer';
+const $ = (id) => document.getElementById(id);
+let conversationId = null, currentQuote = null, spec = null;
+
+const api = async (path, opts = {}) => {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'content-type': 'application/json', 'x-account-id': ACCOUNT, ...(opts.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, body };
+};
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const money = (cents) => '$' + (cents / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\.))/g, ',');
 
 function addMsg(role, text) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
   div.textContent = text;
-  chatLog.appendChild(div);
-  chatLog.scrollTop = chatLog.scrollHeight;
+  $('chatLog').appendChild(div);
+  $('chatLog').scrollTop = $('chatLog').scrollHeight;
 }
 
-document.getElementById('chatForm').addEventListener('submit', async (e) => {
+async function boot() {
+  const { body } = await api('/api/companies');
+  $('companySel').innerHTML = (body.companies || [])
+    .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  if (body.companies?.length) await loadSpec(body.companies[0].id);
+  const conv = await api('/api/conversations', { method: 'POST' });
+  conversationId = conv.body.conversation?.id;
+  $('sendBadge').textContent = 'SMTP 未配置：发送为预览模式';
+}
+
+async function loadSpec(companyId) {
+  const { body } = await api(`/api/companies/${companyId}/spec`);
+  spec = body;
+  $('doorSel').innerHTML = (body.doorStyles || [])
+    .map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join('');
+}
+
+$('companySel').addEventListener('change', (e) => loadSpec(e.target.value));
+
+$('chatForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const input = document.getElementById('chatInput');
-  const message = input.value.trim();
-  if (!message) return;
-  addMsg('user', message);
-  input.value = '';
-  const res = await fetch('/api/chat', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message }),
+  const text = $('chatInput').value.trim();
+  if (!text || !conversationId) return;
+  addMsg('user', text);
+  $('chatInput').value = '';
+  const { body } = await api(`/api/conversations/${conversationId}/messages`, {
+    method: 'POST', body: JSON.stringify({ text }),
   });
-  const data = await res.json();
-  addMsg('assistant', data.reply);
-  reqBox.textContent = data.requirements?.summary || '';
+  addMsg('assistant', body.reply?.content || body.error || '（无响应）');
 });
 
-function renderLeads() {
-  leadsBody.innerHTML = '';
-  for (const lead of leads) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><input type="checkbox" class="lead-check" value="${lead.id}" /></td>
-      <td>${escapeHtml(lead.companyName)}</td>
-      <td>${escapeHtml(lead.contactName || '-')}</td>
-      <td>${escapeHtml(lead.email)}</td>
-      <td>${escapeHtml(lead.phone || '-')}</td>
-      <td>${escapeHtml(lead.city || '-')}</td>
-      <td><a href="${lead.website}" target="_blank" rel="noopener" style="color:#7ba8ff">网站</a></td>
-    `;
-    leadsBody.appendChild(tr);
+$('quoteBtn').addEventListener('click', async () => {
+  if (!spec || !conversationId) return;
+  $('quoteBtn').disabled = true;
+  // 演示用的一组选择；真实流程由布局算法从户型图生成（FR-4，MVP-2）
+  const pick = (code) => spec.modules.find((m) => m.code === code);
+  const sel = (code, qty) => {
+    const m = pick(code);
+    return m && { moduleId: m.id, qty, width: m.widthOptions[0], height: m.heightOptions[0],
+                  depth: m.depthOptions[0], assembly: 'RTA', hardwareOptionIds: ['hw_softclose'],
+                  accessoryOptionIds: [] };
+  };
+  const selections = [sel('B30', 3), sel('B18', 2), sel('SB36', 1), sel('W3030', 3), sel('W1830', 2)].filter(Boolean);
+
+  const { ok, body } = await api('/api/quotes', {
+    method: 'POST',
+    body: JSON.stringify({ companyId: $('companySel').value, conversationId,
+                           doorStyleId: $('doorSel').value, selections }),
+  });
+  $('quoteBtn').disabled = false;
+  if (!ok) {
+    $('content').innerHTML = `<div class="err">报价被拒绝（这正是 FR-8 硬校验在起作用）：\n${
+      esc((body.issues || []).map((i) => `${i.code}: ${i.message}`).join('\n') || body.error)}</div>`;
+    return;
   }
-  document.getElementById('composeBtn').disabled = leads.length === 0;
+  currentQuote = body.quote;
+  renderQuote();
+});
+
+function renderQuote() {
+  const q = currentQuote;
+  $('quoteStatus').style.display = '';
+  $('quoteStatus').className = 'status-pill ' + q.status;
+  $('quoteStatus').textContent = q.status;
+
+  const rows = q.lineItems.map((l) => `<tr>
+    <td>${esc(l.moduleCode)}</td>
+    <td class="hint">${l.width}" × ${l.height}" × ${l.depth}"</td>
+    <td class="num">${l.qty}</td>
+    <td class="num">${money(l.unitListPrice)}</td>
+    <td class="num">${money(l.unitNetPrice)}</td>
+    <td class="num">${money(l.lineSubtotal)}</td>
+  </tr>`).join('');
+
+  const taxRows = q.taxes.map((t) =>
+    `<div><span>${esc(t.name)} ${t.ratePercent}%</span><span>${money(t.amount)}</span></div>`).join('');
+  const discRows = q.discounts.map((d) =>
+    `<div><span>${esc(d.description)}</span><span>-${money(d.amount)}</span></div>`).join('');
+
+  const svgs = q.lineItems.slice(0, 5).map((l) =>
+    `<div class="svg-preview"><img alt="${esc(l.moduleCode)}"
+       src="/api/render/face?code=${encodeURIComponent(l.moduleCode)}&width=${l.width}" height="120"/>
+       <div class="hint" style="text-align:center">${esc(l.moduleCode)}</div></div>`).join('');
+
+  $('content').innerHTML = `
+    <table>
+      <thead><tr><th>型号</th><th>规格</th><th class="num">数量</th>
+        <th class="num">标价</th><th class="num">折后单价</th><th class="num">小计</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="totals">
+      <div><span>小计</span><span>${money(q.subtotal)}</span></div>
+      ${discRows}
+      <div><span>运费</span><span>${money(q.shipping.amount)}</span></div>
+      ${taxRows}
+      <div class="grand"><span>总计（${esc(q.currency)}）</span><span>${money(q.total)}</span></div>
+      <div class="hint" style="justify-content:flex-end">有效期至 ${esc(q.validUntil.slice(0, 10))}</div>
+    </div>
+    <h3 style="font-size:13px; margin-top:24px">正视图（脸型模板参数化生成）</h3>
+    <div>${svgs}</div>
+    <div style="margin-top:20px"><button id="discBtn">下一步：查看将发送的内容</button></div>
+    <div id="discBox"></div>`;
+  $('discBtn').addEventListener('click', showDisclosure);
 }
 
-document.getElementById('searchBtn').addEventListener('click', async () => {
-  const btn = document.getElementById('searchBtn');
-  const status = document.getElementById('searchStatus');
-  btn.disabled = true;
-  status.textContent = '搜索中，可能需要一两分钟…';
-  try {
-    const res = await fetch('/api/leads/search', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
-    });
-    const data = await res.json();
-    leads = data.leads || [];
-    renderLeads();
-    status.textContent = `找到 ${leads.length} 家公司`;
-  } catch (e) {
-    status.textContent = '搜索失败：' + e;
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-document.getElementById('composeBtn').addEventListener('click', async () => {
-  const leadIds = [...document.querySelectorAll('.lead-check:checked')].map((el) => el.value);
-  if (leadIds.length === 0) { alert('请先勾选要询价的公司'); return; }
-  const res = await fetch('/api/emails/compose', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ leadIds }),
-  });
-  const data = await res.json();
-  if (data.error) { alert(data.error); return; }
-  drafts = data.drafts || [];
-  sendBadge.textContent = data.sendConfigured ? 'SMTP 已配置：可真实发送' : 'SMTP 未配置：仅可预览（dry run）';
-  renderDrafts();
-});
-
-function renderDrafts() {
-  draftsSection.style.display = drafts.length ? 'block' : 'none';
-  draftsList.innerHTML = '';
-  for (const d of drafts) {
-    const card = document.createElement('div');
-    card.className = 'draft-card';
-    card.innerHTML = `
-      <label><input type="checkbox" class="draft-check" value="${d.id}" checked /> <span class="to">收件人：${escapeHtml(d.to)}</span></label>
-      <div class="subject">${escapeHtml(d.subject)}</div>
-      <div class="body">${escapeHtml(d.body)}</div>
-      <span class="status ${d.status}">${d.status}${d.error ? ' · ' + escapeHtml(d.error) : ''}</span>
-    `;
-    draftsList.appendChild(card);
-  }
+async function showDisclosure() {
+  const { body } = await api(`/api/quotes/${currentQuote.id}/disclosure`);
+  $('discBox').innerHTML = `
+    <div class="disclosure" style="margin-top:14px">
+      <h3>以下内容将发送给「${esc(body.companyName)}」</h3>
+      <ul>${body.items.map((i) => `<li>${esc(i.label)}：${esc(i.value)}</li>`).join('')}</ul>
+      <p class="hint">${esc(body.notice)}</p>
+      <button id="confirmBtn">我已阅读，确认发送</button>
+      <button class="ghost" id="cancelBtn">取消</button>
+    </div>`;
+  $('cancelBtn').addEventListener('click', () => { $('discBox').innerHTML = ''; });
+  $('confirmBtn').addEventListener('click', doConfirmAndSend);
 }
 
-document.getElementById('sendBtn').addEventListener('click', async () => {
-  const draftIds = [...document.querySelectorAll('.draft-check:checked')].map((el) => el.value);
-  if (draftIds.length === 0) { alert('请先勾选要发送的草稿'); return; }
-  if (!confirm(`确认要向 ${draftIds.length} 家公司发送询价邮件吗？`)) return;
-  const res = await fetch('/api/emails/send', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ draftIds, confirm: true }),
-  });
-  const data = await res.json();
-  const byId = new Map(data.drafts.map((d) => [d.id, d]));
-  drafts = drafts.map((d) => byId.get(d.id) || d);
-  renderDrafts();
-});
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+async function doConfirmAndSend() {
+  const c = await api(`/api/quotes/${currentQuote.id}/confirm`, { method: 'POST' });
+  if (!c.ok) { $('discBox').innerHTML = `<div class="err">${esc(c.body.error)}</div>`; return; }
+  currentQuote = c.body.quote;
+  const s = await api(`/api/quotes/${currentQuote.id}/send`, { method: 'POST' });
+  currentQuote = s.body.quote || currentQuote;
+  $('quoteStatus').className = 'status-pill ' + currentQuote.status;
+  $('quoteStatus').textContent = currentQuote.status;
+  $('discBox').innerHTML = `<div class="disclosure">
+    <h3>${s.body.dryRun ? '预览模式：未真正发出邮件' : '已发送'}</h3>
+    <p class="hint">${s.body.dryRun
+      ? '未配置 SMTP 凭据，系统不会发起任何网络请求。这是发送闸门的第二道防线。'
+      : '报价已发送到该公司登记的报价邮箱。'}</p>
+    ${s.body.billingEventId ? `<p class="hint">已记录计费事件 ${esc(s.body.billingEventId)}</p>` : ''}
+    ${s.body.billingSuppressed ? '<p class="hint">命中 30 天去重窗口：邮件照发，但不重复计费。</p>' : ''}
+  </div>`;
 }
 
-fetch('/api/emails').then((r) => r.json()).then((data) => {
-  sendBadge.textContent = data.sendConfigured ? 'SMTP 已配置：可真实发送' : 'SMTP 未配置：仅可预览（dry run）';
-});
+boot();
 </script>
 </body>
 </html>
