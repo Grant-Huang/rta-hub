@@ -1,12 +1,25 @@
-# 加拿大橱柜报价平台 —— 需求说明书（v0.3）
+# 加拿大橱柜报价平台 —— 需求说明书（v0.4）
 
-> v0.2 之后新增的讨论：两维多租户架构（供给侧公司租户 + 需求侧消费者/专业账号）、冷启动通用层
-> 与个性化付费订阅的两层转化路径、贸易/建商专业账号的使用模式与商业模式。v0.1 的 7 个问题、
-> v0.2 引出的问题已关闭，详见第 11 节；本轮新增决策见第 11 节 v0.3 部分，仍未关闭的问题见
-> 第 12 节。**详细的端到端用户旅程走查已拆到独立文件 [SCENARIOS.md](./SCENARIOS.md)**，本文档
-> 第 4 节只保留场景清单索引。本文档仍处于"确认阶段"——确认后再转入开发任务拆解；仓库里已有的
-> `leads.ts`/`email.ts`/`server.ts`/`web/index.html` 是更早版本范围（批量搜索+群发询价信）的
-> 实现，与本版需求的关系见第 10 节，尚未按本版需求改动代码。
+> **v0.4 变更摘要**（针对 v0.3 review 提出的 10 个问题）：
+> 1. 新增 **3.5 定价模型**——把 `pricingRule: { retail, trade? }` 两个标量重构成
+>    "（型号 × 门板价格组）价格矩阵 + 修饰项 + 折扣规则 + 税 + 运费"的完整结构。
+> 2. 新增 **3.6 版本化与可追溯**——`ProductSpec` 版本化、`Quote` 价格快照、设计修订链、审计事件。
+> 3. **FR-8 强化**：价格一律由代码计算，LLM 不得输出任何价格字段；新增 6 项硬校验清单；
+>    发送闸门改为服务端状态机（不再接受请求体里的 `confirm` 布尔字段）。
+> 4. **修复文档内部矛盾**：已发布规格但未订阅的公司，客户**可以 `@`**，拿到的是 `EstimateDraft`
+>    （以 FR-10 的写法为准，场景 A 第 6 点同步改）。
+> 5. **计费补齐**：`LeadBillingEvent` 增加去重窗口与争议/退款流程。
+> 6. 新增 **FR-13 隐私、同意与数据留存**（PIPEDA），覆盖消费者、trade 账号、商家三类主体。
+> 7. **FR-2 增加量化验收标准与降级兜底方案**（结构化模板导入）。
+> 8. **MVP-1 调整**：FR-2 保留在 MVP-1，试点公司数从 2-3 家改为**先跑通 1 家**。
+> 9. **FR-1 @ 路由改为确定性匹配**，LLM 不参与"这是哪家公司"的判断。
+> 10. `CompanyMentionSignal` 增加名称归一化与实体关联。
+>
+> 另新增 **FR-12 公司发现与邮件列表**（承接 [COMPANY_DISCOVERY.md](./COMPANY_DISCOVERY.md) 的讨论）。
+>
+> 第 12 节开放问题 1（脸型模板绘制方式）、3（比价表触发时机）等尚未讨论，保留。
+> 详细端到端走查见 [SCENARIOS.md](./SCENARIOS.md)，本文档第 4 节只保留索引。
+> 仓库现有代码与本版需求的关系见第 10 节。
 
 ---
 
@@ -31,22 +44,36 @@
 | **橱柜公司 Agent（Company Agent）** | 每家已入驻公司一个（工程上是同一套逻辑按 companyId 参数化，见 3.4），绑定该公司的产品规格库，只回答/只设计"自己公司能做到的" |
 | **橱柜公司（Company）** | 现实中的橱柜厂商/经销商，即平台的供给侧租户，最终报价邮件的接收方 |
 | **公司运营/店长** | 使用"公司入驻规格录入会话"整理自家产品规格的人 |
+| **平台运营/管理员** | 平台自己的员工：维护公司发现库、社媒投放、招商外联、处理计费争议（见 FR-12、第 8 节） |
 
 ---
 
 ## 3. 核心概念
 
 ### 3.1 多 Agent 对话架构
+
 - 客户默认与总控助手对话（通用设计知识：风格/预算/大致想法）。
 - 客户可用 `@公司名` 把具体问题路由给该公司 Agent（如"@枫叶橱柜 你们有 36 寸转角柜吗"），
   同一句话可以 @ 多家公司做横向提问。
 - 公司 Agent 的回答**必须基于该公司规格库**，不得编造/借用其他公司信息。
+- **路由是确定性的，不由 LLM 判断"用户指的是哪家公司"**（见 FR-1）——在一个以数据隔离为
+  硬性要求的系统里，"客户以为 @ 的是 A、实际路由给了 B"是不可接受的故障模式。
 
 ### 3.2 公司产品规格库（Product Spec）
+
 每家公司的规格库至少包含：
-- 柜体类型（地柜/吊柜/高柜/转角柜等）及每种类型的标准尺寸候选集（宽×高×深，离散值）
-- 每个具体型号所属的**"脸型模板"**（见 3.3）——决定它在正视图上怎么画
-- 门板花色/材质选项、五金选项、**定价规则（零售价 + 可选的贸易价变体，见 3.4）**
+
+- **柜体型号（Module）**：型号码（如 B12/W2430/SB36）、类型（地柜/吊柜/高柜/转角柜/水槽柜等）、
+  每个型号的标准尺寸候选集（宽×高×深，离散值）。
+- **脸型模板归属**（见 3.3）——决定它在正视图上怎么画。
+- **门板样式（DoorStyle）与价格组（PriceGroup）**：门板花色/材质选项，以及每种门板属于哪个
+  价格组——这是 RTA 行业定价的核心维度，见 3.5。
+- **价格矩阵**：(型号 × 价格组) → 标价。
+- **修饰项**：五金选项、配件选项及其加价规则。
+- **折扣规则**：贸易折扣、量级折扣等。
+- **运费规则**与**适用税区**。
+
+规格库是**版本化**的（见 3.6），不是一份可以随时被就地改写的文档。
 
 ### 3.3 渲染架构：脸型模板库 + 参数化拼接
 
@@ -67,22 +94,28 @@
    | 俯视图 Top（地柜层/顶柜层分开出图）| ~3-5 个 | 外框矩形、转角柜斜切角、开门弧线示意 |
    | 侧视图 Side | ~2-4 个 | 地柜截面、吊柜截面（同一趟柜子复用同一模板，标准台面高度/净空按行业惯例标注）|
 
-3. **渲染**：用 SVG 原生 `<symbol>` + `<use>` 机制，对每个已排布好位置的型号，引用其脸型模板并
-   `transform` 缩放/平移到真实尺寸和坐标，纯代码拼接，无需渲染引擎依赖。
+3. **渲染**（v0.4 修正）：**不手绘 SVG 素材，也不采用"归一化 `<symbol>` + `transform` 缩放"**——
+   缩放会把门缝这类**绝对尺寸**一起放大（36" 柜的门缝会画成 12" 柜的 3 倍），并使线宽各向异性
+   失真。改为**声明式脸型文法（矩形递归行列切分）+ 代码计算绝对英寸坐标**后直接输出 SVG，
+   同样零依赖、确定性，且可对切分结果的数字做断言测试。详见 [RENDERING.md](./RENDERING.md)。
 4. **材质/花色**不单独建模板——同一脸型模板换填充色/花纹，或直接用标注文字体现材质名称。
-5. **与"公司入驻规格录入会话"（FR-2）的联动**：录入某型号规格时，系统需额外确定它属于哪个
-   脸型模板。RTA 行业型号命名通常自带这个信息（如 B12=12寸地柜单门、B15D=抽屉柜、
-   W2430=30高吊柜、SB36=水槽柜），可先尝试规则匹配，匹配不到再通过对话询问用户确认。
+5. **面框/无框与门板覆盖方式是渲染参数**：美式面框柜正面有 1-1/2" 实木面框、无框柜没有；
+   全覆盖（露 1/4"）/ 半覆盖（露 1"-1.5"）/ 嵌入式（缝 3/32"）三种 overlay 观感差异明显。
+   在文法方案里它们是两个参数；若按"每种脸型一张图"则模板数要乘 6 倍。
+6. **与"公司入驻规格录入会话"（FR-2）的联动**：录入某型号规格时，系统需额外确定它属于哪个
+   脸型模板。RTA 行业型号命名通常自带这个信息，可先规则匹配，匹配不到再对话确认。
+   ⚠️ 规则的键必须是 **(前缀, 宽度)** 而不只是前缀——`B12`（一抽一门）与 `B30`（双抽双门）
+   前缀相同脸型不同，且宽度分界点因公司而异，故规则表必须可按公司覆盖（详见 RENDERING.md 第 5 节）。
 
-### 3.4 多租户架构（两个维度）（本版新增）
+### 3.4 多租户架构（两个维度）
 
 这是标准的双边多租户结构，但租户不是单一维度，要分开看：
 
 **维度一：供给侧租户 = 每家橱柜公司**
 
-严格按 `companyId` 隔离的数据：`ProductSpec`（含草稿/发布两态）、入驻会话历史与原始上传资料
-（对其他公司必须不可见——公司的价目表本身有竞争敏感性）、该公司收到的线索、生成的报价单、
-计费/订阅状态。
+严格按 `companyId` 隔离的数据：`ProductSpecVersion`（含草稿/已发布/归档多态，见 3.6）、入驻
+会话历史与原始上传资料（对其他公司必须不可见——公司的价目表本身有竞争敏感性）、该公司收到的
+线索、生成的报价单、计费/订阅状态。
 
 隔离要求：不能只在应用代码里"记得按 companyId 过滤"，要在**数据访问层**兜底强制（每张表带
 `tenant_id`/`companyId`，查询层强制加过滤条件，或用支持行级安全的数据库做兜底）——应用层过滤
@@ -97,14 +130,132 @@
 `CustomerAccount` 分两种：
 - **consumer**（默认，免费）：一个账号通常对应一个进行中的装修项目。
 - **trade**（付费专业账号，面向建商/装修公司）：一个账号下管理**多个** `Conversation`（多项目
-  并行），且能看到 `ProductSpec.pricingRule` 里的贸易价变体（零售价 vs 贸易价，见 FR-11）。
+  并行），且按贸易折扣规则定价（见 3.5、FR-11）。
 
 `Conversation`（客户对话/项目）本身归属某个 `CustomerAccount`，其 `perCompanyThreads` 只**只读
 引用**某个供给侧租户（`CabinetCompany`）的数据，不会写入对方租户——这个单向读写规则是隔离设计
 的一部分。
 
 **平台共享层**（不属于任何租户）：脸型模板库（`FaceTemplate`）、冷启动用的行业基准目录
-（`GenericCatalog`，见 FR-10）、总控 Agent 与核心引擎代码。
+（`GenericCatalog`，见 FR-10）、加拿大各省税率表（`TaxRule`，见 3.5）、总控 Agent 与核心引擎代码。
+
+### 3.5 定价模型（v0.4 新增，重构）
+
+#### 3.5.1 为什么原来的 `pricingRule: { retail, trade? }` 不够
+
+v0.3 把价格建成"每个型号一个零售价 + 一个可选贸易价"两个标量。这与 RTA 橱柜行业的真实定价
+结构不符，具体差在四处：
+
+1. **价格的主维度是（型号 × 门板价格组），不是型号本身。** 同一个 `B12` 地柜，配基础款
+   Shaker White 和配 Maple Glaze 是两个完全不同的价，差价常在 40%-80%。原模型的
+   `finishes[].priceModifier`（一个加法/百分比修饰）表达不了这种矩阵关系——真实价目表就是
+   一张"行=型号、列=价格组"的二维表。
+2. **缺税。** 加拿大按省不同（HST / GST+PST / GST+QST / 仅 GST），报价单不列税基本没法给
+   客户看，客户拿到的总价会和实际付款差 5%-15%。
+3. **缺币种、运费、有效期。** 报价单没有 `validUntil` 就等于承诺永久价格；没有运费就少算一笔
+   常见的几百加币。
+4. **缺折扣的表达能力。** 贸易价在行业里通常表达为"标价的 X% off"，而且常按订单金额分档，
+   还可能只对部分价格组生效——一个 `trade` 标量装不下。
+
+#### 3.5.2 结构
+
+价格的计算链路是确定的，分五层：
+
+```
+标价      PriceMatrixEntry(型号, 价格组).listPrice
+  ↓ ＋
+修饰项    HardwareOption / AccessoryOption / 组装加价 / 非标尺寸加价
+  ↓ －
+折扣      DiscountRule（贸易折扣、金额分档折扣）
+  ↓ ＝    行小计 → 单据小计 subtotal
+  ↓ ＋
+运费      ShippingRule
+  ↓ ＋
+税        TaxRule（按客户所在省）
+  ↓ ＝    total
+```
+
+**核心实体**（完整字段见第 6 节）：
+
+- **`PriceGroup`**（属于公司）：价格组，如 `A / B / C` 或 `Standard / Premium / Designer`。
+- **`DoorStyle`**（属于公司）：门板样式，如 "Shaker White"，每个门板样式**属于且仅属于一个
+  价格组**。客户在一个报价单里选定一种门板 → 整单落在该门板对应的价格组上。
+- **`ModuleSpec`**（属于公司）：柜体型号，含离散尺寸候选集与脸型模板归属。
+- **`PriceMatrixEntry`**（属于公司）：**(moduleId × priceGroupId) → listPrice**，这是价格的
+  唯一真相来源。可选 `tradePrice`（少数公司确实维护两张矩阵，而不是用折扣表达）、
+  `assembledUpcharge`（RTA 未组装 vs 已组装的差价）。
+- **`HardwareOption` / `AccessoryOption`**（属于公司）：五金与配件，加价规则支持定额或百分比，
+  可限定适用的型号类型。
+- **`DiscountRule`**（属于公司）：折扣规则，按受众（retail/trade）、按订单金额分档、可限定
+  只对某些价格组生效。
+- **`ShippingRule`**（属于公司）：定额 / 满额免运 / 按地区。
+- **`TaxRule`**（平台共享）：按省的税率组成，带生效区间。
+
+#### 3.5.3 加拿大税率（`TaxRule` 的初始数据）
+
+税率是会变的（例如 NS 在 2025-04-01 把 HST 从 15% 降到 14%），所以 `TaxRule` 必须带
+`effectiveFrom / effectiveTo`，报价时按 `Quote.createdAt` 取当时生效的那条。下表是**初始
+录入数据**，不是硬编码常量：
+
+| 省/地区 | 构成 | 合计 |
+|---|---|---|
+| AB, NT, NU, YT | GST 5% | 5% |
+| BC | GST 5% + PST 7% | 12% |
+| SK | GST 5% + PST 6% | 11% |
+| MB | GST 5% + PST 7% | 12% |
+| ON | HST 13% | 13% |
+| QC | GST 5% + QST 9.975% | 14.975% |
+| NB, NL, PEI | HST 15% | 15% |
+| NS | HST 14%（2025-04-01 起，此前 15%）| 14% |
+
+> 上表按撰写时的公开税率整理，**上线前必须由运营重新核对一遍**，且系统要支持在不改代码的
+> 前提下更新税率（这正是把它建成 `TaxRule` 实体而不是常量的原因）。
+
+#### 3.5.4 定价引擎（`PricingEngine`）
+
+- 定价是**纯函数**：`price(specVersion, selection, accountType, province, date) → PriceBreakdown`。
+  相同输入必须得到相同输出，便于测试与事后复算。
+- **LLM 不参与定价的任何环节**（见 FR-8）。模型只负责产出"选了哪些型号、什么尺寸、什么门板、
+  什么五金"这一组**选择**，价格全部由引擎算。
+- 引擎必须输出**可解释的明细**（`PriceBreakdown`：每一行的标价、每一项修饰、每一档折扣、
+  运费、每一项税），而不是一个总数——报价单要能给客户和公司双方逐项核对。
+
+### 3.6 版本化与可追溯（v0.4 新增）
+
+v0.3 在第 7 节写了"报价单发送前的每一版设计/报价都应可追溯"，但数据模型里没有任何东西支撑它。
+本节把它落成三条具体机制：
+
+**（1）规格版本化：`ProductSpecVersion`**
+
+`ProductSpec` 不再是一个带 `status: draft | published` 的可变文档，而是**一串不可变版本**：
+
+- 每次发布产生一个新的 `ProductSpecVersion`，`versionNo` 单调递增，发布后**不可再修改**。
+- 一家公司在任一时刻可以同时存在：**恰好 0 或 1 个 `published` 版本** + **0 或 1 个 `draft`
+  版本**（正在编辑的下一版）+ 任意多个 `archived` 历史版本。这正是 3.4 节说的"草稿/发布两态
+  并存"——单个 status 字段做不到，必须版本化。
+- 公司 Agent 与定价引擎**只读 `published` 版本**；草稿对客户端完全不生效。
+
+**（2）报价快照：`Quote` 冻结价格**
+
+`Quote` 不能只存 `moduleRef` 然后到用时再去查价——那样公司一改价，历史报价单的金额就漂了。
+`Quote` 必须冻结：
+
+- `productSpecVersionId`：本单基于哪一版规格。
+- 每个 `lineItem` 的 `unitListPrice` / `unitNetPrice` / 各修饰项金额，全部是**下单当时的快照值**。
+- `accountTypeAtQuote`：账号类型快照（防止客户从 consumer 升级成 trade 后历史单价格变化）。
+- `taxRuleSnapshot`、`shippingRuleSnapshot`、`discountRuleIds`：同理。
+- `validUntil`：报价有效期，过期后 `status` 转 `expired`，需重新生成。
+
+复算校验：任何时刻都可以用 `productSpecVersionId` + 冻结的 selection 重跑 `PricingEngine`，
+结果必须与快照一致——不一致说明数据被篡改或引擎有回归，属于事故。
+
+**（3）修订链与审计事件**
+
+- **`DesignRevision`**：客户每次通过对话提修改意见，生成一个新的修订版本（`revisionNo` 递增），
+  不覆盖上一版。FR-4 说"重新计算受影响的那部分"指的是计算过程，不是可以就地改写历史。
+- **`QuoteAuditEvent`**：报价单生命周期里的每个关键动作（创建 / 修订 / 校验拒绝 / 客户确认 /
+  发送成功 / 发送失败）都记一条，带当时内容的哈希。这是事后处理计费争议（见第 8 节）时唯一
+  可信的凭据。
 
 ---
 
@@ -122,25 +273,74 @@
 | F. 贸易账号多项目管理 | 专业账号 | FR-11 |
 | G. 贸易账号贸易价可见性 | 专业账号 + 已入驻公司 | FR-11 |
 | H. 未入驻公司的销售信号 | 消费者/专业账号 + 未入驻公司 | FR-10 |
+| I. 公司发现与招商引流 | 平台运营 + 未入驻公司 | FR-12 |
 
 ---
 
 ## 5. 功能需求（FR）
 
 ### FR-1　对话与 Agent 路由
+
 - 单一对话框内多轮对话，维持通用上下文（需求摘要、已上传户型图、已选公司等）。
-- `@公司名` 语法解析路由到对应公司 Agent，支持一句话内 @ 多家公司分别应答，`@` 时应有公司名联想。
-- 公司 Agent 的知识边界限制在"自己的产品规格 + 客户当前项目上下文"。
+- 支持一句话内 `@` 多家公司分别应答。
+- 公司 Agent 的知识边界限制在"自己的产品规格（`published` 版本）+ 客户当前项目上下文"。
+
+**路由必须是确定性的（v0.4 强化）：**
+
+- 前端输入 `@` 触发公司联想选择器；用户选中后，消息体里携带**结构化 mention token**
+  `{ companyId, displayName }`，而不是一串自由文本。
+- 服务端**只按 `companyId` 路由**。
+- 用户手打了公司名但没从选择器选（例如粘贴的文本），服务端做**确定性匹配**：规范化后
+  （去空格/统一大小写/去 Inc·Ltd·有限公司等后缀/简繁统一）与 `CabinetCompany.name` 及
+  `aliases[]` 做精确匹配。
+  - 唯一命中且该公司 `status = active` → 路由。
+  - 命中多个、或命中 0 个、或命中的公司未 active → **不路由**，由总控助手回复澄清
+    （"你是指以下哪一家？"或场景 B 的委婉说法），并记录 `CompanyMentionSignal`。
+- **LLM 永远不参与"用户指的是哪家公司"这个判断。** 它可以帮忙生成澄清话术，但不能决定路由目标。
+- `aliases[]` 在公司入驻时录入（常见简称、英文名/中文名互译、旧品牌名）。
 
 ### FR-2　公司入驻规格录入会话
+
 - 每家公司独立的后台会话入口，可上传文件（产品手册/价格表/规格书，PDF/图片/Excel）。
-- 系统持续追问，引导整理出结构化字段：柜体类型×尺寸矩阵、脸型模板归属（见 3.3 第 5 点）、
-  花色/材质选项、五金选项、定价规则（含贸易价变体，见 FR-11）。
-- 产出人类可读+结构化两种形式的"产品规格文档"，公司方可编辑修改，**确认后才发布**——未确认
-  草稿不影响线上公司 Agent 的回答。
-- MVP 阶段只挑 2-3 家公司完整走通此流程，不追求覆盖率。
+- 系统持续追问，引导整理出结构化字段：型号×尺寸矩阵、脸型模板归属（见 3.3 第 5 点）、
+  **门板样式与价格组归属、(型号 × 价格组) 价格矩阵**、五金/配件选项、折扣规则、运费规则、
+  适用税区（见 3.5）。
+- 产出人类可读 + 结构化两种形式的"产品规格文档"，公司方可编辑修改，**确认后才发布**——发布
+  即生成一个不可变的 `ProductSpecVersion`（见 3.6），未发布草稿不影响线上公司 Agent 的回答。
+- **完整性优先于自动化程度**：任何抽取不确定的字段必须进入"待确认队列"并标注置信度，
+  系统**不得自行猜一个值蒙混过去**（这是 FR-3 完整性原则在录入环节的延伸）。
+- MVP-1 阶段**先完整跑通 1 家公司**（见第 9 节），不追求覆盖率。
+
+#### FR-2 验收标准（量化，v0.4 新增）
+
+以 1 家试点公司的真实价目表为验收对象（RTA 行业常见规模：150-400 个 SKU）：
+
+| 指标 | 定义 | 门槛 | 测法 |
+|---|---|---|---|
+| **SKU 召回率** | 结构化结果中的 SKU 数 ÷ 原始价目表 SKU 总数 | ≥ 98% | 人工数原表 SKU 总数作分母 |
+| **价格准确率** | 抽样 (SKU × 价格组) 组合，金额与原表完全一致的比例 | **= 100%**（抽样 50 条，0 容错）| 双人独立比对 |
+| **必填字段覆盖率** | `moduleCode` / `type` / 宽高深选项 / `faceTemplateId` / `priceGroupId` / `listPrice` 六项全部非空的 SKU 占比 | ≥ 95% | 自动统计 |
+| **脸型模板规则命中率** | 无需人工干预即正确归属 `faceTemplateId` 的 SKU 占比 | ≥ 70% | 与人工标注基线比对 |
+| **脸型模板最终准确率** | 发布前全量 SKU 的归属正确率 | **= 100%** | 人工全量复核（MVP 阶段 SKU 量可承受）|
+| **静默失败数** | 系统自行猜测且未标记为待确认的字段数 | **= 0** | 审计草稿里的置信度标记 |
+| **人工修正次数** | 从上传到可发布，运营侧手动改动的字段次数 | ≤ 30 次 | 操作日志计数 |
+| **端到端耗时** | 上传 → 得到可发布草稿 | ≤ 2 人时 | 计时 |
+
+**价格准确率为什么是 0 容错**：价格错一分钱就是对外发出的错误报价，属于事故级问题，
+不能用"95% 准确"这种统计口径来接受。
+
+#### FR-2 降级兜底方案（必须在 MVP-1 一并实现）
+
+如果上述验收不达标，MVP-1 的其他环节（对话、设计、报价、发送、计费）不能被规格录入卡住，
+因此**兜底路径与会话式录入一起做**：
+
+1. **结构化模板导入**：平台定义标准 Excel/CSV 模板（型号表、价格矩阵表、门板表、选项表四张
+   sheet），公司或平台运营按模板填写后导入，导入时做同样的硬校验。
+2. **会话降级为校对助手**：FR-2 会话从"负责从零抽取"降级为"负责把导入结果与原始 PDF 比对、
+   指出缺漏与可疑项"——这个角色对 LLM 来说容易得多，且错了也只是漏报，不会产生错价。
 
 ### FR-3　户型图上传与解析
+
 - 图像理解/OCR 估算房间轮廓与关键尺寸；精度 1/4 英寸颗粒度即可；不确定时对话核对或要求客户
   手动补充；不支持 CAD 源文件解析（引导截图代替）；解析结果必须覆盖所有相关区域，不允许漏项。
 - 客户上传的内容不局限于户型照片本身，也可能是此前从别家（含专业设计软件如 2020 Design）拿到
@@ -149,145 +349,434 @@
   为此单独开发不划算；若未来平台要直接服务专业设计师/经销商这类用户，可重新评估）。
 
 ### FR-4　平面设计自动生成
-- 全自动生成初步方案（布局算法 + 3.3 节模板拼接），仅使用目标公司规格库中真实存在的型号。
+
+- 全自动生成初步方案（布局算法 + 3.3 节模板拼接），仅使用目标公司 `published` 规格版本中真实
+  存在的型号与尺寸。
 - 客户通过对话提修改意见触发局部重新生成，不提供可视化拖拽编辑器（MVP 阶段）。
+- 每次修改生成一个新的 `DesignRevision`，不覆盖历史（见 3.6）。
 
 ### FR-5　三视图渲染（见 3.3 节，已定稿）
+
 - 正视图、俯视图-地柜层、俯视图-顶柜层、侧视图，共四张图，基于脸型模板库参数化拼接生成。
 
 ### FR-6　报价单生成与多公司价格对比
-- 结构化报价单：型号、数量、规格（尺寸/材质/花色）、单价（按 `CustomerAccount.accountType`
-  取零售价或贸易价，见 FR-11）、小计、总价、备注。
-- 客户向多家公司询价时，提供价格层面的横向对比表（不做视图/图形对比）。
+
+- 结构化报价单，逐行包含：型号码、数量、尺寸、门板样式与价格组、五金/配件、单位标价、
+  折扣后单价、行小计。单据层面包含：小计、折扣明细、运费、**税（分项列出税种与税率）**、
+  总价、币种、**有效期**、备注。
+- 定价全部由 `PricingEngine` 计算（见 3.5.4），按 `CustomerAccount.accountType` 应用对应的
+  折扣规则（见 FR-11）。
+- 客户向多家公司询价时，提供价格层面的横向对比表（不做视图/图形对比）。对比表必须注明各家
+  报价的**含税口径**是否一致，避免拿含税价和未税价直接比。
 
 ### FR-7　报价发送
-- 发送内容：三视图拼图 + 价格明细表格，通过 HTML 邮件发送（CID 内嵌图片 + HTML 表格 + 纯
+
+- 发送内容：四视图拼图 + 价格明细表格，通过 HTML 邮件发送（CID 内嵌图片 + HTML 表格 + 纯
   文本兜底版本 + 图片附件兜底），详见 SCENARIOS.md 场景 E。
 - 发送目标为公司登记的报价邮箱。
-- 每次成功发送对应生成一条 `LeadBillingEvent`（计费事件，见第 8 节商业模式、第 6 节数据模型）。
+- 每次成功发送**可能**生成一条 `LeadBillingEvent`（受去重窗口约束，见第 8 节与 FR-7 计费小节）。
 
-### FR-8　发送闸门与数据隔离（硬性要求）
-- **发送闸门**：客户必须在对话中显式确认设计+报价单，系统不得自动发送；沿用第一版 `email.ts`
-  的"未配置发信凭据则 dry-run + 显式 confirm 才真正发送"两道闸门，及 CASL 合规注意事项
-  （发件人身份透明、一次性真实询价性质）。
-- **公司间数据隔离（程序层面硬校验，不只靠 prompt 约束）**：生成的设计/报价单**只能引用该公司
-  规格库中真实存在的型号 id**；引用不存在的型号 id 时代码层面直接拒绝，不允许该报价继续生成
-  或发送。
-- **只有绑定了真实 `CabinetCompany` 的 `Quote` 才能进入发送闸门**——第 3.4 节的 `EstimateDraft`
-  （冷启动通用预估，见 FR-10）没有 `companyId`、也就没有收件地址，天然无法被发送，不需要额外
-  加规则去防止误发。
+#### 计费事件的生成规则（v0.4 新增）
 
-### FR-9　多租户架构与账号体系（本版新增）
+- **去重窗口**：同一 `(companyId, conversationId)` 在 `LEAD_DEDUPE_WINDOW_DAYS`（默认 **30 天**）
+  内只产生**一条**计费事件。窗口内的重复发送**照常发邮件**（客户改了设计再发一次是正常行为），
+  但不再产生新的计费事件，只记一条 `QuoteAuditEvent(suppressedDuplicateBilling)`。
+- **去重键**：`dedupeKey = hash(companyId, conversationId, windowBucket)`，数据库层加唯一约束
+  兜底——不能只靠应用代码"记得判重"（与 3.4 节的双重防线原则一致）。
+- **争议窗口**：发送后 `LEAD_DISPUTE_WINDOW_DAYS`（默认 **14 天**）内，公司可对该条线索提起
+  争议。争议窗口内 `feeStatus` 不得进入 `invoiced`。
+
+### FR-8　发送闸门与数据隔离（硬性要求，v0.4 强化）
+
+**（1）价格不由 LLM 产生**
+
+- LLM 的输出只允许包含**选择**：`{ moduleId, qty, width, height, depth, doorStyleId,
+  hardwareOptionIds[], accessoryOptionIds[] }`。
+- 输出中任何形如价格/金额/小计/总价的字段**一律丢弃**，不进入任何计算。
+- 所有金额由 `PricingEngine` 从 `published` 规格版本计算得出（见 3.5.4）。
+- 理由：只校验"型号 id 存在"挡不住"存在的型号 id + 编造的价格"——后者更危险，因为它能通过
+  v0.3 版本的全部校验并被发送出去。
+
+**（2）生成 `Quote` 前的硬校验清单（全部通过才允许继续）**
+
+1. `moduleId` 存在于该 `companyId` 的 **`published`** `ProductSpecVersion`。
+2. 选定的 `width` / `height` / `depth` 落在该型号的离散候选集内（不允许"接近的尺寸"）。
+3. `doorStyleId` 属于该公司且在同一版本内；其 `priceGroupId` 在 `PriceMatrixEntry` 里对该
+   型号**存在条目**（矩阵可能有空洞：某些型号不供应某些价格组）。
+4. 五金/配件选项属于该公司、在同一版本内、且适用于该型号类型。
+5. 客户所在省份已确定，且能查到当时生效的 `TaxRule`。
+6. 引擎重算的金额与将要写入的快照**逐项一致**。
+- 任一项失败 → **拒绝生成**，记录 `QuoteAuditEvent(validationRejected)` 与失败原因，
+  不进入发送闸门。不做"自动修正后继续"。
+
+**（3）发送闸门是服务端状态机**
+
+- `Quote.status` 只能按 `draft → confirmed → sent` 迁移，迁移由**独立的服务端 API 动作**驱动，
+  每次迁移写 `QuoteAuditEvent`。
+- **不接受请求体里的 `confirm: true` 布尔字段作为闸门**——v0.3 沿用的这个做法等于把闸门交给
+  调用方，任何能访问接口的人都能绕过。客户确认必须是一次留痕的服务端状态变更。
+- 未配置发信凭据时仍然是 dry-run（这一道保留），但它是**第二道**，不是唯一一道。
+- 发送前必须向客户展示"以下信息将发送给 X 公司"的明确披露（见 FR-13）。
+
+**（4）公司间数据隔离**
+
+- 生成的设计/报价单只能引用该公司规格库中真实存在的实体 id（型号、门板、选项），
+  引用不存在的 id 时代码层面直接拒绝。
+- **只有绑定了真实 `CabinetCompany` 的 `Quote` 才能进入发送闸门**——`EstimateDraft`
+  （冷启动通用预估，见 FR-10）没有 `companyId`、也就没有收件地址，天然无法被发送，
+  不需要额外加规则去防止误发。
+
+### FR-9　多租户架构与账号体系
+
 - 供给侧：每个 `CabinetCompany` 一个租户，数据严格按 `companyId` 隔离，应用层 + 数据访问层
   双重强制（见 3.4）。
 - 需求侧：`CustomerAccount` 分 `consumer`（默认免费）/ `trade`（付费专业账号）；同一账号可拥有
   多个 `Conversation`。
 - 每家公司的 Agent 是同一套引擎按 `companyId` 参数化调用，不是独立部署实例。
 
-### FR-10　冷启动通用层（本版新增）
+### FR-10　冷启动通用层
+
 - 平台维护一份不属于任何具体公司的 `GenericCatalog`（行业典型尺寸与报价区间）。
 - 客户即使在没有任何相关公司入驻/被 @ 的情况下，也能走"聊需求 → 出方案"的流程，得到一份
   `EstimateDraft`——**明确标注"行业典型区间，非具体公司真实报价"**，给区间不给误导性的精确
   数字（避免"报低吸引、真实报价却高很多"的信任风险，这类问题在同类平台上是真实发生过的）。
-- `EstimateDraft` 与 `Quote` 是不同实体（见 FR-8 最后一条），不进入发送闸门。
-- 客户 `@` 一个尚未入驻的公司名字时，系统记录为 `CompanyMentionSignal`（供销售外联使用），不向
-  客户暴露"这家还没入驻"这类内部状态，具体客户端文案待定（见第 12 节开放问题）。
-- 公司完成入驻并订阅个性化服务后（FR-2 发布 + 订阅生效），才能让自己的真实规格库参与匹配、
-  产生绑定该公司的 `Quote`；未订阅时，即使已完成入驻资料整理，客户端对这家公司拿到的仍是
-  `EstimateDraft` 而非 `Quote`——这构成"先体验通用层效果，再付费解锁个性化"的转化路径，详见
-  第 8 节。
+- `EstimateDraft` 与 `Quote` 是不同实体（见 FR-8），不进入发送闸门。
+- 客户 `@` 一个尚未 `active` 的公司名字时，系统记录一条 `CompanyMentionSignal`（供销售外联
+  使用），不向客户暴露"这家还没入驻/还没订阅"这类内部运营状态。
 
-### FR-11　专业/贸易账号（Trade Account）（本版新增）
+**（v0.4 修正 —— 与旧版场景 A 的矛盾已消除）**
+
+未订阅（或已发布规格但未订阅）的公司，客户**可以 `@`**，交互不中断，但拿到的是
+`EstimateDraft` 而不是绑定该公司的 `Quote`：
+
+| 公司状态 | 客户能否 `@` | 客户拿到什么 | 是否记 `CompanyMentionSignal` |
+|---|---|---|---|
+| 不存在于系统 | 可以（不报错） | `EstimateDraft` | 是（`unknown`） |
+| `prospect` | 可以 | `EstimateDraft` | 是（`matchedProspect`） |
+| `onboarding` | 可以 | `EstimateDraft` | 是（`matchedProspect`） |
+| 已发布规格但未订阅 | 可以 | `EstimateDraft` | 是（`matchedInactive`） |
+| `active`（已发布 + 已订阅） | 可以 | 绑定该公司的 `Quote` | 否 |
+
+选这个口径而不是"不可 `@`"的理由：销售外联时"已经有真实客户点名找你们，而且他手上已经拿到
+一版通用预估了"比"有人提过你们"有力得多——这正是第 8 节冷启动转化逻辑的抓手。
+
+### FR-11　专业/贸易账号（Trade Account）
+
 - `trade` 账号支持在一个账号下管理多个 `Conversation`（多项目并行）。
-- `ProductSpec.modules[].pricingRule` 支持贸易价变体；报价单按 `CustomerAccount.accountType`
-  决定使用零售价还是贸易价。
+- 贸易价通过 3.5 的 `DiscountRule`（`audience: trade`）或 `PriceMatrixEntry.tradePrice` 表达；
+  `PricingEngine` 按 `CustomerAccount.accountType` 自动选用，并把所用规则记入报价快照。
 - `trade` 账号的对话交互可以更"直给"（跳过面向新手的引导式提问），具体交互差异留到设计阶段
   细化（见第 12 节开放问题）。
 - `trade` 账号本身可付费订阅，与公司侧的线索费/个性化订阅是两条独立收入线，互不影响、可叠加
   （即：一条由 trade 账号发起的线索，仍然会对应生成公司侧的 `LeadBillingEvent`）。
 
+### FR-12　公司发现与邮件列表（v0.4 新增）
+
+详细讨论见 [COMPANY_DISCOVERY.md](./COMPANY_DISCOVERY.md)。
+
+- **公司发现库（`CompanyProspect`）**：平台运营维护的市场库，来源是网络检索抓取
+  （由管理员后台**手动触发**，非定时自动跑）+ 手工录入。支持增/改/删（删为归档，保留历史）
+  与按 email 去重（已存在则更新 `lastUpdated`，保留原 `importedAt`）。
+  MVP 阶段商家数量不大，用**平面文件持久化**（JSON），不引入数据库。
+- **用途**：① 社媒广告的受众定向与地域投放决策；② `CompanyMentionSignal` 的回溯匹配数据源；
+  ③ 市场情报（玩家数量、地域分布、覆盖缺口）。
+- **明确不用于**：向抓取来的邮箱做任何形式的冷邮件群发。
+- **合法获客路径**：社媒广告 → 企业主动访问平台 → 主动勾选同意后注册邮件列表
+  （`EmailSubscription`，记录同意时间/渠道/IP/UA）→ 平台方可向其发送招商与产品邮件。
+  每封邮件必须带可用的退订链接，退订请求 10 个工作日内生效（CASL 要求）。
+- **客户端不再提供"选择多家公司群发询价"功能**——该功能在 v0.3 的现有代码里存在，与 CASL
+  冲突，本版删除（见第 10 节）。
+
+### FR-13　隐私、同意与数据留存（PIPEDA，v0.4 新增）
+
+v0.3 的合规只覆盖了 CASL（发信环节）。但平台收集的户型图、需求描述、联系方式、以及
+"谁在找哪家公司"这类信息属于**个人信息**，适用加拿大 PIPEDA，必须单独成条。
+
+**（1）告知与同意（三类主体）**
+
+| 主体 | 需要明确告知并取得同意的内容 |
+|---|---|
+| 消费者账号 | 收集什么（户型图、需求描述、联系方式、对话内容）、用途（生成设计与报价）、**会在客户确认后披露给客户选定的橱柜公司**、留存期限、如何撤回与删除 |
+| trade 账号 | 同上，外加所属公司名称等商业信息的用途 |
+| 橱柜公司 | 平台会存储其价目表等**商业机密级**资料、租户隔离承诺、会收到哪些客户信息、计费与争议规则 |
+
+- 注册环节的同意必须是**主动勾选**（不得默认勾选、不得用"继续即代表同意"替代关键披露）。
+- 同意记录需可追溯：时间、渠道、条款版本号。条款更新且涉及用途变更时需重新取得同意。
+
+**（2）发送前的二次披露（与 FR-8 闸门绑定）**
+
+客户点"确认发送"之前，界面必须逐项列出**将要发送给该公司的具体内容**（设计图、尺寸、
+需求摘要、联系方式），并说明该公司会因此获得联系客户的能力。这是 PIPEDA 意义上的
+"披露给第三方"，不能藏在通用条款里一笔带过。
+
+**（3）销售外联中的去标识化（硬规则）**
+
+`CompanyMentionSignal` 用于销售外联时，**不得向未入驻公司透露客户身份或联系方式**。
+外联话术只能使用聚合/去标识信息（"近期有客户在平台上点名寻找贵司"），不得包含姓名、
+邮箱、电话、具体地址。要把真实客户线索交给该公司，必须走正常的 `Quote` 发送闸门
+（即客户自己确认发送）。
+
+**（4）留存与删除**
+
+| 数据 | 默认留存 | 说明 |
+|---|---|---|
+| 户型图、上传文件 | 24 个月 | 到期自动清除 |
+| 对话记录、需求摘要 | 24 个月 | 同上 |
+| 账号注销后 | 30 天内清除上述内容 | 保留期用于误操作恢复 |
+| `Quote`、`LeadBillingEvent`、发票 | 7 年 | 财务/税务法定留存，**去标识化后保存**（去除客户姓名与联系方式，保留金额与型号明细）|
+| `QuoteAuditEvent` | 7 年 | 同上，争议处理凭据 |
+
+**（5）数据主体权利**
+
+提供访问、更正、删除、撤回同意的入口；**30 天内响应**（PIPEDA 要求）。删除请求与上表的
+法定留存冲突时，执行"去标识化保留"而不是拒绝删除，并向请求人说明。
+
 ---
 
-## 6. 数据模型草案（v0.3 更新）
+## 6. 数据模型草案（v0.4 重构）
+
+> 与 v0.3 相比的主要变化：`ProductSpec` → `ProductSpecVersion`（版本化）；新增价格组 /
+> 门板样式 / 价格矩阵 / 折扣 / 运费 / 税率六个定价实体；`Quote` 增加快照与税费字段；
+> 新增修订链与审计事件；`LeadBillingEvent` 增加去重与争议；`CompanyMentionSignal` 增加归一化。
+
+### 6.1 需求侧
 
 ```
-CustomerAccount                    # 新增：需求侧账号
+CustomerAccount
   id, accountType: consumer | trade
+  email, displayName
+  province                          # 新增：定价必需（决定税率）
   # trade 专属：
   companyName?
   subscriptionStatus?: none | trial | active
+  consentRecords: [{ termsVersion, consentedAt, channel }]   # 新增：FR-13
 
 Conversation
-  id, customerAccountId            # 改：明确归属某个 CustomerAccount（支持一账号多项目）
+  id, customerAccountId
   messages[]
   designRequirements
   perCompanyThreads: [{ companyId, messages[] }]
+```
 
+### 6.2 供给侧：公司与规格版本
+
+```
 CabinetCompany
-  id, name, quoteEmail, website, region, contactName?
-  status: prospect | onboarding | active | inactive   # 新增
-    # prospect  = 被客户 @ 过但尚未入驻，仅作销售信号（CompanyMentionSignal）
+  id, name
+  aliases: string[]                 # 新增：确定性 @ 路由用（FR-1）
+  quoteEmail, website, contactName?
+  province, serviceAreas: string[]  # 新增：province 决定默认税区
+  status: prospect | onboarding | active | inactive
+    # prospect   = 已知但未入驻（可能来自 CompanyProspect 或被客户 @ 过）
     # onboarding = 入驻会话进行中（FR-2）
-    # active    = 规格已发布 + 已订阅个性化服务，Quote 可正常生成
-    # inactive  = 曾经 active，现停用
-  billingPlan: { leadFeeEnabled: boolean, personalizationSubscription: none|trial|active }  # 新增
+    # active     = 规格已发布 且 已订阅个性化服务 → 可产生 Quote
+    # inactive   = 曾经 active，现停用
+    # 注：status 应由「是否存在 published 规格版本」+「订阅状态」派生，
+    #     不作为可独立编辑的字段，避免两处真相不一致
+  billingPlan: { leadFeeEnabled: boolean,
+                 personalizationSubscription: none|trial|active }
+  currentPublishedSpecVersionId?    # 新增：指向当前生效版本
 
-ProductSpec (属于某个 CabinetCompany)
+ProductSpecVersion (属于某个 CabinetCompany)     # 改：版本化，发布后不可变
   id, companyId
-  modules: [
-    { id, type: base|wall|tall|corner|sinkBase,
-      widthOptions[], heightOptions[], depthOptions[],
-      faceTemplateId,
-      pricingRule: { retail, trade? }          # 改：新增贸易价变体
-    }
-  ]
-  finishes: [{ name, priceModifier? }]
-  hardwareOptions: [{ name, priceModifier? }]
-  status: draft | published
+  versionNo                         # 单调递增
+  status: draft | published | archived
+  currency: "CAD"
+  effectiveFrom, effectiveTo?
+  publishedAt?, publishedBy?
+  changeNote?
+  # 约束：同一 companyId 下 published 最多 1 个、draft 最多 1 个
+```
 
-FaceTemplate                       # 平台共享，不属于任何租户
+### 6.3 供给侧：规格内容（均隶属某个 ProductSpecVersion）
+
+```
+ModuleSpec
+  id, specVersionId, companyId
+  code                              # "B12" / "W2430" / "SB36"
+  type: base|wall|tall|corner|sinkBase|filler|panel|toeKick|crown
+  widthOptions[], heightOptions[], depthOptions[]    # 离散英寸值
+  faceTemplateId                    # → 平台共享 FaceTemplate
+  assemblyOptions: ("RTA"|"assembled")[]
+
+PriceGroup
+  id, specVersionId, companyId
+  code                              # "A" / "B" / "Premium"
+  displayName, rank
+
+DoorStyle
+  id, specVersionId, companyId
+  name                              # "Shaker White"
+  priceGroupId                      # 每种门板属于且仅属于一个价格组
+  material?, color?, imageRef?
+
+PriceMatrixEntry                    # ★ 价格的唯一真相来源
+  specVersionId, companyId
+  moduleId, priceGroupId            # 复合主键
+  listPrice                         # RTA（未组装）标价
+  assembledUpcharge?: { kind: "flat"|"percent", value }
+  tradePrice?                       # 少数公司维护独立贸易价矩阵时使用
+  # 矩阵允许有空洞：某型号不供应某价格组 → 无此条目 → FR-8 校验会拒绝该组合
+
+HardwareOption
+  id, specVersionId, companyId
+  name                              # "Soft-close hinge"
+  priceModifier: { kind: "flat"|"percent", value }
+  appliesToModuleTypes[]?
+
+AccessoryOption
+  id, specVersionId, companyId
+  name                              # "Roll-out tray"
+  priceModifier: { kind: "flat"|"percent", value }
+  appliesToModuleIds[]?
+
+DiscountRule
+  id, specVersionId, companyId
+  audience: retail | trade
+  kind: "percentOffList" | "tieredByOrderValue"
+  value?                            # percentOffList 用
+  tiers?: [{ minSubtotal, percentOff }]              # tieredByOrderValue 用
+  appliesToPriceGroupIds[]?         # 留空 = 全部价格组
+  stackable: boolean                # 是否可与其他规则叠加
+
+ShippingRule
+  id, specVersionId, companyId
+  kind: "flat" | "freeOver" | "byRegion"
+  flatAmount? | freeOverThreshold? + belowThresholdAmount? | regionTable?
+```
+
+### 6.4 平台共享层（不属于任何租户）
+
+```
+FaceTemplate
   id, view: front|topBase|topWall|side
   category: singleDoor|doubleDoor|drawers|doorDrawerCombo|corner|sinkBase|openShelf|...
   svgSymbol
 
-GenericCatalog                     # 新增：平台共享，冷启动用的行业基准目录，不属于任何 CabinetCompany
+GenericCatalog                      # 冷启动用的行业基准目录
   id
   modules: [{ type, widthOptions[], heightOptions[], depthOptions[], typicalPriceRange }]
 
+TaxRule                             # 新增：加拿大各省税率，带生效区间（见 3.5.3）
+  id, province
+  components: [{ name: "GST"|"PST"|"HST"|"QST", ratePercent }]
+  compounded: boolean
+  effectiveFrom, effectiveTo?
+```
+
+### 6.5 设计与报价
+
+```
 FloorPlan
   id, conversationId, sourceFile, parsedGeometry
+  parseConfidence, unresolvedItems[]              # 新增：完整性优先（FR-3）
 
 DesignLayout (属于某个 FloorPlan + 某个 CabinetCompany)
-  id, floorPlanId, companyId
-  placedModules: [{ productSpecModuleId, position, dimensions }]  # moduleId 必须真实存在于该公司 ProductSpec
-  views: { front, topBase, topWall, side }
+  id, floorPlanId, companyId, specVersionId       # 新增：绑定规格版本
+  currentRevisionNo
   status: draft | confirmed
 
-Quote (属于某个 DesignLayout，绑定真实 CabinetCompany——只有这类实体能进入 FR-8 发送闸门)
-  id, designLayoutId, companyId
-  lineItems: [{ moduleRef, qty, unitPrice, subtotal }]   # moduleRef 必须真实存在，硬校验（FR-8）
-  total
-  status: draft | confirmed | sent | failed
+DesignRevision                      # 新增：修订链，不覆盖历史（3.6）
+  id, designLayoutId, revisionNo
+  placedModules: [{ moduleId, position, dimensions, doorStyleId,
+                    hardwareOptionIds[], accessoryOptionIds[] }]
+  views: { front, topBase, topWall, side }
+  createdAt, triggeredBy: "auto" | "customerRequest"
+  changeSummary
 
-EstimateDraft                      # 新增：冷启动通用预估，与 Quote 严格区分
+Quote (属于某个 DesignRevision，绑定真实 CabinetCompany)
+  id, designLayoutId, designRevisionNo, companyId, conversationId, customerAccountId
+  # ── 快照字段（3.6）───────────────────────────────
+  specVersionId                     # 冻结：本单基于哪一版规格
+  accountTypeAtQuote: consumer | trade
+  doorStyleId, priceGroupId         # 整单落在哪个价格组
+  currency: "CAD", province
+  taxRuleSnapshot, shippingRuleSnapshot, appliedDiscountRuleIds[]
+  # ── 明细 ─────────────────────────────────────────
+  lineItems: [{
+      moduleId, moduleCode, qty,
+      width, height, depth,                       # 必须在离散候选集内（FR-8 校验 2）
+      assembly: "RTA"|"assembled",
+      unitListPrice,                              # 快照
+      modifiers: [{ kind, refId, name, amount }], # 五金/配件/组装加价，快照
+      unitNetPrice, lineSubtotal
+  }]
+  subtotal
+  discounts: [{ ruleId, description, amount }]
+  shipping: { ruleId?, amount }
+  taxes: [{ name, ratePercent, amount }]          # 分项列出（FR-6）
+  total
+  validUntil                                       # 报价有效期
+  status: draft | confirmed | sent | failed | expired
+  # 状态迁移只能由服务端 API 驱动，每次迁移写 QuoteAuditEvent（FR-8）
+
+QuoteAuditEvent                     # 新增：可追溯（3.6）
+  id, quoteId, companyId
+  at, actor: customer | system | operator
+  action: created | revised | validationRejected | confirmed
+        | sent | sendFailed | suppressedDuplicateBilling | expired
+  contentHash                       # 当时报价内容的哈希
+  details
+
+EstimateDraft                       # 冷启动通用预估，与 Quote 严格区分
   id, conversationId
   basedOn: "genericCatalog"
   lineItems: [{ moduleType, qty, estimatedPriceRange }]
   totalRange: { low, high }
   disclaimer: string                # "行业典型区间，非具体公司真实报价"
-  # 无 companyId → 天然无法进入发送闸门（没有收件地址），不需要额外加规则防止误发
+  # 无 companyId → 天然无法进入发送闸门（没有收件地址）
 
 QuoteComparison
   id, conversationId
-  quotes: [{ companyId, quoteId, total }]
+  quotes: [{ companyId, quoteId, total, taxIncluded: boolean }]   # 新增含税口径标记
+```
 
-CompanyMentionSignal               # 新增：销售信号
-  id, conversationId, customerAccountId, mentionedCompanyName
+### 6.6 销售信号与计费
+
+```
+CompanyMentionSignal                # 改：增加归一化与实体关联（v0.4）
+  id, conversationId, customerAccountId
+  rawMentionText                    # 用户原话
+  normalizedName                    # 规范化：去空格/统一大小写/去 Inc·Ltd·有限公司/简繁统一
+  resolvedCompanyId?                # 命中已存在的 CabinetCompany
+  resolvedProspectId?               # 命中市场库 CompanyProspect
+  resolutionStatus: matchedActive | matchedInactive | matchedProspect | unknown
   createdAt
+  # 销售看板按 normalizedName 聚合计数，避免 "IKEA"/"宜家"/"宜家家居" 碎成三条
 
-LeadBillingEvent                   # 新增：线索计费事件，对应"确认发送"这个动作（FR-7）
-  id, companyId, conversationId, quoteId
-  sentAt, feeAmount?, feeStatus: pending | invoiced | paid
+LeadBillingEvent                    # 改：增加去重与争议（v0.4）
+  id, companyId, conversationId, quoteId, customerAccountId
+  sentAt
+  dedupeKey                         # hash(companyId, conversationId, windowBucket)
+                                    # 数据库唯一约束兜底（FR-7）
+  feeAmount, currency
+  feeStatus: pending | invoiced | paid | disputed | refunded | waived
+  dispute?: {
+    openedAt, openedBy,
+    reason: duplicate | invalidContact | outOfServiceArea | spam | other,
+    evidence,
+    resolvedAt?, resolvedBy?,
+    resolution?: upheld | refunded | partialRefund
+  }
+```
+
+### 6.7 公司发现与邮件列表（FR-12，平面文件持久化）
+
+```
+CompanyProspect                     # data/companies.json
+  id, name, email, website, phone?, city, province
+  sourceType: "web_scrape" | "manual"
+  importedAt, lastUpdated
+  status: prospect | contacted | subscribed | archived
+  notes
+
+EmailSubscription                   # data/subscriptions.json
+  id, email, companyName
+  consentDate, consentChannel: "web_form"
+  termsVersion, userAgent, ipAddress(脱敏)
+  unsubscribeToken
+  status: active | unsubscribed
+  unsubscribedAt?
 ```
 
 ---
@@ -296,15 +785,24 @@ LeadBillingEvent                   # 新增：线索计费事件，对应"确认
 
 - **数据隔离**：见 FR-8/FR-9，程序层面硬校验，且要在数据访问层兜底（不只靠应用层"记得过滤"），
   应用层 + 数据层双重防线。
-- **可追溯**：报价单发送前的每一版设计/报价都应可追溯。
-- **可扩展**：新公司入驻 = 走一遍"公司入驻规格录入会话"即可上线，不需要改代码。
-- **合规**：发送环节延续 CASL 合规注意事项。
+- **可追溯**（v0.4 落到数据模型）：
+  - 规格版本化（`ProductSpecVersion` 发布后不可变）；
+  - 报价冻结价格快照 + `specVersionId`，任何时刻可复算校验；
+  - 设计修订链 `DesignRevision` 不覆盖历史；
+  - 关键动作写 `QuoteAuditEvent`（含内容哈希），保留 7 年。
+- **定价正确性**：`PricingEngine` 是纯函数，必须有覆盖以下场景的单元测试——多价格组、
+  组装加价、百分比与定额修饰项混合、分档折扣边界值、各省税率（含 QC 的 QST 与 NS 的税率变更）、
+  运费阈值边界、报价过期。
+- **可扩展**：新公司入驻 = 走一遍"公司入驻规格录入会话"或模板导入即可上线，不需要改代码；
+  税率变更、费率调整均通过数据而非代码变更。
+- **合规**：CASL（发信，见 FR-12）+ PIPEDA（个人信息，见 FR-13）。
+- **隐私与留存**：见 FR-13 第 (4) 条的留存表；到期清除必须是自动任务，不能靠人工记得。
 
 ---
 
-## 8. 商业模式与货币化策略（本版新增）
+## 8. 商业模式与货币化策略
 
-参考 Angi/HomeAdvisor、Thumbtack、Houzz Pro 三家同赛道公司的真实收入结构（详见讨论记录）后确认：
+参考 Angi/HomeAdvisor、Thumbtack、Houzz Pro 三家同赛道公司的真实收入结构后确认：
 
 - **需求侧（消费者默认账号）永远免费**——这是同类平台的共同惯例；即使是已有付费会员产品的
   Angi，会员费也只占其总收入约 3.8%，主力收入始终在商家侧，这一点不是保守判断，是行业常态。
@@ -322,24 +820,67 @@ LeadBillingEvent                   # 新增：线索计费事件，对应"确认
 - **成交抽佣模式暂不作为设计目标**——平台目前没有办法验证线下是否真实成交，留作后续（若引入
   支付/履约环节）的演化方向，不纳入当前架构设计。
 
+### 8.1 线索计费的去重与争议（v0.4 新增）
+
+同类平台上，商家侧最大的抱怨来源就是"无效线索还要收费"。这不是可以推迟到以后再补的运营细节，
+按线索付费一旦是主模式，争议流程就是它的必备件：
+
+- **去重**：同一客户对同一公司的重复发送，30 天窗口内只计费一次（规则见 FR-7）。
+- **争议受理**：发送后 14 天内公司可提起争议，理由分类为
+  `duplicate | invalidContact | outOfServiceArea | spam | other`。
+- **争议期内不出账**：`feeStatus` 停留在 `pending`/`disputed`，不进入 `invoiced`。
+- **裁定依据**：`QuoteAuditEvent`（含内容哈希）+ 邮件投递回执，由平台运营裁定
+  `upheld | refunded | partialRefund`，结果与理由需回复给公司。
+- **透明度**：公司后台可查看自己每一条计费事件的来源对话摘要（去标识化，见 FR-13 第 (3) 条）
+  与当时的报价内容哈希。
+
 ---
 
-## 9. MVP 分期建议（v0.3 更新）
+## 9. MVP 分期建议（v0.4 更新）
 
 多租户（FR-9）不是一个独立的后期里程碑，是从 MVP-1 开始就要落地的架构基础（租户隔离、账号
 类型），不是"以后再加"的功能。
 
-- **MVP-1**：多租户基础架构（`CabinetCompany`/`CustomerAccount` 隔离，见 FR-9）+ 公司入驻规格
-  录入会话（2-3 家跑通）+ 客户端多 Agent 对话（总控 + @公司路由）+ 报价单生成与确认发送闸门 +
-  `LeadBillingEvent` 计费事件记录 + 冷启动通用层的**纯文本版** `EstimateDraft`（FR-10，不含
-  视图渲染，因为四视图渲染依赖 MVP-2 的排布/模板能力）。`ProductSpec.pricingRule` 的贸易价字段
-  和 `CustomerAccount.accountType` 在数据模型里一并落地（成本低，避免以后痛苦迁移），但 trade
-  账号的完整交互体验（多项目管理、专属交互模式）不在 MVP-1 范围。
-- **MVP-2**：户型图上传解析 + 自动排布算法 + 脸型模板库（3.3 节）+ 三视图渲染 + 多公司价格
-  对比 + HTML 邮件发送（内嵌图+表格）+ `EstimateDraft` 升级为**含四视图版本**（复用同一套脸型
-  模板渲染）。
-- **MVP-3**：PDF 正式报价单留白件、trade 账号的多项目管理界面与专属交互模式、体验打磨、
-  （如需要）更复杂排布约束。
+### MVP-1
+
+**目标：用 1 家真实公司把"规格录入 → 对话 → 报价 → 确认发送 → 计费"这条链路完整跑通。**
+
+- 多租户基础架构（`CabinetCompany` / `CustomerAccount` 隔离，见 FR-9）。
+- **FR-2 公司入驻规格录入会话，先跑通 1 家**（v0.4 调整：原为 2-3 家）——同时实现
+  **结构化模板导入的兜底路径**，确保规格录入不会卡住整条链路（见 FR-2 降级方案）。
+- 定价模型（3.5）与 `PricingEngine` 完整落地：价格组、门板样式、价格矩阵、修饰项、折扣、
+  运费、税。**这是 MVP-1 的硬性内容**——报价单不含税/不含运费就不是一份能给客户看的单子。
+- 规格版本化与报价快照（3.6）：`ProductSpecVersion` + `Quote` 快照 + `QuoteAuditEvent`。
+  版本化如果不在第一版做，以后迁移历史报价的代价很高。
+- 客户端多 Agent 对话（总控 + `@` 确定性路由，见 FR-1）。
+- 报价单生成 + FR-8 全部硬校验 + 服务端状态机发送闸门。
+- `LeadBillingEvent` 计费事件记录，含去重键与争议字段（争议**处理界面**可后置，但字段与
+  去重约束要在第一版落地）。
+- 冷启动通用层的**纯文本版** `EstimateDraft`（FR-10，不含视图渲染——四视图依赖 MVP-2 的
+  排布/模板能力）。
+- FR-13 的注册同意、发送前二次披露、留存策略配置。
+- `CustomerAccount.accountType` 与贸易折扣规则在数据模型里一并落地（成本低，避免以后痛苦
+  迁移），但 trade 账号的完整交互体验（多项目管理、专属交互模式）不在 MVP-1 范围。
+- FR-12 的公司发现库（平面文件 + 管理员后台手动触发抓取 + 增删改查）与邮件列表注册。
+
+**MVP-1 出口条件**：1 家试点公司通过 FR-2 验收标准（见 FR-2 量化验收表）；一条真实客户对话
+能走到"确认发送"并产生 1 条计费事件；报价金额经人工逐项核对无误。
+
+### MVP-2
+
+- 户型图上传解析 + 自动排布算法 + 脸型模板库（3.3 节）+ 四视图渲染。
+- 多公司价格对比（含税口径标注）。
+- HTML 邮件发送（内嵌图 + 表格）。
+- `EstimateDraft` 升级为**含四视图版本**（复用同一套脸型模板渲染）。
+- 试点公司扩到 2-3 家，验证 FR-2 的可复制性。
+- 计费争议的处理界面。
+
+### MVP-3
+
+- PDF 正式报价单留白件。
+- trade 账号的多项目管理界面与专属交互模式。
+- 体验打磨、（如需要）更复杂排布约束。
+- 若商家规模增长，`CompanyProspect` / `EmailSubscription` 从平面文件迁到数据库。
 
 ---
 
@@ -347,9 +888,9 @@ LeadBillingEvent                   # 新增：线索计费事件，对应"确认
 
 | 现有模块 | 处置建议 |
 |---|---|
-| `leads.ts` | 可作为公司档案初始数据来源，需人工审核，且不解决产品规格数据获取（这部分靠 FR-2 的入驻会话） |
-| `email.ts` | 发送闸门机制（dry-run / 显式 confirm）保留复用；邮件内容生成从"通用询价信"改为"HTML 内嵌视图+表格"（FR-7） |
-| `server.ts` / `web/index.html` | 交互模型改动较大：从"搜索列表→选中→群发草稿"改成"多 Agent 对话 + @ 路由 + 户型图上传 + 视图展示 + 多租户账号体系"，架构层面接近重写 |
+| `leads.ts` | **重新定位为运营工具**（见 [COMPANY_DISCOVERY.md](./COMPANY_DISCOVERY.md)）。爬虫能力保留，改成管理员后台手动触发的任务；数据存入 `CompanyProspect`（平面文件）；不再用于消费者群发。用途：社媒投放的受众定向、`CompanyMentionSignal` 回溯、市场情报。已知需修复：`MAX_FETCH_BYTES` 限流失效（响应体已全量进内存后才切片）、无私网地址过滤（SSRF） |
+| `email.ts` | 发送闸门的 dry-run 机制保留复用；但 `confirm` 布尔参数必须换成服务端状态机（FR-8 第 3 条）。邮件类型分化为：① `LeadEmail`（`Quote` 发送，FR-7）② `InviteEmail`（招商邀约，FR-12）③ `MailingEmail`（订阅列表投递，FR-12）。内容从"通用询价信"改为"HTML 内嵌视图 + 表格"（FR-7） |
+| `server.ts` / `web/index.html` | 架构层面接近重写：从"搜索列表 → 选中 → 群发草稿"改成"多 Agent 对话 + `@` 路由 + 户型图上传 + 视图展示 + 多租户账号体系"。**客户端的"选择多家公司群发询价"功能删除**（与 CASL 冲突，见 FR-12）。另需修复：全局模块级单例状态与多租户冲突、无鉴权、`/api/chat` 无错误处理、`requirements` 被空串覆盖（`??` 应为 `\|\|`） |
 
 ---
 
@@ -365,10 +906,10 @@ LeadBillingEvent                   # 新增：线索计费事件，对应"确认
 6. 报价单发送格式 → HTML 内嵌（图片 CID + HTML 表格）+ 纯文本兜底 + 图片附件兜底（FR-7）
 7. 公司间数据隔离保障 → 程序层面硬校验型号 id（FR-8）
 
-**v0.2 → v0.3（本轮新增决策）**
+**v0.2 → v0.3**
 
 8. 是否需要专门解析 2020 Design 等专业设计软件的导出文件 → 不单独做，并入 FR-3 的通用上传/
-   抽取管线（普通消费者几乎不持有 DXF/CSV 这类专业格式的原始文件）。
+   抽取管线。
 9. 系统是否应该是多租户架构 → 是，且是两个维度（供给侧公司租户 + 需求侧消费者/专业账号），
    见 3.4、FR-9。
 10. 冷启动阶段（尚无公司入驻）如何让客户端仍有产品体验 → 通用层 `EstimateDraft` + 公司订阅后
@@ -376,29 +917,66 @@ LeadBillingEvent                   # 新增：线索计费事件，对应"确认
 11. 小型建商/装修公司这类专业用户的使用模式与商业模式 → 独立的 `trade` 账号类型（多项目管理 +
     贸易价可见），本身可付费订阅，与公司侧收费线独立叠加，见 FR-11、第 8 节。
 
+**v0.3 → v0.4（本轮新增决策）**
+
+12. 定价模型如何表达真实 RTA 价目表 → (型号 × 门板价格组) 价格矩阵 + 修饰项 + 折扣规则 +
+    运费 + 分省税率，见 3.5、第 6 节。
+13. "可追溯"如何落到数据模型 → 规格版本化 + 报价价格快照 + 设计修订链 + 审计事件，见 3.6。
+14. 如何防止 LLM 编造价格 → 价格一律由 `PricingEngine` 计算，LLM 输出中的金额字段一律丢弃；
+    新增 6 项硬校验清单，见 FR-8。
+15. 发送闸门为什么不能用请求体里的 `confirm` 字段 → 改为服务端状态机 + 审计留痕，见 FR-8 (3)。
+16. 已发布规格但未订阅的公司，客户能否 `@` → **可以**，拿到 `EstimateDraft`（以 FR-10 为准，
+    场景 A 同步修正）。
+17. 线索计费的重复与争议 → 30 天去重窗口（数据库唯一约束兜底）+ 14 天争议窗口 + 裁定流程，
+    见 FR-7、8.1。
+18. 合规是否只需覆盖 CASL → 否，个人信息适用 PIPEDA，新增 FR-13（告知同意、发送前二次披露、
+    销售外联去标识化、留存与删除、数据主体权利）。
+19. FR-2 的成功标准是什么 → 8 项量化验收指标（价格准确率 0 容错），并配套结构化模板导入的
+    降级兜底，见 FR-2。
+20. FR-2 是否放在 MVP-1 → 放，但试点公司从 2-3 家收敛为**先跑通 1 家**，且兜底路径同期实现。
+21. `@` 路由由谁判断公司身份 → 确定性匹配（mention token / 别名精确匹配），LLM 不参与，
+    见 FR-1。
+22. `CompanyMentionSignal` 如何避免碎片化 → 增加 `normalizedName` 与实体关联字段，
+    销售看板按归一化名聚合，见 6.6。
+23. 爬虫功能的定位 → 从"消费者群发数据源"改为"平台运营的市场发现库"，合法获客改走
+    社媒广告 → 主动订阅路径，见 FR-12、COMPANY_DISCOVERY.md。
+24. 脸型模板由谁绘制 → 不绘制。声明式脸型文法 + 代码生成，模板是数据（15 正视 + 4 俯视 +
+    4 侧视）；并否决"归一化 symbol + 缩放"的实现方式（会放大门缝、扭曲线宽），
+    见 [RENDERING.md](./RENDERING.md)。
+
 ---
 
-## 12. 新开放问题
+## 12. 开放问题（v0.4 更新）
 
-1. **~15-25 个脸型模板由谁绘制？** 这些是示意性的"外框+分割线"图形，不需要专业插画师，可以
-   用代码直接参数化生成（矩形+线条），或找人一次性手绘 SVG 定稿。倾向选哪种？
+**待讨论（本轮明确留到后面）**
+
+1. ~~**~15-25 个脸型模板由谁绘制？**~~ → **已关闭（v0.4）**：不需要任何人绘制。改用声明式脸型
+   文法 + 代码生成，脸型是数据不是图；15 个正视图模板、4 个俯视、4 个侧视，全部由代码产出。
+   详见 [RENDERING.md](./RENDERING.md)。
 2. **PDF 正式报价单留白件放 MVP-3，是否认可这个优先级？**
 3. **价格对比表的触发时机**：客户是要等所有意向公司都各自确认完设计后才看到对比表，还是可以
    随时拉出"当前几家草稿价格"做实时对比？
+
+**仍未关闭**
+
 4. **FloorPlan 解析失败/置信度低的兜底交互**：目前只说"对话核对或要求手动补充"，具体触发
    阈值和交互形式（比如系统主动逐项追问 vs 客户自己发现不对再反馈）还需要细化。
 5. **`GenericCatalog` 的数据从哪来？** 行业公开价目表整理、还是平台自己按经验估算一个区间？
    数据来源会影响 `EstimateDraft` 的可信度，需要明确。
-6. **`LeadBillingEvent` 的具体费率怎么定？** 参考 Thumbtack 同类品类 $10-100+ 这个量级，但橱柜
-   这个细分行业单均金额高（一整套橱柜通常是大几千到大几万加币），费率结构可能需要跟品类均价
-   挂钩，而不是套用其他家装品类的定价。
-7. **`trade` 账号要不要做资质核实？** 是否需要验证"确实是在业的建商/装修公司"，还是任何人都能
-   开通 trade 账号（后者更简单，但可能被消费者用来套贸易价）。
-8. **`CompanyMentionSignal` 触发后的销售外联流程**：目前假设是人工外联，要不要配套一个内部
-   提醒/看板工具，还是先纯人工跟进即可（MVP 阶段）。
+6. **`LeadBillingEvent` 的具体费率怎么定？**（去重与争议规则已在 v0.4 关闭，**费率本身仍开放**）
+   参考 Thumbtack 同类品类 $10-100+ 这个量级，但橱柜细分行业单均金额高（一整套通常是大几千到
+   大几万加币），费率结构可能需要跟品类均价挂钩，而不是套用其他家装品类的定价。
+7. **`trade` 账号要不要做资质核实？** 这个问题与贸易价直接挂钩：不核实等于任何消费者都能开
+   `trade` 账号拿贸易价，"贸易价"这个概念本身就失效，且入驻公司发现后会有强烈反弹。
+   **建议方案（待确认）**：人工审核（营业执照/GST 号）+ 付费订阅两道门槛，MVP 阶段人工处理量
+   可控。
+8. **`CompanyMentionSignal` 触发后的销售外联流程**：归一化与聚合已在 v0.4 解决；剩下的问题是
+   要不要配套内部提醒/看板工具，还是 MVP 阶段纯人工跟进即可。
+9. **社媒投放的预算与渠道选择**（FR-12 新引入）：LinkedIn（B2B 精准但单价高）vs Facebook/
+   Instagram（覆盖广、本地商家活跃度高）的组合与预算分配，需要运营侧决策。
 
 ---
 
-请review 第 3.4（多租户架构）、FR-9/FR-10/FR-11（新增功能需求）、第 6 节数据模型的新增实体，
-以及第 8 节商业模式——确认后我们再进入开发任务拆解，[SCENARIOS.md](./SCENARIOS.md) 里的场景
-走查也请一并确认。
+请 review 本版新增/重构的部分：**3.5 定价模型**、**3.6 版本化与可追溯**、**FR-8 强化**、
+**FR-12 / FR-13**、**FR-2 验收标准**、**第 6 节重构后的数据模型**、**第 9 节 MVP-1 范围**——
+确认后进入开发任务拆解。[SCENARIOS.md](./SCENARIOS.md) 已同步更新，请一并确认。

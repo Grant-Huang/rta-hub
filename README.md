@@ -24,8 +24,12 @@
 
 需求与场景是当前阶段的主交付物，开发按这两份文档推进：
 
-- [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) —— 需求说明书 v0.3（架构、数据模型、FR、商业模式）
-- [docs/SCENARIOS.md](./docs/SCENARIOS.md) —— 场景走查 A–H（公司入驻、冷启动、@ 路由、四视图、比价发送、贸易账号、销售信号）
+- [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) —— 需求说明书 v0.4（架构、定价模型、版本化与可追溯、数据模型、FR-1~13、商业模式）
+- [docs/SCENARIOS.md](./docs/SCENARIOS.md) —— 场景走查 A–I（公司入驻、冷启动、@ 路由、四视图、比价发送、贸易账号、销售信号、招商引流）
+- [docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md) —— 公司发现与招商引流的合规路径（爬虫定位、社媒获客、CASL/邮件列表）
+- [docs/RENDERING.md](./docs/RENDERING.md) —— 二维视图渲染方案（脸型文法、模板清单、SKU 规则匹配、规范文档核实结果）
+- [docs/PRE_LAUNCH_CHECKLIST.md](./docs/PRE_LAUNCH_CHECKLIST.md) —— 上线前检查清单（税率核验、FR-2 抽样量、合规、安全、计费）
+- `rta-generic-spec/` —— 北美 RTA 橱柜通用规范参考（尺寸/编码/构造/替代逻辑），核实结果见 RENDERING.md 附录
 
 ## 运行
 
@@ -42,7 +46,8 @@ pnpm dev
 对应 REQUIREMENTS.md 里的一小部分。多租户、四视图渲染、报价闸门等按文档逐步补齐。
 
 平台能力从 `@meso.ai/let-it-flow/runtime` 引入（`LlmService`、`loadConfig`、
-`createTavilyProvider`/`createNativeProvider`、`extractHtml`）。
+`createTavilyProvider`/`createNativeProvider`）；`extractHtml` 目前为本地实现
+（`src/html-extract.ts`），待上游导出后可改为从 runtime 引入。
 
 ## 关于发送邮件（请先读这段）
 
