@@ -626,6 +626,68 @@ async function readyProject(accountId: string) {
   return { conversationId: conversation.id, floorPlanId: floorPlan.id, layout };
 }
 
+test("家电信息记在户型上；没给宽度走推定值并如实标注", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+
+  // 还没说有哪些家电时，先问那一题
+  const first = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+  });
+  const firstBody = await first.json() as { applianceQuestions: { key: string }[] };
+  assert.equal(firstBody.applianceQuestions[0]?.key, "appliances");
+
+  const res = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      appliances: [
+        { kind: "refrigerator" },                 // 不确定 → 推定
+        { kind: "range", width: 36 },             // 客户给的
+      ],
+    }),
+  });
+  assert.equal(res.status, 200, await res.clone().text());
+  const body = await res.json() as {
+    floorPlan: { appliances: { kind: string; width: number; provenance: string }[] };
+    provenanceNote?: string;
+    applianceQuestions: { prompt: string }[];
+  };
+
+  const fridge = body.floorPlan.appliances.find((a) => a.kind === "refrigerator");
+  assert.equal(fridge?.provenance, "assumed");
+  assert.equal(fridge?.width, 33, "走常见尺寸");
+  assert.equal(
+    body.floorPlan.appliances.find((a) => a.kind === "range")?.provenance, "customer");
+
+  assert.ok(body.provenanceNote?.includes("冰箱"), body.provenanceNote);
+  assert.ok(
+    body.applianceQuestions.some((q) => q.prompt.includes("冰箱")),
+    "推定的那个还该继续追问，客户给过的不该再问",
+  );
+});
+
+test("离谱的家电尺寸被拒绝，不静默写进户型", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+
+  const res = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ appliances: [{ kind: "refrigerator", width: 900 }] }),
+  });
+  assert.equal(res.status, 400);
+});
+
 /** 推进设计阶段。 */
 function advance(conversationId: string, accountId: string, action: string, extra: object = {}) {
   return req(`/api/conversations/${conversationId}/design/advance`, {

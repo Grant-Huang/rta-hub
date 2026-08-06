@@ -21,6 +21,8 @@ export type WallFeatureKind =
   | "gas"         // 燃气：灶具位置
   | "electrical"  // 强电：冰箱/烤箱位置
   | "obstruction";// 柱子/管井等障碍
+import type { ApplianceSpec } from "./appliances.js";
+
 
 export interface WallFeature {
   id: string;
@@ -73,6 +75,13 @@ export interface FloorPlan {
   parsedGeometry: ParsedGeometry;
   parseConfidence: number;
   unresolvedItems: FloorPlanUnresolved[];
+  /**
+   * 这个厨房里的家电（`floorplan/appliances.ts`）。
+   *
+   * 放在户型上而不是偏好上：家电是**这个厨房的物理事实**，不是对某家公司的选择。
+   * 贸易账号一个人有多个项目，每个项目的家电各不相同——挂在偏好上就串了。
+   */
+  appliances?: ApplianceSpec[];
   createdAt: string;
   updatedAt: string;
 }
