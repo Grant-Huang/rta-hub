@@ -12,16 +12,20 @@ import { emptyBundle, toPricingContext, type SpecBundle } from "../spec/bundle.j
 import { SEED_TAX_RULES } from "../pricing/tax.js";
 import { createLlmClient } from "../agents/llm-client.js";
 import type { CompletionClient } from "../agents/types.js";
+import type { VisionExtractor } from "../floorplan/parse.js";
 import type { CabinetCompany, GenericCatalog, TaxRule } from "../domain/types.js";
 import { deriveCompanyStatus } from "../spec/version.js";
 import type { PricingContext } from "../pricing/engine.js";
 import * as seed from "./seed.js";
+import * as second from "./seed-second.js";
 
 export interface AppContext {
   repos: Repositories;
   taxRules: readonly TaxRule[];
   catalog: GenericCatalog;
   llm: CompletionClient | undefined;
+  /** 户型图视觉抽取；未配置时户型录入降级为手动（FR-3）。 */
+  vision: VisionExtractor | undefined;
   /** GenericCatalog 的价格来源是否已核实（检查清单 A4 / 开放问题 5）。 */
   catalogSourceVerified: boolean;
   termsVersion: string;
@@ -33,6 +37,7 @@ export interface CreateContextOptions {
   /** 用临时目录，测试用。 */
   ephemeral?: boolean;
   llm?: CompletionClient | undefined;
+  vision?: VisionExtractor | undefined;
   seedIfEmpty?: boolean;
 }
 
@@ -47,6 +52,7 @@ export async function createAppContext(opts: CreateContextOptions = {}): Promise
     taxRules: SEED_TAX_RULES,
     catalog: seed.genericCatalog,
     llm: opts.llm !== undefined ? opts.llm : createLlmClient(),
+    vision: opts.vision,
     // 来源尚未定案（开放问题 5），预估文案必须如实标注为占位数据
     catalogSourceVerified: process.env.GENERIC_CATALOG_VERIFIED === "true",
     termsVersion: process.env.TERMS_VERSION || "2026-01",
@@ -81,6 +87,11 @@ export async function seedInitialData(ctx: AppContext): Promise<void> {
     shippingRule: seed.pilotShipping,
   };
   await repos.specBundles.upsert(bundle);
+
+  // 第二家试点公司：完全通过 FR-2 的模板导入路径建立，验证可复制性
+  await repos.companies.upsert(second.secondCompany);
+  await repos.specVersions.upsert(second.secondSpecVersion);
+  await repos.specBundles.upsert(second.buildSecondCompanyBundle().bundle);
 }
 
 /** 公司是否 active —— 由发布状态与订阅派生，不读独立字段（§6.2）。 */
@@ -104,4 +115,24 @@ export function publishedBundle(ctx: AppContext, companyId: string): SpecBundle 
 export function pricingContextFor(ctx: AppContext, companyId: string): PricingContext | undefined {
   const bundle = publishedBundle(ctx, companyId);
   return bundle ? toPricingContext(bundle, ctx.taxRules) : undefined;
+}
+
+/**
+ * 取某公司的渲染参数。
+ *
+ * 面框/无框与门板覆盖方式存在 `ProductSpecVersion` 上（它们随规格版本走），
+ * 不在规格整包里——同一家公司换了做法就是新版本（REQUIREMENTS 3.3 第 5 点）。
+ */
+export function renderStyleFor(ctx: AppContext, companyId: string): {
+  construction: "framed" | "frameless";
+  overlay: "full" | "partial" | "inset";
+} {
+  const company = ctx.repos.companies.byId(companyId);
+  const version = company?.currentPublishedSpecVersionId
+    ? ctx.repos.specVersions.byId(company.currentPublishedSpecVersionId)
+    : undefined;
+  return {
+    construction: version?.construction ?? "framed",
+    overlay: version?.overlay ?? "full",
+  };
 }

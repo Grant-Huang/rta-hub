@@ -48,8 +48,9 @@ test("伪造的账号 id 同样被拒", async () => {
 test("公司目录只列出 active 公司，且不暴露订阅状态", async () => {
   const r = await req("/api/companies");
   const body = await r.json() as { companies: { id: string; name: string }[] };
-  assert.equal(body.companies.length, 1);
-  assert.equal(body.companies[0]!.id, "co_pilot");
+  // 两家 active 试点公司；Northern Wood 已发布规格但未订阅，不应出现
+  assert.deepEqual(body.companies.map((c) => c.id).sort(), ["co_lakeside", "co_pilot"]);
+  assert.ok(!body.companies.some((c) => c.id === "co_northern"));
   const raw = JSON.stringify(body);
   for (const leak of ["personalizationSubscription", "billingPlan", "quoteEmail"]) {
     assert.ok(!raw.includes(leak), `目录泄露了 ${leak}`);
@@ -367,4 +368,202 @@ test("数据在重启后仍然存在（持久化接线）", async () => {
   assert.equal(again.status, 200);
   const { conversation: reloaded } = await again.json() as { conversation: { id: string } };
   assert.equal(reloaded.id, conversation.id);
+});
+
+// ── MVP-2 端点：户型图 → 方案 → 四视图 → 比价 ───────────────────────────
+
+test("户型图：没有视觉模型时降级为手动录入，逐条追问", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+
+  const r = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "kitchen.png", mimeType: "image/png", sizeBytes: 1024 }),
+  });
+  assert.equal(r.status, 201);
+  const body = await r.json() as { floorPlan: { id: string }; ready: boolean; questions: { id: string }[] };
+  assert.equal(body.ready, false, "没识别出墙段就不该说 ready");
+  assert.ok(body.questions.length > 0, "应逐条追问");
+});
+
+test("户型未补齐时拒绝出方案，并把待办列出来", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+
+  const r = await req(`/api/floorplans/${floorPlan.id}/layout`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  assert.equal(r.status, 409);
+  const body = await r.json() as { questions: unknown[] };
+  assert.ok(body.questions.length > 0);
+});
+
+test("补齐户型 → 出方案 → 四视图 → 转报价（完整 MVP-2 链路）", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+
+  // 手动补齐
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+  });
+  const resolved = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+  const afterResolve = await resolved.json() as { ready: boolean };
+  assert.equal(afterResolve.ready, true);
+
+  // 出方案
+  const layoutRes = await req(`/api/floorplans/${floorPlan.id}/layout`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  assert.equal(layoutRes.status, 201, await layoutRes.clone().text());
+  const layout = await layoutRes.json() as {
+    layoutKey: string;
+    selections: { moduleId: string; qty: number }[];
+    views: { runLabel: string; views: Record<string, string> }[];
+    moduleCounts: unknown[];
+  };
+  assert.ok(layout.selections.length > 0);
+  assert.equal(layout.views.length, 1);
+  // 四视图齐备且都是 SVG
+  assert.deepEqual(Object.keys(layout.views[0]!.views).sort(), ["front", "side", "topBase", "topWall"]);
+  for (const svg of Object.values(layout.views[0]!.views)) assert.match(svg, /^<svg /);
+  // 选择结构里没有任何价格字段（FR-8）
+  for (const s of layout.selections) {
+    assert.ok(!("unitPrice" in s) && !("total" in s));
+  }
+
+  // 方案直接喂给报价
+  const quoteRes = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId: conversation.id,
+      doorStyleId: "ds_shaker_white", selections: layout.selections,
+    }),
+  });
+  assert.equal(quoteRes.status, 201, await quoteRes.clone().text());
+  const { quote } = await quoteRes.json() as { quote: { total: number; lineItems: unknown[] } };
+  assert.ok(quote.lineItems.length > 0);
+  assert.ok(quote.total > 0);
+});
+
+test("局部重算只影响指定墙段", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+  });
+  const two = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ addRun: { label: "西墙", length: 96 } }),
+  });
+  const { floorPlan: fp2 } = await two.json() as { floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } } };
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+
+  const first = await req(`/api/floorplans/${floorPlan.id}/layout`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  const before = await first.json() as { moduleCounts: unknown[] };
+
+  const secondRunId = fp2.parsedGeometry.wallRuns[1]!.id;
+  const again = await req(`/api/floorplans/${floorPlan.id}/layout/regenerate`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ companyId: "co_pilot", wallRunId: secondRunId }),
+  });
+  assert.equal(again.status, 200);
+  const after = await again.json() as { moduleCounts: unknown[] };
+  assert.deepEqual(after.moduleCounts, before.moduleCounts, "重算同一段应得到相同结果");
+});
+
+test("有户型图时通用预估升级为含四视图版本", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+
+  const r = await req(`/api/conversations/${conversation.id}/estimate`, { method: "POST", accountId: CONSUMER });
+  const body = await r.json() as {
+    views?: { views: Record<string, string> }[];
+    viewsDisclaimer?: string;
+    estimate: { disclaimer: string };
+  };
+  assert.ok(body.views && body.views.length > 0, "应带四视图");
+  assert.match(body.viewsDisclaimer ?? "", /不对应任何具体公司的真实型号/);
+  assert.match(body.estimate.disclaimer, /不是任何具体公司的真实报价/);
+});
+
+test("多公司比价：口径一致性有标注", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+
+  const mk = async (companyId: string, doorStyleId: string, moduleId: string) => {
+    const spec = await (await req(`/api/companies/${companyId}/spec`, { accountId: CONSUMER })).json() as {
+      modules: { id: string; code: string; widthOptions: number[]; heightOptions: number[]; depthOptions: number[] }[];
+    };
+    const mod = spec.modules.find((m) => m.id === moduleId)!;
+    return req("/api/quotes", {
+      method: "POST", accountId: CONSUMER,
+      body: JSON.stringify({
+        companyId, conversationId: conversation.id, doorStyleId,
+        selections: [{
+          moduleId: mod.id, qty: 4, width: mod.widthOptions[0],
+          height: mod.heightOptions[0], depth: mod.depthOptions[0],
+          assembly: "RTA", hardwareOptionIds: [], accessoryOptionIds: [],
+        }],
+      }),
+    });
+  };
+
+  assert.equal((await mk("co_pilot", "ds_shaker_white", "m_b30")).status, 201);
+  assert.equal((await mk("co_lakeside", "ds_flat_slab_white", "m_nw_b30")).status, 201);
+
+  const r = await req(`/api/conversations/${conversation.id}/comparison`, { accountId: CONSUMER });
+  assert.equal(r.status, 200);
+  const body = await r.json() as {
+    comparison: { rows: { companyName: string; total: number }[]; comparable: boolean };
+    text: string; html: string;
+  };
+  assert.equal(body.comparison.rows.length, 2);
+  // 按总价升序
+  assert.ok(body.comparison.rows[0]!.total <= body.comparison.rows[1]!.total);
+  assert.match(body.text, /只比价格/);
+  assert.match(body.html, /<table/);
+});
+
+test("别人的户型图读不到", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  const r = await req(`/api/floorplans/${floorPlan.id}`, { accountId: "ca_demo_trade" });
+  assert.equal(r.status, 404);
 });

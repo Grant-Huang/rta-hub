@@ -10,10 +10,14 @@
  */
 import { add, format, mulQty, percentOf, type Money } from "../domain/money.js";
 import type {
-  EstimateDraft, EstimateDraftLine, GenericCatalog, ModuleType, Province,
+  EstimateDraft, EstimateDraftLine, GenericCatalog, ModuleSpec, ModuleType, Province,
 } from "../domain/types.js";
 import { resolveTaxRule } from "../pricing/tax.js";
 import type { TaxRule } from "../domain/types.js";
+import type { ParsedGeometry } from "../floorplan/types.js";
+import { generateLayout } from "../layout/generate.js";
+import { renderFourViews, type FourViews, type ViewStyle } from "../render/views.js";
+import { matchFaceTemplate } from "../render/templates.js";
 
 export interface EstimateRequest {
   conversationId: string;
@@ -143,5 +147,95 @@ export function estimateCountsFromText(text: string): Partial<Record<ModuleType,
     wall: wallCount,
     ...(runFeet >= 12 ? { tall: 1 } : {}),
     ...(runFeet >= 10 ? { corner: 1 } : {}),
+  };
+}
+
+
+// ── 含四视图的版本（MVP-2）────────────────────────────────────────────────
+
+/**
+ * 把 `GenericCatalog` 的尺寸档位转成"伪型号"，好让排布算法与渲染管线复用。
+ *
+ * 这些型号**不属于任何公司**（companyId 为空），因此不可能通过 FR-8 校验、
+ * 也就不可能进入报价与发送闸门——与 `EstimateDraft` 无 companyId 是同一个保障。
+ */
+export function catalogToPseudoModules(catalog: GenericCatalog): ModuleSpec[] {
+  const codePrefix: Partial<Record<ModuleType, string>> = {
+    base: "B", wall: "W", tall: "PC", sinkBase: "SB", corner: "BBC",
+  };
+  const out: ModuleSpec[] = [];
+  for (const m of catalog.modules) {
+    const prefix = codePrefix[m.type];
+    if (!prefix) continue;
+    for (const width of m.widthOptions) {
+      // 用行业惯用命名，好让脸型规则匹配直接命中
+      const code = m.type === "wall"
+        ? `${prefix}${String(width).padStart(2, "0")}${m.heightOptions[0] ?? 30}`
+        : `${prefix}${String(width).padStart(2, "0")}`;
+      if (!matchFaceTemplate(code)) continue;
+      out.push({
+        id: `generic_${m.type}_${width}`,
+        specVersionId: "generic",
+        companyId: "",          // ★ 不属于任何公司
+        code,
+        type: m.type,
+        widthOptions: [width],
+        heightOptions: m.heightOptions,
+        depthOptions: m.depthOptions,
+        faceTemplateId: matchFaceTemplate(code)!.templateId,
+        assemblyOptions: ["RTA"],
+      });
+    }
+  }
+  return out;
+}
+
+export interface IllustratedEstimate {
+  draft: EstimateDraft;
+  /** 每段墙的四视图示意——与 Quote 复用同一套脸型模板渲染逻辑（场景 B 第 4 点）。 */
+  viewsByRun: { runLabel: string; views: FourViews }[];
+  /** 示意图的免责说明——它画的是通用尺寸，不是任何公司的真实型号。 */
+  viewsDisclaimer: string;
+}
+
+/**
+ * 含四视图的通用预估（MVP-2 升级，场景 B 第 4 点）。
+ *
+ * 复用跟 `Quote` 完全一样的排布 + 脸型模板渲染，只是数据源换成 `GenericCatalog`。
+ * 视图另加一句免责：画的是行业通用尺寸，不对应任何公司的真实型号。
+ */
+export function buildIllustratedEstimate(
+  catalog: GenericCatalog,
+  geometry: ParsedGeometry,
+  req: Omit<EstimateRequest, "moduleCounts"> & { moduleCounts?: EstimateRequest["moduleCounts"] },
+  opts: EstimateOptions & { viewStyle?: ViewStyle } = {},
+): IllustratedEstimate {
+  const pseudoModules = catalogToPseudoModules(catalog);
+  const layout = generateLayout(geometry, pseudoModules, {
+    ...(geometry.ceilingHeight !== undefined ? { ceilingHeight: geometry.ceilingHeight } : {}),
+  });
+
+  // 数量优先取排布结果（比从文本粗估准得多）
+  const counts: Partial<Record<ModuleType, number>> = { ...req.moduleCounts };
+  if (layout.moduleCounts.length > 0) {
+    for (const key of Object.keys(counts) as ModuleType[]) delete counts[key];
+    for (const m of layout.moduleCounts) {
+      const mod = pseudoModules.find((p) => p.id === m.moduleId);
+      if (!mod) continue;
+      counts[mod.type] = (counts[mod.type] ?? 0) + m.qty;
+    }
+  }
+
+  const draft = buildEstimateDraft(catalog, { ...req, moduleCounts: counts }, opts);
+
+  return {
+    draft,
+    viewsByRun: geometry.wallRuns.map((run) => ({
+      runLabel: run.label,
+      views: renderFourViews(run, layout.placements, opts.viewStyle),
+    })),
+    viewsDisclaimer:
+      "示意图按行业通用尺寸档位绘制，**不对应任何具体公司的真实型号**。" +
+      "选定公司后，系统会用该公司规格库里真实存在的型号重新排布并出图。",
   };
 }
