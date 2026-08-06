@@ -14,6 +14,7 @@ import type { SpecBundle } from "./bundle.js";
 import { importSpecTemplates, type ImportResult, type ImportSources, type UnresolvedItem } from "./import.js";
 import type { CompanyOverrides } from "../render/templates.js";
 import { assertMutable, nextVersionNo, publishDraft, type PublishResult } from "./version.js";
+import { capabilityQuestions } from "./capabilities.js";
 
 export type OnboardingStatus = "collecting" | "reviewing" | "ready" | "published";
 
@@ -97,7 +98,22 @@ export function ingestTemplates(
   }
   const importResult = importSpecTemplates(session.specVersionId, session.companyId, sources, faceOverrides);
 
-  const questions: OnboardingQuestion[] = importResult.unresolved.map((item, i) => ({
+  // 能力标签推不准的，也是待确认项（CATALOG_MODEL §2.2）。
+  //
+  // 排布算法读的是能力而不是型号码，所以一个把水槽柜误判成普通地柜的规格库，
+  // 会让这家公司**每一版**方案的水槽都排错位置——而且不报错，只是一直错。
+  // 与脸型匹配不上是同一个量级的问题，所以走同一条队列。
+  const capItems: UnresolvedItem[] = capabilityQuestions(importResult.bundle.modules)
+    .map((q) => ({
+      sheet: "modules" as const,
+      rowNumber: 0,
+      field: "capabilities",
+      reason: q.reason,
+      raw: q.moduleCode,
+    }));
+
+  const unresolved = [...importResult.unresolved, ...capItems];
+  const questions: OnboardingQuestion[] = unresolved.map((item, i) => ({
     id: newId("q"),
     unresolvedIndex: i,
     prompt: buildPrompt(item),
@@ -107,8 +123,8 @@ export function ingestTemplates(
   return {
     session: {
       ...session,
-      status: importResult.unresolved.length === 0 ? "ready" : "reviewing",
-      unresolved: importResult.unresolved,
+      status: unresolved.length === 0 ? "ready" : "reviewing",
+      unresolved,
       questions,
       updatedAt: at,
     },
@@ -124,6 +140,10 @@ function buildPrompt(item: UnresolvedItem): string {
       return `${where}：${item.reason}。这个型号在正视图上长什么样？（单门 / 双门 / 一抽一门 / 几个抽屉 / 水槽柜 / 转角…）`;
     case "type":
       return `${where}：${item.reason}。它属于地柜、吊柜、高柜、转角柜还是水槽柜？`;
+    case "capabilities":
+      return `型号「${item.raw ?? ""}」：${item.reason}。` +
+        `它承载什么功能？（门板储物 / 抽屉柜 / 水槽柜 / 灶下柜 / 家电柜 / 转角 / 开放格）` +
+        `——排布算法按这个决定它能放在哪，认错了每一版方案都会错。`;
     case "listPrice":
     case "tradePrice":
       return `${where}：${item.reason}。请提供该型号在这个价格组下的标价（只填数字，如 245.50）。`;

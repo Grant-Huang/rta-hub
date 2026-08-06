@@ -25,6 +25,7 @@ import {
   type ErgonomicViolation, type TrianglePoint, CLEARANCE,
 } from "./ergonomics.js";
 import { compareCandidates, scoreAesthetics, type AestheticScore } from "./aesthetics.js";
+import { capabilitiesFor, hasRole } from "../spec/capabilities.js";
 
 /** 北美标准家电净空（规范文档第七节）。 */
 export const APPLIANCE_CLEARANCE = {
@@ -210,15 +211,24 @@ export function splitIntoSegments(run: WallRun, appliances: (keyof typeof APPLIA
   return { segments: segments.filter((s) => s.length > 0), reserved, warnings };
 }
 
-/** 有明确功能的窄柜——即使窄也不该被当成"凑数"惩罚。 */
-const FUNCTIONAL_NARROW_PREFIX = /^(BPO|TDC|BWB)/i;
+/**
+ * 有明确功能的窄柜——即使窄也不该被当成"凑数"惩罚。
+ *
+ * 判据是**能力**（开放格/酒格/抽拉件这类本来就窄的功能件），不是型号码前缀。
+ * 前缀判断在第二家公司（`NW-` 命名）上一个也命不中，于是"功能性窄柜不罚分"
+ * 这条规则在那家公司上静默失效——见 spec/capabilities.ts 的模块注释。
+ */
+function isFunctionalNarrow(m: ModuleSpec): boolean {
+  const roles = capabilitiesFor(m).capabilities.roles;
+  return roles.includes("openDisplay") || roles.includes("applianceHousing");
+}
 
 /** 从规格库里挑出某类柜体的宽度候选。 */
 function candidatesFor(modules: readonly ModuleSpec[], types: ModuleType[]): PackCandidate[] {
   const out: PackCandidate[] = [];
   for (const m of modules) {
     if (!types.includes(m.type)) continue;
-    const functional = FUNCTIONAL_NARROW_PREFIX.test(m.code);
+    const functional = isFunctionalNarrow(m);
     for (const w of m.widthOptions) {
       out.push({
         width: w,
@@ -251,12 +261,14 @@ function pickModule(
 ): ModuleSpec | undefined {
   const matches = modules.filter((m) => types.includes(m.type) && m.widthOptions.includes(width));
   if (matches.length === 0) return undefined;
+  // 「是不是抽屉柜」问能力，不问型号码——见 spec/capabilities.ts
+  const isDrawer = (m: ModuleSpec) => hasRole(m, "drawerStorage") && !hasRole(m, "doorStorage");
   if (preferDrawers) {
-    const drawer = matches.find((m) => /^(\d)DB|DRAWER/i.test(m.code) || m.faceTemplateId === "F6_DRAWER_STACK");
+    const drawer = matches.find(isDrawer);
     if (drawer) return drawer;
   }
   // 否则优先非抽屉柜（更便宜），避免全屋都上抽屉柜推高造价
-  return matches.find((m) => !/^(\d)DB/i.test(m.code)) ?? matches[0];
+  return matches.find((m) => !isDrawer(m)) ?? matches[0];
 }
 
 /** 该位置是否紧邻灶具或水槽——决定要不要优先用抽屉柜。 */
@@ -269,12 +281,12 @@ function isHighUseZone(
   return anchors.some((a) => x < a.end + ZONE && x + width > a.start - ZONE);
 }
 
-/** 该公司有抽屉柜的宽度集合。 */
+/** 该公司有抽屉柜的宽度集合。同样按能力挑，不按型号码。 */
 function drawerWidths(modules: readonly ModuleSpec[]): Set<number> {
   const out = new Set<number>();
   for (const m of modules) {
     if (m.type !== "base") continue;
-    if (!/^(\d)DB/i.test(m.code) && m.faceTemplateId !== "F6_DRAWER_STACK") continue;
+    if (!hasRole(m, "drawerStorage") || hasRole(m, "doorStorage")) continue;
     for (const w of m.widthOptions) out.add(w);
   }
   return out;
@@ -314,7 +326,8 @@ export function generateLayout(
   const drawerBias = opts.drawerBias ?? "highUseOnly";
 
   const baseCandidates = candidatesFor(modules, ["base"]);
-  const sinkModules = modules.filter((m) => m.type === "sinkBase");
+  // 水槽柜按能力挑：有的商家把水槽柜归在 base 类里，只靠 type 会漏
+  const sinkModules = modules.filter((m) => hasRole(m, "sinkBase"));
   const wallCandidates = candidatesFor(modules, ["wall"]);
   const wallHeights = [...new Set(modules.filter((m) => m.type === "wall").flatMap((m) => m.heightOptions))];
   const wallHeight = pickWallCabinetHeight(opts.ceilingHeight, wallHeights);
