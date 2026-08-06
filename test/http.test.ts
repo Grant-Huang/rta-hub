@@ -10,10 +10,14 @@ process.env.SMTP_HOST = "";
 process.env.SMTP_USER = "";
 process.env.SMTP_PASS = "";
 
+process.env.ADMIN_TOKEN = "test-admin-token";
+
 let app: { fetch: (req: Request) => Response | Promise<Response> };
 
 before(async () => {
-  ({ app } = await import("../src/server.js"));
+  const mod = await import("../src/server.js");
+  // 用临时数据目录，避免测试写进真实的 data/
+  app = await mod.createApp({ ephemeral: true, llm: undefined });
 });
 
 const CONSUMER = "ca_demo_consumer";
@@ -208,4 +212,159 @@ test("脸型渲染端点按 SKU 出 SVG", async () => {
 test("匹配不到脸型的 SKU 返回 422，不猜", async () => {
   const r = await req("/api/render/face?code=XYZ9000");
   assert.equal(r.status, 422);
+});
+
+// ── 新增端点（M3/M6/M7）──────────────────────────────────────────────────
+
+test("冷启动通用预估：有区间、有免责声明、结构上无 companyId", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ text: "厨房大概 14 尺长，安大略省" }),
+  });
+
+  const r = await req(`/api/conversations/${conversation.id}/estimate`, { method: "POST", accountId: CONSUMER });
+  assert.equal(r.status, 201);
+  const body = await r.json() as {
+    estimate: { totalRange: { low: number; high: number }; disclaimer: string };
+    text: string;
+  };
+  assert.ok(body.estimate.totalRange.high > body.estimate.totalRange.low, "必须给区间不给精确值");
+  assert.match(body.estimate.disclaimer, /不是任何具体公司的真实报价/);
+  assert.ok(!("companyId" in body.estimate), "EstimateDraft 不应有 companyId");
+  assert.match(body.text, /合计区间/);
+});
+
+test("对话：总控助手会指出还缺哪些字段", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const r = await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ text: "我要装修厨房" }),
+  });
+  const body = await r.json() as { missingFields: string[]; reply: { content: string } };
+  assert.ok(body.missingFields.length > 0);
+  assert.ok(body.reply.content.length > 0);
+});
+
+test("@ 已入驻公司时，公司 Agent 只答本公司规格", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const r = await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ text: "@枫岭橱柜 B30 有多大" }),
+  });
+  const body = await r.json() as { routedTo: { companyId: string }[]; replies: { content: string; companyId?: string }[] };
+  assert.equal(body.routedTo[0]!.companyId, "co_pilot");
+  assert.match(body.replies[0]!.content, /B30/);
+  assert.equal(body.replies[0]!.companyId, "co_pilot");
+});
+
+test("邮件列表：未勾选同意被拒（CASL Express Consent）", async () => {
+  const r = await req("/api/subscribe", {
+    method: "POST",
+    body: JSON.stringify({ email: "no-consent@x.example", companyName: "X", consent: false }),
+  });
+  assert.equal(r.status, 400);
+  const body = await r.json() as { code: string };
+  assert.equal(body.code, "CONSENT_REQUIRED");
+});
+
+test("邮件列表：主动同意后可订阅，退订链接真的生效", async () => {
+  const r = await req("/api/subscribe", {
+    method: "POST",
+    body: JSON.stringify({ email: "sub@x.example", companyName: "Sub Co", consent: true }),
+  });
+  assert.equal(r.status, 201);
+  const { unsubscribeToken } = await r.json() as { unsubscribeToken: string };
+  assert.ok(unsubscribeToken);
+
+  const un = await app.fetch(new Request(`${base}/unsubscribe?token=${unsubscribeToken}`));
+  assert.equal(un.status, 200);
+  assert.match(await un.text(), /已退订/);
+
+  // 无效 token
+  const bad = await app.fetch(new Request(`${base}/unsubscribe?token=nope`));
+  assert.equal(bad.status, 400);
+});
+
+test("重复订阅被唯一约束挡下", async () => {
+  const payload = JSON.stringify({ email: "dup@x.example", companyName: "Dup", consent: true });
+  assert.equal((await req("/api/subscribe", { method: "POST", body: payload })).status, 201);
+  assert.equal((await req("/api/subscribe", { method: "POST", body: payload })).status, 409);
+});
+
+test("运营端点需要管理员令牌", async () => {
+  assert.equal((await req("/api/admin/mention-signals")).status, 401);
+  const ok = await app.fetch(new Request(`${base}/api/admin/mention-signals`, {
+    headers: { "x-admin-token": "test-admin-token" },
+  }));
+  assert.equal(ok.status, 200);
+});
+
+test("销售看板去标识化：只有聚合计数与话术，无客户身份", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ text: "@Sunrise Kitchens 你们做转角柜吗" }),
+  });
+
+  const r = await app.fetch(new Request(`${base}/api/admin/mention-signals`, {
+    headers: { "x-admin-token": "test-admin-token" },
+  }));
+  const body = await r.json() as { aggregated: { normalizedName: string; count: number; outreachLine: string }[] };
+  const hit = body.aggregated.find((a) => a.normalizedName.includes("sunrise"));
+  assert.ok(hit, "应记录到提及信号");
+  assert.match(hit.outreachLine, /有客户/);
+  const raw = JSON.stringify(body);
+  for (const pii of ["alex@example.com", "ca_demo_consumer", conversation.id]) {
+    assert.ok(!raw.includes(pii), `销售看板泄露了 ${pii}`);
+  }
+});
+
+test("留存清除返回计划而不是直接执行", async () => {
+  const r = await app.fetch(new Request(`${base}/api/admin/retention/plan`, {
+    headers: { "x-admin-token": "test-admin-token" },
+  }));
+  assert.equal(r.status, 200);
+  const body = await r.json() as { plan: { conversationsToDelete: string[]; notes: string[] } };
+  assert.ok(Array.isArray(body.plan.conversationsToDelete));
+});
+
+test("数据主体访问权：导出本账号数据并说明留存规则", async () => {
+  const r = await req("/api/me/export", { accountId: CONSUMER });
+  assert.equal(r.status, 200);
+  const body = await r.json() as { account: { id: string }; notes: string[] };
+  assert.equal(body.account.id, CONSUMER);
+  assert.ok(body.notes.some((n) => n.includes("7 年")));
+});
+
+test("数据主体删除权：会话删除、报价去标识化保留", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: "ca_demo_trade" });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const quoteRes = await req("/api/quotes", {
+    method: "POST", accountId: "ca_demo_trade",
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId: conversation.id, doorStyleId: "ds_shaker_white",
+      selections: [{ moduleId: "m_b30", qty: 1, width: 30, height: 34.5, depth: 24, assembly: "RTA", hardwareOptionIds: [], accessoryOptionIds: [] }],
+    }),
+  });
+  const { quote } = await quoteRes.json() as { quote: { id: string } };
+
+  const del = await req("/api/me/delete", { method: "POST", accountId: "ca_demo_trade" });
+  assert.equal(del.status, 200);
+  const body = await del.json() as { outcome: { conversationsDeleted: string[]; quotesDeIdentified: string[]; explanation: string } };
+  assert.ok(body.outcome.conversationsDeleted.includes(conversation.id));
+  assert.ok(body.outcome.quotesDeIdentified.includes(quote.id));
+  assert.match(body.outcome.explanation, /去标识化/);
+
+  // 会话确实没了
+  assert.equal((await req(`/api/conversations/${conversation.id}`, { accountId: "ca_demo_trade" })).status, 404);
+});
+
+test("数据在重启后仍然存在（持久化接线）", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const again = await req(`/api/conversations/${conversation.id}`, { accountId: CONSUMER });
+  assert.equal(again.status, 200);
+  const { conversation: reloaded } = await again.json() as { conversation: { id: string } };
+  assert.equal(reloaded.id, conversation.id);
 });

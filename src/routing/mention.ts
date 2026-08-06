@@ -92,25 +92,41 @@ export function routeByToken(input: RoutingInput, token: MentionToken): RouteOut
 }
 
 /**
+ * 一个 `@` 提及的所有候选解释，**从长到短**。
+ *
+ * 需要这个是因为公司名可能含空格（"Maple Ridge"），而 `@` 后面紧跟的往往是正文
+ * （"@Maple Ridge B30 有多大"）。逐词回退让两种情况都能命中，且仍然是精确匹配：
+ * 先试 "Maple Ridge B30"，不中再试 "Maple Ridge"，再试 "Maple"。
+ */
+export function mentionVariants(raw: string): string[] {
+  const words = raw.trim().split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  for (let n = words.length; n >= 1; n--) out.push(words.slice(0, n).join(" "));
+  return out;
+}
+
+/**
  * 按自由文本路由 —— 归一化后**精确**匹配 name 与 aliases。
- * 不做前缀匹配、不做编辑距离、不问 LLM。
+ * 不做前缀匹配、不做编辑距离、不问 LLM；只按「候选解释从长到短」回退。
  */
 export function routeByText(input: RoutingInput, rawText: string): RouteOutcome {
-  const target = normalizeCompanyName(rawText);
-  if (!target) return { kind: "unknown", rawText };
+  for (const variant of mentionVariants(rawText)) {
+    const target = normalizeCompanyName(variant);
+    if (!target) continue;
 
-  const matches = input.companies.filter((c) => {
-    const names = [c.name, ...c.aliases];
-    return names.some((n) => normalizeCompanyName(n) === target);
-  });
+    const matches = input.companies.filter((c) =>
+      [c.name, ...c.aliases].some((n) => normalizeCompanyName(n) === target));
 
-  if (matches.length === 0) return { kind: "unknown", rawText };
-  if (matches.length > 1) return { kind: "ambiguous", candidates: matches, rawText };
+    if (matches.length === 0) continue;
+    // 命中即止 —— 更长的解释优先，避免 "Maple Ridge" 被短的 "Maple" 抢走
+    if (matches.length > 1) return { kind: "ambiguous", candidates: matches, rawText: variant };
 
-  const only = matches[0]!;
-  return input.isActive(only)
-    ? { kind: "routed", company: only }
-    : { kind: "notActive", company: only, rawText };
+    const only = matches[0]!;
+    return input.isActive(only)
+      ? { kind: "routed", company: only }
+      : { kind: "notActive", company: only, rawText: variant };
+  }
+  return { kind: "unknown", rawText };
 }
 
 // ── 销售信号 ──────────────────────────────────────────────────────────────

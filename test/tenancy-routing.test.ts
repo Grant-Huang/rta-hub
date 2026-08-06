@@ -5,8 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ReadOnlyCompanyView, TenantIsolationError, TenantScope } from "../src/tenancy/scoped-repo.js";
 import {
-  aggregateSignals, buildMentionSignal, clientFacingMessage, normalizeCompanyName,
-  parseMentions, routeByText, routeByToken,
+  aggregateSignals, buildMentionSignal, clientFacingMessage, mentionVariants,
+  normalizeCompanyName, parseMentions, routeByText, routeByToken,
 } from "../src/routing/mention.js";
 import { deriveCompanyStatus } from "../src/spec/version.js";
 import type { CabinetCompany, CompanyProspect } from "../src/domain/types.js";
@@ -210,4 +210,25 @@ test("销售看板按归一化名聚合，不同写法算同一家", () => {
   assert.equal(agg.length, 2);
   assert.equal(agg[0]!.count, 3);
   assert.equal(agg[0]!.latestAt, "2026-06-03T00:00:00.000Z");
+});
+
+test("@ 后面紧跟正文时仍能正确路由（候选解释从长到短回退）", () => {
+  // 正则会把紧跟的 ASCII 词一起吞掉，逐词回退把它还原
+  assert.equal(routeByText(routing, "Maple Cabinetry B30").kind, "routed");
+  assert.equal(routeByText(routing, "枫叶橱柜 B30").kind, "routed");
+  assert.equal(routeByText(routing, "Maple B30 30x24").kind, "routed");
+});
+
+test("更长的解释优先，不被更短的抢走", () => {
+  const shortCo: CabinetCompany = { ...company, id: "co_short", name: "Northern", aliases: [] };
+  const routing2 = { ...routing, companies: [inactiveCompany, shortCo] };
+  // "Northern Wood" 应命中 Northern Wood（inactive），而不是 Northern
+  const r = routeByText(routing2, "Northern Wood");
+  assert.equal(r.kind, "notActive");
+  assert.equal(r.kind === "notActive" ? r.company.id : "", "co_pending");
+});
+
+test("mentionVariants 从长到短", () => {
+  assert.deepEqual(mentionVariants("Maple Ridge B30"), ["Maple Ridge B30", "Maple Ridge", "Maple"]);
+  assert.deepEqual(mentionVariants("枫叶橱柜"), ["枫叶橱柜"]);
 });
