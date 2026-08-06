@@ -429,6 +429,17 @@ test("补齐户型 → 出方案 → 四视图 → 转报价（完整 MVP-2 链�
   const afterResolve = await resolved.json() as { ready: boolean };
   assert.equal(afterResolve.ready, true);
 
+  // 先问再画：客户点头 → 全局俯视图 → 认可排布（design/stages.ts）
+  await advance(conversation.id, CONSUMER, "consent");
+  const planRes = await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  assert.equal(planRes.status, 201, await planRes.clone().text());
+  const planBody = await planRes.json() as { planViews: { base: string; wall: string } };
+  assert.match(planBody.planViews.base, /^<svg /);
+  assert.match(planBody.planViews.wall, /^<svg /);
+  await advance(conversation.id, CONSUMER, "approvePlan");
+
   // 出方案
   const layoutRes = await req(`/api/floorplans/${floorPlan.id}/layout`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
@@ -482,6 +493,11 @@ test("局部重算只影响指定墙段", async () => {
   await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
   });
+  await advance(conversation.id, CONSUMER, "consent");
+  await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  await advance(conversation.id, CONSUMER, "approvePlan");
 
   const first = await req(`/api/floorplans/${floorPlan.id}/layout`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
@@ -593,6 +609,14 @@ async function readyProject(accountId: string) {
   await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId, body: JSON.stringify({ ceilingHeight: 96 }),
   });
+  // 走完整阶段：客户点头 → 全局俯视图 → 认可排布 → 才出四视图
+  // （design/stages.ts：先问再画，不由系统替客户决定什么时候开始看方案）
+  await advance(conversation.id, accountId, "consent");
+  await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
+    method: "POST", accountId, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  await advance(conversation.id, accountId, "approvePlan");
+
   const layoutRes = await req(`/api/floorplans/${floorPlan.id}/layout`, {
     method: "POST", accountId, body: JSON.stringify({ companyId: "co_pilot" }),
   });
@@ -602,9 +626,78 @@ async function readyProject(accountId: string) {
   return { conversationId: conversation.id, floorPlanId: floorPlan.id, layout };
 }
 
+/** 推进设计阶段。 */
+function advance(conversationId: string, accountId: string, action: string, extra: object = {}) {
+  return req(`/api/conversations/${conversationId}/design/advance`, {
+    method: "POST", accountId,
+    body: JSON.stringify({ companyId: "co_pilot", action, ...extra }),
+  });
+}
+
+test("一轮修改带上的偏好改动会真的改到下一版排布上", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+  await req(`/api/conversations/${conversation.id}/preferences`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ companyId: "co_pilot", storage: "doors" }),
+  });
+  await advance(conversation.id, CONSUMER, "consent");
+
+  const planView = async () => {
+    const r = await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
+      method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+    });
+    const b = await r.json() as { moduleCounts: { moduleCode: string; qty: number }[] };
+    return b.moduleCounts.map((m) => `${m.moduleCode}×${m.qty}`).sort().join(" ");
+  };
+
+  const first = await planView();
+  const rev = await advance(conversation.id, CONSUMER, "revise", {
+    note: "锅具多，抽屉多做一些", changes: { storage: "drawers" },
+  });
+  assert.equal(rev.status, 200, await rev.clone().text());
+  const revBody = await rev.json() as { revision: { applied: string[]; note?: string } };
+  assert.deepEqual(revBody.revision.applied, ["storage"]);
+  assert.equal(revBody.revision.note, "锅具多，抽屉多做一些");
+
+  // 客户提了意见、系统说采纳了，那下一版就必须真的不一样
+  assert.notEqual(await planView(), first);
+});
+
+test("提了句改不动的话时，如实说这轮没有改动，不假装改过", async () => {
+  const { conversationId } = await readyProject(CONSUMER);
+  await advance(conversationId, CONSUMER, "backToPlan");
+  const rev = await advance(conversationId, CONSUMER, "revise", { note: "整体看着大气一点" });
+  const body = await rev.json() as { revision: { applied: string[]; unapplied?: string } };
+  assert.deepEqual(body.revision.applied, []);
+  assert.ok(body.revision.unapplied?.includes("与上一版相同"), JSON.stringify(body.revision));
+});
+
+test("修改里夹带不存在的门板 id 会被拒绝，走的是和选择题同一套校验", async () => {
+  const { conversationId } = await readyProject(CONSUMER);
+  await advance(conversationId, CONSUMER, "backToPlan");
+  const rev = await advance(conversationId, CONSUMER, "revise", {
+    changes: { doorStyleId: "ds_不存在的门板" },
+  });
+  assert.equal(rev.status, 400);
+});
+
 test("方案落盘：重算推进修订号，designLayoutId 保持不变", async () => {
   const { floorPlanId, layout } = await readyProject(CONSUMER);
-  assert.equal(layout.revisionNo, 1);
+  // 全局俯视图本身就落了第 1 版修订，四视图是第 2 版——
+  // 客户在俯视图上看到的那一版必须可追溯（§3.6）
+  assert.equal(layout.revisionNo, 2);
 
   const again = await req(`/api/floorplans/${floorPlanId}/layout/regenerate`, {
     method: "POST", accountId: CONSUMER,
@@ -614,7 +707,7 @@ test("方案落盘：重算推进修订号，designLayoutId 保持不变", async
   const next = await again.json() as { designLayoutId: string; revisionNo: number };
   // 同一个方案的第 2 版，不是新方案
   assert.equal(next.designLayoutId, layout.designLayoutId);
-  assert.equal(next.revisionNo, 2);
+  assert.equal(next.revisionNo, 3);
 });
 
 test("报价引用方案的真实修订号，事后追得回是哪一版", async () => {
@@ -1059,8 +1152,14 @@ test("五金偏好进报价，且只加到适用柜体上", async () => {
     selections: { moduleId: string; hardwareOptionIds: string[]; accessoryOptionIds: string[] }[];
   };
 
-  // 五金对所有柜型适用；抽拉层板只装在它 appliesToModuleIds 里的地柜上
-  assert.ok(layoutBody.selections.every((s) => s.hardwareOptionIds.includes("hw_softclose")));
+  // 五金对所有**柜型**适用；填缝条/踢脚板不是柜体，不该配铰链
+  const cabinetSel = layoutBody.selections.filter(
+    (s) => /^m_(b|w|sb|lsb|pc|tp)/i.test(s.moduleId) && !/^m_(bf|wf|tk|leg|bep|wep)/i.test(s.moduleId));
+  assert.ok(cabinetSel.length > 0);
+  assert.ok(cabinetSel.every((s) => s.hardwareOptionIds.includes("hw_softclose")));
+  const trimSel = layoutBody.selections.filter((s) => /^m_(bf|wf|tk|leg|bep|wep)/i.test(s.moduleId));
+  assert.ok(trimSel.every((s) => s.hardwareOptionIds.length === 0),
+    "给填缝条配 soft-close 铰链是没有意义的");
   const wall = layoutBody.selections.find((s) => s.moduleId.startsWith("m_w"));
   if (wall) assert.deepEqual(wall.accessoryOptionIds, [], "吊柜装不了抽拉层板");
 
@@ -1113,6 +1212,16 @@ test("客户能补充窗户与上下水位置，排布据此放水槽柜", async
   await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
   });
+
+  // 走阶段：点头 → 俯视图 → 认可
+  const stage = async () => {
+    await advance(conversation.id, CONSUMER, "consent");
+    await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
+      method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+    });
+    await advance(conversation.id, CONSUMER, "approvePlan");
+  };
+  await stage();
 
   // 没有上下水时排不出水槽柜
   const before = await (await req(`/api/floorplans/${floorPlan.id}/layout`, {

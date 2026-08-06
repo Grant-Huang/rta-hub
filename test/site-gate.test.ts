@@ -101,7 +101,10 @@ test("签发的令牌能验过，篡改的验不过", () => {
   assert.equal(verifyToken(cfg, token), true);
 
   const [exp, mac] = token.split(".");
-  assert.equal(verifyToken(cfg, `${exp}.${mac!.slice(0, -1)}0`), false, "改签名");
+  // 末位改成一个**确定不同**的字符。写死成 "0" 时，签名本来就以 0 结尾的那
+  // 十六分之一的运行里"篡改后"的令牌与原件一模一样，测试会随机地挂
+  const last = mac!.slice(-1);
+  assert.equal(verifyToken(cfg, `${exp}.${mac!.slice(0, -1)}${last === "0" ? "1" : "0"}`), false, "改签名");
   assert.equal(verifyToken(cfg, `${Number(exp) + 86_400_000}.${mac}`), false, "改过期时间");
   assert.equal(verifyToken(cfg, undefined), false);
   assert.equal(verifyToken(cfg, ""), false);

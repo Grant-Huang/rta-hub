@@ -1,0 +1,52 @@
+# CI —— 类型、单元测试、端到端冒烟。
+#
+# 冒烟这一步跑的是 `scripts/simulate.mts`：它走**真实的 HTTP 端点**，从建会话
+# 一路跑到报价清单。单元测试能证明每个模块自己是对的，但证明不了它们接在一起
+# 是对的——项目里反复出现的问题恰恰是「库函数写完了但没接上」。
+#
+# 冒烟不需要 API key：没有 key 时场景生成器退回确定性版本，并在输出里如实标注。
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      - name: 单元测试
+        run: pnpm test
+
+      # 端到端冒烟：全程走 HTTP，任何一步产出不自洽都以非 0 退出
+      - name: 端到端冒烟（4 个场景）
+        run: pnpm simulate ci-sim-out 4
+
+      # 跑挂了的时候，光看日志很难判断图错在哪——把产出留下来
+      - name: 保留冒烟产出
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulate-output
+          path: ci-sim-out/
+          retention-days: 7
+          if-no-files-found: warn

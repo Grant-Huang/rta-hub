@@ -18,6 +18,7 @@ import type { SpecBundle } from "../spec/bundle.js";
 import type { FloorPlan } from "../floorplan/types.js";
 import type { StoredLayout } from "../layout/store.js";
 import type { TradeVerification } from "../trade/verification.js";
+import type { DesignSession } from "../design/stages.js";
 
 export interface Repositories {
   companies: JsonCollection<CabinetCompany>;
@@ -33,6 +34,8 @@ export interface Repositories {
   floorPlans: JsonCollection<FloorPlan>;
   /** 排布结果（含 placements 与评分）。按 (floorPlanId, companyId) 唯一。 */
   storedLayouts: JsonCollection<StoredLayout>;
+  /** 设计会话阶段（先问再画、全局俯视图评审）。 */
+  designSessions: JsonCollection<DesignSession>;
   quotes: JsonCollection<Quote>;
   auditEvents: JsonCollection<QuoteAuditEvent>;
   billingEvents: JsonCollection<LeadBillingEvent>;
@@ -61,6 +64,7 @@ export function openRepositories(dataDir = process.env.DATA_DIR ?? path.join(pro
     floorPlans: new JsonCollection<FloorPlan>(f("floor-plans")),
     storedLayouts: new JsonCollection<StoredLayout>(f("layouts"))
       .addUniqueKey("plan+company", (l) => `${l.floorPlanId}:${l.companyId}`),
+    designSessions: new JsonCollection<DesignSession>(f("design-sessions")),
     quotes: new JsonCollection<Quote>(f("quotes")),
     auditEvents: new JsonCollection<QuoteAuditEvent>(f("audit-events")),
     // ★ 计费去重的数据层兜底

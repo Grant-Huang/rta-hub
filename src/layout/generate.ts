@@ -357,11 +357,22 @@ export function generateLayout(
           const desiredCenter = window
             ? window.offset + window.width / 2
             : (run.features.find((f) => f.kind === "plumbing")?.offset ?? cursor + sink.w / 2);
-          // 夹在本段范围内
-          const sinkX = quantize(Math.max(
-            seg.start,
-            Math.min(desiredCenter - sink.w / 2, seg.start + seg.length - sink.w),
-          ));
+          // 夹在本段范围内 ——**再夹进人体工程可行区间**。
+          //
+          // 「水槽对准窗」是软性偏好（aesthetics 的 symmetry 项），「水槽两侧要留出
+          // 足够的操作台面」是硬性约束（NKBA，见 ergonomics.ts）。窗靠墙角时这两条
+          // 会打架：把水槽推到窗中心就意味着一侧台面为 0。
+          //
+          // 之前只夹了墙段边界，于是生成器会排出一个**它自己随后就会判为不合格**的方案：
+          // 客户看到图，点报价，被 409 拒掉，却没有任何一版能用。硬约束在排布阶段就要
+          // 参与决策，而不是只在事后打分——否则等于用检查器代替设计。
+          const room = seg.length - sink.w;
+          const [lo, hi] = room >= CLEARANCE.sinkLandingPrimary + CLEARANCE.sinkLandingSecondary
+            // 两侧各留够：左侧取 [secondary, room-secondary]，此时较宽一侧必 ≥primary
+            ? [seg.start + CLEARANCE.sinkLandingSecondary, seg.start + room - CLEARANCE.sinkLandingSecondary]
+            // 这面墙本来就摆不下合格的水槽区——不假装能解决，交给检查器如实报出来
+            : [seg.start, seg.start + room];
+          const sinkX = quantize(Math.max(lo, Math.min(desiredCenter - sink.w / 2, hi)));
 
           placements.push({
             kind: "cabinet", layer: "base", wallRunId: run.id,

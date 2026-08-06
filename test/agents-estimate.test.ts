@@ -53,6 +53,36 @@ test("缺失字段识别", () => {
   assert.deepEqual(missingFields(full), []);
 });
 
+test("追问同一批字段的话术会逐轮退让，不会一字不差地重复", async () => {
+  const ctx = { conversationId: "cv", requirements: "", history: [] };
+  const say = async (repeatedAsk: number) =>
+    (await orchestratorReply(undefined, ctx, "想换厨房",
+      { ...optionsFor("consumer"), repeatedAsk })).content;
+
+  const first = await say(0);
+  const second = await say(1);
+  const third = await say(2);
+  const fourth = await say(3);
+
+  assert.equal(new Set([first, second, third, fourth]).size, 4,
+    "连着几轮回同一句话，正是这条规则要治的病");
+  assert.ok(second.includes("下面直接选就行"), "第二次该改用选择题");
+  // 第三次起就别再念字段名了——客户已经在说话了，只是说法对不上关键词表
+  for (const field of ["厨房尺寸", "布局", "风格", "预算", "所在省份"]) {
+    assert.equal(third.includes(field), false, `第三轮不该再点名「${field}」：${third}`);
+    assert.equal(fourth.includes(field), false, `第四轮不该再点名「${field}」：${fourth}`);
+  }
+});
+
+test("布尔形式的 repeatedAsk 仍按「第二次」处理，旧调用方不会退化", async () => {
+  const ctx = { conversationId: "cv", requirements: "", history: [] };
+  const bool = await orchestratorReply(undefined, ctx, "想换厨房",
+    { ...optionsFor("consumer"), repeatedAsk: true });
+  const num = await orchestratorReply(undefined, ctx, "想换厨房",
+    { ...optionsFor("consumer"), repeatedAsk: 1 });
+  assert.equal(bool.content, num.content);
+});
+
 test("贸易账号得到更直给的话术", async () => {
   const consumer = await orchestratorReply(undefined,
     { conversationId: "cv", requirements: "", history: [] }, "开始", optionsFor("consumer"));

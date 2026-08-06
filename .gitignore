@@ -6,3 +6,6 @@ dist/
 *.log
 .DS_Store
 data/
+# 模拟器产出（本地 sim-out/、CI 的 ci-sim-out/）
+sim-out/
+ci-sim-out/

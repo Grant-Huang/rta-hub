@@ -339,10 +339,14 @@ companyId。**租户隔离的前提是先证明你是谁，再按你的身份过
 
 ```bash
 pnpm install
-pnpm typecheck     # 无错
-pnpm test          # 497 passing
+pnpm typecheck     # 无错（含 scripts/）
+pnpm test          # 531 passing
+pnpm simulate out 4  # 端到端冒烟，自带断言，失败退出码非 0
 pnpm dev           # http://localhost:8790
 ```
+
+CI（`.github/workflows/ci.yml`）跑的就是上面前三步。冒烟这一步走真实 HTTP 端点，
+覆盖单测覆盖不到的那一半：模块之间的接线。
 
 试点数据：
 - `Maple Ridge Cabinetry`（31 个型号，面框柜 + 全覆盖门板，别名 `枫岭橱柜`/`Maple Ridge`/`MRC`）
