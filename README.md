@@ -24,8 +24,9 @@
 
 需求与场景是当前阶段的主交付物，开发按这两份文档推进：
 
-- [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) —— 需求说明书 v0.3（架构、数据模型、FR、商业模式）
-- [docs/SCENARIOS.md](./docs/SCENARIOS.md) —— 场景走查 A–H（公司入驻、冷启动、@ 路由、四视图、比价发送、贸易账号、销售信号）
+- [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) —— 需求说明书 v0.4（架构、定价模型、版本化与可追溯、数据模型、FR-1~13、商业模式）
+- [docs/SCENARIOS.md](./docs/SCENARIOS.md) —— 场景走查 A–I（公司入驻、冷启动、@ 路由、四视图、比价发送、贸易账号、销售信号、招商引流）
+- [docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md) —— 公司发现与招商引流的合规路径（爬虫定位、社媒获客、CASL/邮件列表）
 
 ## 运行
 
