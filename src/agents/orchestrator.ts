@@ -11,29 +11,47 @@
  */
 import type { SpecBundle } from "../spec/bundle.js";
 import { stripPriceFields } from "../spec/validation.js";
+import { interactionProfile, type TradeInteractionProfile } from "../trade/interaction.js";
 import type { AgentContext, AgentReply, CompletionClient, DesignIntent } from "./types.js";
 
-const ORCHESTRATOR_SYSTEM = [
-  "你是加拿大厨房橱柜平台的总控助手，帮客户理清装修需求。",
-  "每轮只问 1-2 个最关键的缺失信息，不要一次列一堆问题。需要收集：",
-  "厨房尺寸与布局、风格、材质倾向、预算范围、期望工期、所在省份（省份必填，用于计算税费）。",
-  "",
-  "边界：",
-  "- 你只掌握通用橱柜知识。**不要报出任何具体公司的价格或型号**。",
-  "- 客户想问某家公司的具体产品时，提示他用 @公司名 点名，由那家公司的助手来答。",
-  "- 需要给价格感觉时，只能说「行业典型区间」，且必须说明这不是任何公司的真实报价。",
-].join("\n");
+function orchestratorSystem(profile: TradeInteractionProfile): string {
+  const lines = [
+    "你是加拿大厨房橱柜平台的总控助手，帮客户理清装修需求。",
+    `每轮最多问 ${profile.maxQuestionsPerTurn} 个最关键的缺失信息。需要收集：`,
+    "厨房尺寸与布局、风格、材质倾向、预算范围、期望工期、所在省份（省份必填，用于计算税费）。",
+    "",
+    "边界：",
+    "- 你只掌握通用橱柜知识。**不要报出任何具体公司的价格或型号**。",
+    "- 客户想问某家公司的具体产品时，提示他用 @公司名 点名，由那家公司的助手来答。",
+    "- 需要给价格感觉时，只能说「行业典型区间」，且必须说明这不是任何公司的真实报价。",
+  ];
+  if (!profile.explainJargon) {
+    lines.push(
+      "",
+      "本次对话的客户是专业建商/装修公司账号：",
+      "- 可以直接使用行业术语（SKU、价格组、door style、RTA/assembled 等），不必解释基础概念。",
+    );
+  }
+  if (profile.skipConfirmationPrompts) {
+    lines.push("- 不要反复确认已经说过的信息，缺什么直接问什么。");
+  }
+  return lines.join("\n");
+}
 
-/** 贸易账号的交互更直给——建商懂行业术语，不需要新手引导（FR-11）。 */
-const TRADE_ADDENDUM = [
-  "",
-  "本次对话的客户是专业建商/装修公司账号：",
-  "- 可以直接使用行业术语（SKU、价格组、door style、RTA/assembled 等），不必解释基础概念。",
-  "- 跳过新手引导式提问，一次可以问多个字段。",
-].join("\n");
-
+/**
+ * 交互差异只走 `profile` 一个入口。
+ *
+ * 之前这里直接看 `accountType`，与「贸易资质是否通过审核」是两套判断，
+ * 容易出现「按 consumer 定价却按 trade 说话」的错位。现在两条链路都从
+ * `effectiveAccountType` 派生（见 trade/verification.ts）。
+ */
 export interface OrchestratorOptions {
-  accountType: "consumer" | "trade";
+  profile: TradeInteractionProfile;
+}
+
+/** 只有账号类型、没有 profile 时的便捷入口（测试与脚本用）。 */
+export function optionsFor(accountType: "consumer" | "trade"): OrchestratorOptions {
+  return { profile: interactionProfile(accountType) };
 }
 
 /**
@@ -51,16 +69,15 @@ export async function orchestratorReply(
   const requirements = mergeRequirements(ctx.requirements, userText);
 
   if (!client) {
-    return { content: fallbackPrompt(requirements, opts.accountType), requirements };
+    return { content: fallbackPrompt(requirements, opts.profile), requirements };
   }
 
-  const system = ORCHESTRATOR_SYSTEM + (opts.accountType === "trade" ? TRADE_ADDENDUM : "");
   const content = await client.complete({
-    system,
+    system: orchestratorSystem(opts.profile),
     messages: [...ctx.history, { role: "user", content: userText }],
     temperature: 0.3,
   });
-  return { content: content.trim() || fallbackPrompt(requirements, opts.accountType), requirements };
+  return { content: content.trim() || fallbackPrompt(requirements, opts.profile), requirements };
 }
 
 /** 还缺哪些关键字段——同时用于兜底话术与前端进度提示。 */
@@ -76,15 +93,15 @@ export function missingFields(requirements: string): string[] {
   return checks.filter(([, re]) => !re.test(text)).map(([name]) => name);
 }
 
-function fallbackPrompt(requirements: string, accountType: "consumer" | "trade"): string {
+function fallbackPrompt(requirements: string, profile: TradeInteractionProfile): string {
   const missing = missingFields(requirements);
   if (missing.length === 0) {
     return "需求信息已经比较完整了。你可以 @ 某家公司问具体产品，或者直接让我出一版方案与报价。";
   }
-  if (accountType === "trade") {
-    return `还需要：${missing.join("、")}。一次给全就行。`;
+  const ask = missing.slice(0, profile.maxQuestionsPerTurn);
+  if (!profile.explainJargon) {
+    return `还需要：${ask.join("、")}。一次给全就行。`;
   }
-  const ask = missing.slice(0, 2);
   return `了解了。还想确认${ask.length > 1 ? "两件事" : "一件事"}：${ask.join("；")}？`;
 }
 

@@ -12,6 +12,12 @@ process.env.SMTP_PASS = "";
 
 process.env.ADMIN_TOKEN = "test-admin-token";
 
+// CASL 要求发件人身份完整，缺了就会被发送路径挡下（这是**特性**，见 email/sender.ts）。
+// 生产必须配这几项，测试同样要配，否则测的就不是真实链路。
+process.env.SENDER_NAME = "RTA Hub";
+process.env.SMTP_FROM = "quotes@rta-hub.test";
+process.env.SENDER_PHONE = "+1-800-555-0100";
+
 let app: { fetch: (req: Request) => Response | Promise<Response> };
 
 before(async () => {
@@ -566,4 +572,339 @@ test("别人的户型图读不到", async () => {
   const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
   const r = await req(`/api/floorplans/${floorPlan.id}`, { accountId: "ca_demo_trade" });
   assert.equal(r.status, 404);
+});
+
+// ── MVP-3：方案持久化、PDF、贸易账号、争议裁定台 ──────────────────────────
+
+const TRADE = "ca_demo_trade";
+
+/** 建一个补齐了户型、出过方案的会话，供后面的 PDF / 修订链测试复用。 */
+async function readyProject(accountId: string) {
+  const convRes = await req("/api/conversations", { method: "POST", accountId });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId, body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+  const layoutRes = await req(`/api/floorplans/${floorPlan.id}/layout`, {
+    method: "POST", accountId, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  const layout = await layoutRes.json() as {
+    designLayoutId: string; revisionNo: number; selections: unknown[];
+  };
+  return { conversationId: conversation.id, floorPlanId: floorPlan.id, layout };
+}
+
+test("方案落盘：重算推进修订号，designLayoutId 保持不变", async () => {
+  const { floorPlanId, layout } = await readyProject(CONSUMER);
+  assert.equal(layout.revisionNo, 1);
+
+  const again = await req(`/api/floorplans/${floorPlanId}/layout/regenerate`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ companyId: "co_pilot", wallRunId: "wr_1" }),
+  });
+  assert.equal(again.status, 200, await again.clone().text());
+  const next = await again.json() as { designLayoutId: string; revisionNo: number };
+  // 同一个方案的第 2 版，不是新方案
+  assert.equal(next.designLayoutId, layout.designLayoutId);
+  assert.equal(next.revisionNo, 2);
+});
+
+test("报价引用方案的真实修订号，事后追得回是哪一版", async () => {
+  const { conversationId, layout } = await readyProject(CONSUMER);
+  const quoteRes = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId, doorStyleId: "ds_shaker_white",
+      selections: layout.selections,
+    }),
+  });
+  const { quote } = await quoteRes.json() as {
+    quote: { designLayoutId: string; designRevisionNo: number };
+  };
+  assert.equal(quote.designLayoutId, layout.designLayoutId);
+  assert.equal(quote.designRevisionNo, layout.revisionNo);
+});
+
+test("PDF 报价单：真的是 PDF，且带下载文件名", async () => {
+  const { conversationId, layout } = await readyProject(CONSUMER);
+  const quoteRes = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId, doorStyleId: "ds_shaker_white",
+      selections: layout.selections,
+    }),
+  });
+  const { quote } = await quoteRes.json() as { quote: { id: string } };
+
+  const pdfRes = await req(`/api/quotes/${quote.id}/pdf`, { accountId: CONSUMER });
+  assert.equal(pdfRes.status, 200);
+  assert.equal(pdfRes.headers.get("content-type"), "application/pdf");
+  assert.match(pdfRes.headers.get("content-disposition") ?? "", /attachment; filename=".*\.pdf"/);
+  const buf = Buffer.from(await pdfRes.arrayBuffer());
+  assert.ok(buf.subarray(0, 8).toString("latin1").startsWith("%PDF-1.4"));
+  assert.ok(buf.length > 2000);
+});
+
+test("没有方案的报价不假装能出图纸版 PDF", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const quoteRes = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId: conversation.id, doorStyleId: "ds_shaker_white",
+      selections: [{
+        moduleId: "m_b30", qty: 2, width: 30, height: 34.5, depth: 24,
+        assembly: "RTA", hardwareOptionIds: [], accessoryOptionIds: [],
+      }],
+    }),
+  });
+  const { quote } = await quoteRes.json() as { quote: { id: string } };
+  const r = await req(`/api/quotes/${quote.id}/pdf`, { accountId: CONSUMER });
+  assert.equal(r.status, 409);
+});
+
+test("别人的报价 PDF 下不到", async () => {
+  const { conversationId, layout } = await readyProject(CONSUMER);
+  const quoteRes = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId, doorStyleId: "ds_shaker_white",
+      selections: layout.selections,
+    }),
+  });
+  const { quote } = await quoteRes.json() as { quote: { id: string } };
+  const r = await req(`/api/quotes/${quote.id}/pdf`, { accountId: TRADE });
+  assert.equal(r.status, 404);
+});
+
+test("发送时 PDF 作为附件带上", async () => {
+  const { conversationId, layout } = await readyProject(CONSUMER);
+  const quoteRes = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId, doorStyleId: "ds_shaker_white",
+      selections: layout.selections,
+    }),
+  });
+  const { quote } = await quoteRes.json() as { quote: { id: string } };
+  await req(`/api/quotes/${quote.id}/confirm`, { method: "POST", accountId: CONSUMER });
+  const sendRes = await req(`/api/quotes/${quote.id}/send`, { method: "POST", accountId: CONSUMER });
+  const body = await sendRes.json() as { attachedPdf: boolean; pdfWarnings?: string[] };
+  assert.equal(body.attachedPdf, true);
+  // 中文墙段标签已经换成英文说法，不该再有字符替换告警
+  assert.equal(body.pdfWarnings, undefined);
+});
+
+test("项目列表只含本账号的项目，并给出组合概览", async () => {
+  await readyProject(TRADE);
+  await readyProject(TRADE);
+  const r = await req("/api/me/projects", { accountId: TRADE });
+  assert.equal(r.status, 200);
+  const body = await r.json() as {
+    projects: { conversationId: string; status: string }[];
+    portfolio: { total: number; byStatus: Record<string, number> };
+  };
+  assert.ok(body.projects.length >= 2);
+  assert.equal(body.portfolio.total, body.projects.length);
+
+  const mine = new Set(body.projects.map((p) => p.conversationId));
+  const consumerList = await (await req("/api/me/projects", { accountId: CONSUMER })).json() as {
+    projects: { conversationId: string }[];
+  };
+  for (const p of consumerList.projects) assert.ok(!mine.has(p.conversationId));
+});
+
+test("未核实的贸易账号：按零售价定价，并如实说明原因", async () => {
+  const profileRes = await req("/api/me/profile", { accountId: TRADE });
+  const profile = await profileRes.json() as {
+    accountType: string; effectiveAccountType: string;
+    tradePricing: { allowed: boolean; nextStep: string };
+  };
+  assert.equal(profile.accountType, "trade");
+  assert.equal(profile.effectiveAccountType, "consumer");
+  assert.equal(profile.tradePricing.nextStep, "submitVerification");
+
+  const convRes = await req("/api/conversations", { method: "POST", accountId: TRADE });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const quoteRes = await req("/api/quotes", {
+    method: "POST", accountId: TRADE,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId: conversation.id, doorStyleId: "ds_shaker_white",
+      selections: [{
+        moduleId: "m_b30", qty: 2, width: 30, height: 34.5, depth: 24,
+        assembly: "RTA", hardwareOptionIds: [], accessoryOptionIds: [],
+      }],
+    }),
+  });
+  const body = await quoteRes.json() as {
+    quote: { accountTypeAtQuote: string };
+    tradePricing?: { applied: boolean; reason: string };
+  };
+  // 关键：降级发生在**定价链路**上，不是界面隐藏
+  assert.equal(body.quote.accountTypeAtQuote, "consumer");
+  assert.equal(body.tradePricing?.applied, false);
+  assert.match(body.tradePricing!.reason, /资质核实/);
+});
+
+test("资质核实全流程：提交 → 待审队列 → 通过 → 贸易价生效", async () => {
+  const submit = await req("/api/me/verification", {
+    method: "POST", accountId: TRADE,
+    body: JSON.stringify({ businessNumber: "123456789 RT 0001", legalName: "Riverside Builders Ltd" }),
+  });
+  assert.equal(submit.status, 201, await submit.clone().text());
+
+  const queue = await req("/api/admin/verifications", {
+    headers: { "x-admin-token": "test-admin-token" },
+  });
+  const q = await queue.json() as {
+    verifications: { accountId: string; gstFormatOk: boolean; businessNumber: string }[];
+  };
+  const mine = q.verifications.find((v) => v.accountId === TRADE);
+  assert.ok(mine, "待审队列里应该有这条申请");
+  assert.equal(mine!.gstFormatOk, true);
+
+  const review = await req(`/api/admin/verifications/${TRADE}/review`, {
+    method: "POST", headers: { "x-admin-token": "test-admin-token" },
+    body: JSON.stringify({ approve: true, reviewedBy: "ops" }),
+  });
+  assert.equal(review.status, 200, await review.clone().text());
+
+  const after = await (await req("/api/me/profile", { accountId: TRADE })).json() as {
+    effectiveAccountType: string; interaction: { explainJargon: boolean };
+    tradePricing: { allowed: boolean };
+  };
+  assert.equal(after.effectiveAccountType, "trade");
+  assert.equal(after.tradePricing.allowed, true);
+  // 交互口吻同步切换，不会出现"按贸易价报价却全程新手引导"
+  assert.equal(after.interaction.explainJargon, false);
+});
+
+test("消费者账号提交贸易资质被拒", async () => {
+  const r = await req("/api/me/verification", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ businessNumber: "123456789RT0001", legalName: "X Ltd" }),
+  });
+  assert.equal(r.status, 400);
+});
+
+test("资质审核队列需要管理员令牌", async () => {
+  assert.equal((await req("/api/admin/verifications")).status, 401);
+  assert.equal((await req(`/api/admin/verifications/${TRADE}/review`, { method: "POST" })).status, 401);
+  assert.equal((await req("/api/admin/disputes")).status, 401);
+});
+
+/**
+ * 争议链路需要一次**真的投递成功**的发送——计费、争议窗口、审计证据链
+ * 都挂在这条路径上，dry-run 覆盖不到。用独立的 app 实例 + 桩传输器，
+ * 免得与主实例的 30 天去重窗口互相干扰。
+ */
+test("计费透明度 → 公司提出争议 → 运营带证据裁定（完整争议链路）", async () => {
+  const sentMail: Record<string, unknown>[] = [];
+  const mod = await import("../src/server.js");
+  const app2 = await mod.createApp({
+    ephemeral: true, llm: undefined,
+    mailTransport: { sendMail: async (m) => { sentMail.push(m); return { messageId: "x" }; } },
+  });
+  const req2 = (pathname: string, init: RequestInit & { accountId?: string } = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set("content-type", "application/json");
+    if (init.accountId) headers.set("x-account-id", init.accountId);
+    return app2.fetch(new Request(base + pathname, { ...init, headers }));
+  };
+
+  const convRes = await req2("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const quoteRes = await req2("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId: conversation.id, doorStyleId: "ds_shaker_white",
+      selections: [{
+        moduleId: "m_b30", qty: 4, width: 30, height: 34.5, depth: 24,
+        assembly: "RTA", hardwareOptionIds: [], accessoryOptionIds: [],
+      }],
+    }),
+  });
+  const { quote } = await quoteRes.json() as { quote: { id: string } };
+  await req2(`/api/quotes/${quote.id}/confirm`, { method: "POST", accountId: CONSUMER });
+  const sent = await req2(`/api/quotes/${quote.id}/send`, { method: "POST", accountId: CONSUMER });
+  const sendBody = await sent.json() as {
+    billingEventId: string; billingSuppressed: boolean; dryRun: boolean;
+    quote: { status: string };
+  };
+  assert.equal(sendBody.dryRun, false);
+  assert.equal(sendBody.quote.status, "sent");
+  assert.equal(sendBody.billingSuppressed, false);
+  assert.ok(sendBody.billingEventId, "投递成功必须产生计费事件");
+  assert.equal(sentMail.length, 1);
+
+  const billingEventId = sendBody.billingEventId;
+
+  // ── 公司侧：这条线索是什么、还剩几天能争议 ──
+  const view = await req2("/api/company/co_pilot/billing/disputes");
+  assert.equal(view.status, 200);
+  const viewBody = await view.json() as {
+    events: {
+      event: { id: string }; canDispute: boolean; disputeWindowEndsAt: string;
+      quote?: { id: string; lineCount: number };
+    }[];
+  };
+  const row = viewBody.events.find((e) => e.event.id === billingEventId);
+  assert.ok(row, "应该有这条报价对应的计费事件");
+  assert.equal(row!.canDispute, true);
+  assert.ok(Date.parse(row!.disputeWindowEndsAt) > Date.now());
+  assert.equal(row!.quote?.id, quote.id);
+  assert.ok(row!.quote!.lineCount > 0);
+  // 公司看得到「这条线索是哪份报价」，但摘要里没有客户身份（FR-13 第 3 条）
+  const raw = JSON.stringify(row!.quote);
+  assert.ok(!raw.includes("alex@example.com"));
+  assert.ok(!raw.includes("Alex"));
+
+  // ── 公司提出争议 ──
+  const opened = await req2(`/api/company/co_pilot/billing/${billingEventId}/dispute`, {
+    method: "POST",
+    body: JSON.stringify({ reason: "duplicate", evidence: "同一客户上周问过", openedBy: "company" }),
+  });
+  assert.equal(opened.status, 200, await opened.clone().text());
+
+  // 争议中不能再重复提
+  const after = await (await req2("/api/company/co_pilot/billing/disputes")).json() as {
+    events: { event: { id: string }; canDispute: boolean }[];
+  };
+  assert.equal(after.events.find((e) => e.event.id === billingEventId)!.canDispute, false);
+
+  // ── 运营裁定台：带审计证据链 ──
+  const board = await req2("/api/admin/disputes", { headers: { "x-admin-token": "test-admin-token" } });
+  const body = await board.json() as {
+    disputes: {
+      event: { id: string }; withinWindow: boolean; company: string;
+      evidence: { auditTrail: { action: string; contentHash: string }[]; snapshotIntact: boolean };
+    }[];
+  };
+  const d = body.disputes.find((x) => x.event.id === billingEventId);
+  assert.ok(d, "裁定台应该列出这条未裁定的争议");
+  assert.equal(d!.withinWindow, true);
+  assert.equal(d!.company, "Maple Ridge Cabinetry");
+  // 证据链要含 created / confirmed / sent 三步，且哈希与当前内容一致
+  const actions = d!.evidence.auditTrail.map((a) => a.action);
+  for (const a of ["created", "confirmed", "sent"]) assert.ok(actions.includes(a), `缺少 ${a} 事件`);
+  assert.equal(d!.evidence.snapshotIntact, true);
+
+  // 裁定后离开待办队列
+  const resolved = await req2(`/api/admin/billing/${billingEventId}/resolve`, {
+    method: "POST", headers: { "x-admin-token": "test-admin-token" },
+    body: JSON.stringify({ resolution: "refunded", resolvedBy: "ops" }),
+  });
+  assert.equal(resolved.status, 200, await resolved.clone().text());
+  const board2 = await (await req2("/api/admin/disputes", {
+    headers: { "x-admin-token": "test-admin-token" },
+  })).json() as { disputes: { event: { id: string } }[] };
+  assert.ok(!board2.disputes.some((x) => x.event.id === billingEventId));
 });

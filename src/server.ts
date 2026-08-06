@@ -28,6 +28,7 @@ import {
   buildSendDisclosure, confirm, createQuoteFromLlmOutput, recordSendResult,
 } from "./app/quote-service.js";
 import { openDispute, resolveDispute } from "./billing/lead-events.js";
+import { quoteContentHash } from "./quote/state.js";
 import { layoutFace, toSvg } from "./render/face-grammar.js";
 import { buildFace, BASE_FACE_HEIGHT, matchFaceTemplate, type FaceTemplateId } from "./render/templates.js";
 import {
@@ -55,6 +56,17 @@ import {
   createAppContext, isCompanyActive, pricingContextFor, publishedBundle, renderStyleFor,
   type AppContext,
 } from "./app/context.js";
+import {
+  buildDesignLayout, buildRevision, layoutKey, toGeneratedLayout, toStoredLayout,
+} from "./layout/store.js";
+import { listProjects, summarizePortfolio } from "./trade/projects.js";
+import { interactionProfile } from "./trade/interaction.js";
+import {
+  canSeeTradePricing, effectiveAccountType, looksLikeGstNumber, reviewVerification,
+  submitVerification, VerificationError, type TradeVerification,
+} from "./trade/verification.js";
+import { buildQuotePdf, quoteFilename } from "./pdf/quote-pdf.js";
+import { disputeWindowEndsAt, isWithinDisputeWindow } from "./billing/lead-events.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -65,15 +77,6 @@ type AppVars = { account: CustomerAccount };
 type Ctx = Context<{ Variables: AppVars }>;
 
 let appCtx: AppContext;
-
-/**
- * 户型图与方案的运行时缓存。
- *
- * 它们的体量（解析几何 + SVG）与生命周期都跟报价不同——报价一旦确认就是不可变快照，
- * 而方案在对话里反复重算。MVP-2 先放内存，随持久化一起迁移。
- */
-const floorPlans = new Map<string, FloorPlan>();
-const layouts = new Map<string, GeneratedLayout>();
 
 /** `c.req.param` 在 strict 下返回 string | undefined；路由已保证存在，统一收口。 */
 function param(c: Ctx, name: string): string {
@@ -120,6 +123,76 @@ function ownedConversation(c: Ctx, id: string): Conversation | undefined {
 function ownedQuote(c: Ctx, id: string): Quote | undefined {
   const q = appCtx.repos.quotes.byId(id);
   return q && q.customerAccountId === c.get("account").id ? q : undefined;
+}
+
+// ── 户型图与方案的持久化访问（MVP-3：从内存 Map 迁到仓储）─────────────────
+
+/** 某个会话当前在用的户型图。一个会话一张——多张的场景留给 trade 的多项目。 */
+function planForConversation(conversationId: string): FloorPlan | undefined {
+  return appCtx.repos.floorPlans.find((p) => p.conversationId === conversationId);
+}
+
+function storedLayoutFor(floorPlanId: string, companyId: string): GeneratedLayout | undefined {
+  const stored = appCtx.repos.storedLayouts.byId(layoutKey(floorPlanId, companyId));
+  return stored ? toGeneratedLayout(stored) : undefined;
+}
+
+/**
+ * 落盘一次排布结果。
+ *
+ * 三张表一起写，语义各不相同：
+ *   - `StoredLayout`  当前工作态，同一 (户型, 公司) 只有一条，覆盖更新；
+ *   - `DesignLayout`  方案标识，承载 specVersionId——报价引用的就是它；
+ *   - `DesignRevision` 修订链，**只追加不覆盖**（§3.6），事后能回答
+ *     「当时发出去的是哪一版」。
+ */
+async function persistLayout(input: {
+  plan: FloorPlan;
+  companyId: string;
+  layout: GeneratedLayout;
+  triggeredBy: "auto" | "customerRequest";
+  changeSummary: string;
+}): Promise<{ designLayoutId: string; revisionNo: number }> {
+  const { plan, companyId, layout } = input;
+  const at = now();
+  const key = layoutKey(plan.id, companyId);
+  const existing = appCtx.repos.storedLayouts.byId(key);
+
+  const company = appCtx.repos.companies.byId(companyId);
+  const specVersionId = company?.currentPublishedSpecVersionId ?? "";
+  const designLayoutId = existing?.designLayoutId ?? `dl_${randomUUID().slice(0, 8)}`;
+  const revisionNo = (existing?.currentRevisionNo ?? 0) + 1;
+
+  await appCtx.repos.designLayouts.upsert(buildDesignLayout({
+    id: designLayoutId,
+    companyId,
+    conversationId: plan.conversationId,
+    specVersionId,
+    floorPlanId: plan.id,
+    revisionNo,
+  }));
+  await appCtx.repos.designRevisions.insert(buildRevision({
+    designLayoutId, revisionNo, layout,
+    triggeredBy: input.triggeredBy,
+    changeSummary: input.changeSummary,
+    at,
+  }));
+  await appCtx.repos.storedLayouts.upsert(toStoredLayout({
+    floorPlanId: plan.id,
+    companyId,
+    conversationId: plan.conversationId,
+    designLayoutId,
+    revisionNo,
+    layout,
+    at,
+    ...(existing ? { createdAt: existing.createdAt } : {}),
+  }));
+
+  return { designLayoutId, revisionNo };
+}
+
+function verificationFor(accountId: string): TradeVerification | undefined {
+  return appCtx.repos.tradeVerifications.byId(accountId);
 }
 
 // ── 基础 ──────────────────────────────────────────────────────────────────
@@ -219,9 +292,12 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
 
   let designRequirements = conv.designRequirements;
   if (mentions.length === 0) {
+    // 交互口吻按**生效**账号类型走：资质没过审的 trade 账号按 consumer 定价，
+    // 说话方式也应该一致，否则会出现"按零售价报价却全程行话"的错位
+    const effective = effectiveAccountType(account, verificationFor(account.id));
     const reply = await orchestratorReply(appCtx.llm,
       { conversationId: conv.id, requirements: conv.designRequirements, history: conv.messages.map(toHistory) },
-      text, { accountType: account.accountType });
+      text, { profile: interactionProfile(effective) });
     designRequirements = reply.requirements ?? designRequirements;
     replies.push({ role: "assistant", content: reply.content, at });
   } else {
@@ -258,7 +334,7 @@ app.post("/api/conversations/:id/estimate", requireAccount, async (c) => {
   if (!conv) return c.json({ error: "会话不存在" }, 404);
 
   // 有户型图就出**含四视图**的版本（MVP-2，场景 B 第 4 点）；否则退回纯文本版
-  const plan = [...floorPlans.values()].find((p) => p.conversationId === conv.id && isLayoutReady(p));
+  const plan = appCtx.repos.floorPlans.find((p) => p.conversationId === conv.id && isLayoutReady(p));
 
   if (plan) {
     const illustrated = buildIllustratedEstimate(appCtx.catalog, plan.parsedGeometry, {
@@ -305,22 +381,30 @@ app.post("/api/quotes", requireAccount, async (c) => {
 
   // 方案违反人体工程硬约束时不允许出报价——那不是"便宜一点"的取舍，
   // 是灶台旁没处放热锅、洗碗机离水槽太远这类不该发给客户的方案（FR-4）
-  const activePlan = [...floorPlans.values()].find((p) => p.conversationId === conv.id);
-  const activeLayout = activePlan ? layouts.get(`${activePlan.id}|${company.id}`) : undefined;
-  if (activeLayout && !activeLayout.acceptable) {
+  const activePlan = planForConversation(conv.id);
+  const stored = activePlan
+    ? appCtx.repos.storedLayouts.byId(layoutKey(activePlan.id, company.id))
+    : undefined;
+  if (stored && !stored.acceptable) {
     return c.json({
       error: "当前方案未通过人体工程检查，请先调整",
-      ergonomics: activeLayout.ergonomics.filter((v) => v.severity === "blocking"),
+      ergonomics: stored.ergonomics.filter((v) => v.severity === "blocking"),
     }, 409);
   }
 
+  // 贸易价的两道门槛（资质核实 + 订阅）在**定价链路**上生效，不只是界面隐藏：
+  // 没过门槛的 trade 账号按 consumer 定价（开放问题 7）
+  const gate = canSeeTradePricing(account, verificationFor(account.id));
+  const accountType = effectiveAccountType(account, verificationFor(account.id));
+
   const result = createQuoteFromLlmOutput(new TenantScope(company.id), pricing, body.selections, {
     quoteId: `q_${randomUUID().slice(0, 8)}`,
-    designLayoutId: body.designLayoutId ?? `dl_${randomUUID().slice(0, 8)}`,
-    designRevisionNo: 1,
+    // 有方案就引用方案的真实修订号，报价才追得回"当时用的是哪一版"（§3.6）
+    designLayoutId: body.designLayoutId ?? stored?.designLayoutId ?? `dl_${randomUUID().slice(0, 8)}`,
+    designRevisionNo: stored?.currentRevisionNo ?? 1,
     conversationId: conv.id,
     customerAccountId: account.id,
-    accountType: account.accountType,
+    accountType,
     province: account.province,
     doorStyleId: body.doorStyleId,
     at: now(),
@@ -330,7 +414,14 @@ app.post("/api/quotes", requireAccount, async (c) => {
   if (!result.ok) return c.json({ error: "报价校验未通过，已拒绝生成", issues: result.issues }, 422);
 
   await appCtx.repos.quotes.insert(result.quote);
-  return c.json({ quote: result.quote, formattedTotal: format(result.quote.total) }, 201);
+  return c.json({
+    quote: result.quote,
+    formattedTotal: format(result.quote.total),
+    // trade 账号被降级定价时如实说明原因，不静默按零售价出单
+    ...(account.accountType === "trade" && !gate.allowed
+      ? { tradePricing: { applied: false, reason: gate.reason, nextStep: gate.nextStep } }
+      : {}),
+  }, 201);
 });
 
 app.get("/api/quotes/:id", requireAccount, (c) => {
@@ -381,9 +472,10 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
   const sender = resolveSenderIdentity();
 
   // 有方案就发 HTML 版（CID 内嵌四视图 + 表格 + 纯文本兜底 + 附件兜底，FR-7）
-  const plan = [...floorPlans.values()].find((p) => p.conversationId === q.conversationId);
-  const layout = plan ? layouts.get(`${plan.id}|${q.companyId}`) : undefined;
+  const plan = planForConversation(q.conversationId);
+  const layout = plan ? storedLayoutFor(plan.id, q.companyId) : undefined;
   const bundle = publishedBundle(appCtx, q.companyId);
+  const pdf = plan && layout ? renderQuotePdf(q, plan, layout, account) : undefined;
 
   const outbound = plan && layout && bundle
     ? (() => {
@@ -398,7 +490,20 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
         });
         return {
           kind: "lead" as const, to: company?.quoteEmail ?? "",
-          subject: html.subject, text: html.text, html: html.html, attachments: html.attachments,
+          subject: html.subject, text: html.text, html: html.html,
+          // 正式报价单 PDF 作为**纯附件**（无 cid），与内嵌视图并列：
+          // 收件人转发给采购时，附件才是那份能存档、能打印的东西（FR-7）
+          attachments: [
+            ...html.attachments,
+            ...(pdf
+              ? [{
+                  filename: quoteFilename(q),
+                  contentType: "application/pdf",
+                  content: pdf.pdf.toString("base64"),
+                  encoding: "base64" as const,
+                }]
+              : []),
+          ],
         };
       })()
     : (() => {
@@ -413,7 +518,10 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
         return { ...plainEmail, to: company?.quoteEmail ?? "" };
       })();
 
-  const sendResult = await sendEmail(outbound, { sender });
+  const sendResult = await sendEmail(outbound, {
+    sender,
+    ...(appCtx.mailTransport ? { transport: appCtx.mailTransport } : {}),
+  });
   const at = now();
   const outcome = recordSendResult(
     q, appCtx.repos.billingEvents.all(),
@@ -432,6 +540,32 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
     dryRun: sendResult.dryRun,
     billingSuppressed: outcome.billingSuppressed,
     billingEventId: outcome.billingEvent?.id,
+    attachedPdf: Boolean(pdf),
+    // 字符替换等提示不吞掉——公司名里有中文时收件人要知道 PDF 上写的是什么
+    ...(pdf?.warnings.length ? { pdfWarnings: pdf.warnings } : {}),
+  });
+});
+
+/**
+ * 下载正式报价单 PDF。
+ *
+ * 与邮件里的附件是**同一份**（同一个 `buildQuotePdf` 调用路径），
+ * 避免出现「客户看到的」和「公司收到的」不一致。
+ */
+app.get("/api/quotes/:id/pdf", requireAccount, (c) => {
+  const account = c.get("account");
+  const q = ownedQuote(c, param(c, "id"));
+  if (!q) return c.json({ error: "报价不存在" }, 404);
+
+  const plan = planForConversation(q.conversationId);
+  const layout = plan ? storedLayoutFor(plan.id, q.companyId) : undefined;
+  if (!plan || !layout) return c.json({ error: "该报价没有关联的方案，无法生成图纸版报价单" }, 409);
+
+  const result = renderQuotePdf(q, plan, layout, account);
+  return c.body(new Uint8Array(result.pdf), 200, {
+    "content-type": "application/pdf",
+    "content-disposition": `attachment; filename="${quoteFilename(q)}"`,
+    ...(result.warnings.length ? { "x-pdf-warnings": String(result.warnings.length) } : {}),
   });
 });
 
@@ -461,7 +595,7 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     body.image,
     appCtx.vision,
   );
-  floorPlans.set(plan.id, plan);
+  await appCtx.repos.floorPlans.upsert(plan);
   return c.json({
     floorPlan: plan,
     ready: isLayoutReady(plan),
@@ -497,7 +631,7 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
   }
 
-  floorPlans.set(next.id, next);
+  await appCtx.repos.floorPlans.upsert(next);
   return c.json({ floorPlan: next, ready: isLayoutReady(next), questions: pendingQuestions(next) });
 });
 
@@ -522,11 +656,16 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
   });
-  const key = `${plan.id}|${company.id}`;
-  layouts.set(key, layout);
+  const { designLayoutId, revisionNo } = await persistLayout({
+    plan, companyId: company.id, layout,
+    triggeredBy: "auto",
+    changeSummary: "按户型自动生成初版方案",
+  });
 
   return c.json({
-    layoutKey: key,
+    layoutKey: layoutKey(plan.id, company.id),
+    designLayoutId,
+    revisionNo,
     warnings: layout.warnings,
     moduleCounts: layout.moduleCounts,
     // 人体工程硬约束与美观评分（FR-4）
@@ -544,26 +683,32 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
   const plan = ownedFloorPlan(c, param(c, "id"));
   if (!plan) return c.json({ error: "户型图不存在" }, 404);
   const body = await jsonBody<{ companyId: string; wallRunId: string }>(c);
-  const key = `${plan.id}|${body.companyId ?? ""}`;
-  const current = layouts.get(key);
+  const companyId = body.companyId ?? "";
+  const current = storedLayoutFor(plan.id, companyId);
   if (!current) return c.json({ error: "还没有生成过方案" }, 404);
-  const bundle = body.companyId ? publishedBundle(appCtx, body.companyId) : undefined;
+  const bundle = companyId ? publishedBundle(appCtx, companyId) : undefined;
   if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
 
   const next = regenerateRun(current, plan.parsedGeometry, bundle.modules, body.wallRunId ?? "", {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
   });
-  layouts.set(key, next);
+  const { designLayoutId, revisionNo } = await persistLayout({
+    plan, companyId, layout: next,
+    triggeredBy: "customerRequest",
+    changeSummary: `客户要求重排 ${body.wallRunId ?? ""} 段`,
+  });
   return c.json({
-    layoutKey: key,
+    layoutKey: layoutKey(plan.id, companyId),
+    designLayoutId,
+    revisionNo,
     warnings: next.warnings,
     moduleCounts: next.moduleCounts,
     ergonomics: next.ergonomics,
     aesthetics: next.aesthetics,
     acceptable: next.acceptable,
     selections: toSelections(next),
-    views: viewsFor(plan, next, body.companyId ?? ""),
+    views: viewsFor(plan, next, companyId),
   });
 });
 
@@ -755,10 +900,178 @@ app.post("/api/me/delete", requireAccount, async (c) => {
   return c.json({ outcome });
 });
 
+// ── 贸易账号：多项目管理（FR-11、场景 F）───────────────────────────────────
+
+/**
+ * 项目列表。
+ *
+ * 消费者账号也能调——建商与消费者的差别是"同时手上有几单"，
+ * 不是"有没有项目"这个概念。给消费者返回的通常就一条。
+ */
+app.get("/api/me/projects", requireAccount, (c) => {
+  const account = c.get("account");
+  const projects = listProjects({
+    account,
+    conversations: appCtx.repos.conversations.all(),
+    quotes: appCtx.repos.quotes.all(),
+    at: now(),
+  });
+  return c.json({
+    projects,
+    portfolio: summarizePortfolio(projects, appCtx.repos.quotes.all()),
+    portfolioFormatted: format(summarizePortfolio(projects, appCtx.repos.quotes.all()).sentValue),
+  });
+});
+
+/** 当前账号的交互模式与贸易价门槛状态——前端据此决定引导到哪一步。 */
+app.get("/api/me/profile", requireAccount, (c) => {
+  const account = c.get("account");
+  const verification = verificationFor(account.id);
+  const gate = canSeeTradePricing(account, verification);
+  const effective = effectiveAccountType(account, verification);
+  return c.json({
+    accountType: account.accountType,
+    /** 定价实际按哪种账号走——与 accountType 可能不同，如实告知。 */
+    effectiveAccountType: effective,
+    interaction: interactionProfile(effective),
+    tradePricing: gate,
+    verification: verification
+      ? { status: verification.status, submittedAt: verification.submittedAt,
+          reviewedAt: verification.reviewedAt, rejectionReason: verification.rejectionReason }
+      : { status: "unverified" as const },
+  });
+});
+
+/** 提交贸易资质。只收编号与注册名，不收证件影像（PIPEDA 最小化）。 */
+app.post("/api/me/verification", requireAccount, async (c) => {
+  const account = c.get("account");
+  if (account.accountType !== "trade") {
+    return c.json({ error: "只有贸易账号需要提交资质" }, 400);
+  }
+  const body = await jsonBody<{ businessNumber: string; legalName: string }>(c);
+  try {
+    const next = submitVerification(verificationFor(account.id), {
+      accountId: account.id,
+      businessNumber: body.businessNumber ?? "",
+      legalName: body.legalName ?? "",
+      at: now(),
+    });
+    await appCtx.repos.tradeVerifications.upsert(next);
+    return c.json({ verification: { status: next.status, submittedAt: next.submittedAt } }, 201);
+  } catch (e) {
+    if (e instanceof VerificationError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+});
+
+/** 运营侧：待审队列。 */
+app.get("/api/admin/verifications", requireAdmin, (c) => {
+  const pending = appCtx.repos.tradeVerifications.filter((v) => v.status === "pending");
+  return c.json({
+    verifications: pending.map((v) => {
+      const account = appCtx.repos.accounts.byId(v.accountId);
+      return {
+        ...v,
+        accountEmail: account?.email,
+        accountProvince: account?.province,
+        // 号码格式对得上时给个提示，减少人工比对量
+        gstFormatOk: v.businessNumber ? looksLikeGstNumber(v.businessNumber) : false,
+      };
+    }),
+  });
+});
+
+app.post("/api/admin/verifications/:accountId/review", requireAdmin, async (c) => {
+  const current = appCtx.repos.tradeVerifications.byId(param(c, "accountId"));
+  if (!current) return c.json({ error: "资质申请不存在" }, 404);
+  const body = await jsonBody<{ approve: boolean; reviewedBy: string; reason: string }>(c);
+  try {
+    const next = reviewVerification(current, {
+      approve: body.approve === true,
+      reviewedBy: body.reviewedBy ?? "ops",
+      ...(body.reason ? { reason: body.reason } : {}),
+      at: now(),
+    });
+    await appCtx.repos.tradeVerifications.update(next.id, next);
+    return c.json({ verification: next });
+  } catch (e) {
+    if (e instanceof VerificationError) return c.json({ error: e.message }, 409);
+    throw e;
+  }
+});
+
+// ── 计费争议：公司侧透明度与运营侧裁定（FR-7、8.1）────────────────────────
+
+/**
+ * 公司侧的争议视图。
+ *
+ * 与 `/api/company/:id/billing` 的区别：这里补上**争议窗口还剩几天**与
+ * 每条计费对应的报价摘要——公司要判断"这条线索是不是真的"，
+ * 光有一个 id 和金额是判断不了的。
+ */
+app.get("/api/company/:companyId/billing/disputes", (c) => {
+  const companyId = param(c, "companyId");
+  const scope = new TenantScope(companyId);
+  const at = now();
+  return c.json({
+    events: scope.filter(appCtx.repos.billingEvents.all()).map((e) => {
+      const q = appCtx.repos.quotes.byId(e.quoteId);
+      return {
+        event: e,
+        feeFormatted: format(e.feeAmount),
+        disputeWindowEndsAt: disputeWindowEndsAt(e),
+        canDispute: e.dispute === undefined && isWithinDisputeWindow(e, at),
+        // 只给公司自己那份报价的摘要，不含客户身份（FR-13 第 3 条）
+        quote: q
+          ? { id: q.id, sentAt: e.sentAt, lineCount: q.lineItems.length, total: format(q.total) }
+          : undefined,
+      };
+    }),
+  });
+});
+
+/**
+ * 运营侧的争议裁定台。
+ *
+ * 裁定要有依据，所以这里把**审计事件链**一并给出——每条事件带当时的内容哈希，
+ * 能证明"发出去的确实是这一版报价"（§3.6）。运营不该凭公司一面之词裁定。
+ */
+app.get("/api/admin/disputes", requireAdmin, (c) => {
+  // 未裁定 = 有 dispute 且还没写 resolution
+  const open = appCtx.repos.billingEvents.filter(
+    (e) => e.dispute !== undefined && e.dispute.resolution === undefined);
+  return c.json({
+    disputes: open.map((e) => {
+      const q = appCtx.repos.quotes.byId(e.quoteId);
+      const events = appCtx.repos.auditEvents.filter((a) => a.quoteId === e.quoteId);
+      return {
+        event: e,
+        feeFormatted: format(e.feeAmount),
+        company: appCtx.repos.companies.byId(e.companyId)?.name ?? e.companyId,
+        withinWindow: isWithinDisputeWindow(e, e.dispute!.openedAt),
+        evidence: {
+          auditTrail: events.map((a) => ({
+            at: a.at, actor: a.actor, action: a.action, contentHash: a.contentHash,
+            details: a.details,
+          })),
+          // 报价内容与「发送时刻记录的哈希」是否仍然一致——事后被改过就查得出来。
+          // 注意这里比的是内容哈希，不是拿当前规格复算：公司发布了新版本
+          // 本来就会算出不同的价，那不是篡改。
+          snapshotIntact: q
+            ? events.filter((a) => a.action === "sent")
+                .every((a) => a.contentHash === quoteContentHash(q))
+            : undefined,
+          quoteStatus: q?.status,
+        },
+      };
+    }),
+  });
+});
+
 // ── 辅助 ──────────────────────────────────────────────────────────────────
 
 function ownedFloorPlan(c: Ctx, id: string): FloorPlan | undefined {
-  const plan = floorPlans.get(id);
+  const plan = appCtx.repos.floorPlans.byId(id);
   if (!plan) return undefined;
   const conv = appCtx.repos.conversations.byId(plan.conversationId);
   return conv && conv.customerAccountId === c.get("account").id ? plan : undefined;
@@ -778,6 +1091,34 @@ function viewsFor(plan: FloorPlan, layout: GeneratedLayout, companyId: string) {
 
 function toHistory(m: ChatMessage): { role: "user" | "assistant"; content: string } {
   return { role: m.role, content: m.content };
+}
+
+/** 组装 PDF 报价单的输入。邮件附件与下载端点共用，保证两边是同一份。 */
+function renderQuotePdf(
+  q: Quote, plan: FloorPlan, layout: GeneratedLayout, account: CustomerAccount,
+) {
+  const company = appCtx.repos.companies.byId(q.companyId);
+  const bundle = publishedBundle(appCtx, q.companyId);
+  const sender = resolveSenderIdentity();
+  const style = renderStyleFor(appCtx, q.companyId);
+  const doorStyle = bundle?.doorStyles.find((d) => d.id === q.doorStyleId);
+
+  return buildQuotePdf({
+    quote: q,
+    companyName: company?.name ?? q.companyId,
+    customerName: account.displayName,
+    customerEmail: account.email,
+    province: q.province,
+    doorStyleName: doorStyle?.name ?? q.doorStyleId,
+    runs: plan.parsedGeometry.wallRuns.map((run) => ({
+      run,
+      placements: layout.placements.filter((p) => p.wallRunId === run.id),
+    })),
+    senderName: sender.name,
+    ...(sender.contact ? { senderContact: sender.contact } : {}),
+    construction: style.construction,
+    overlay: style.overlay,
+  });
 }
 
 /** 报价单的纯文本呈现（HTML 内嵌四视图版本属 MVP-2）。 */
