@@ -1,5 +1,11 @@
 # 上线前检查清单（Pre-Launch Checklist）
 
+> **阻断项已经搬进代码。** 这份清单里最危险的六项（A1/A2、A4、A6、B6、E1、G4）
+> 现在有对应的启动闸门：`NODE_ENV=production` 且未核实时**服务拒绝启动**。
+> 逐项台账（当前取值、错了会怎样、怎么核、核实历史）见
+> [LAUNCH_BLOCKERS.md](./LAUNCH_BLOCKERS.md)，用 `pnpm gates` 随时查状态。
+
+
 本清单收集**需求文档里"先按假设写下、上线前必须重新核实"的事项**，以及安全/合规/正确性上不能
 靠"应该没问题"过关的项。配套 [REQUIREMENTS.md](./REQUIREMENTS.md) v0.4。
 

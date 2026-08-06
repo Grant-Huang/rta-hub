@@ -258,6 +258,26 @@ effectiveAccountType(account, verification)  // 未过门槛的 trade → "consu
 3. **储物偏好进的是排布算法**（`LayoutOptions.drawerBias`），不是记下来展示。选"尽量多做抽屉"
    会改变装箱候选的 `preference` 项：144" 的墙从 `B36×4` 变成 `3DB24 + 3DB30×4`。
 
+### 5.7 上线闸门、图纸解释、LLM 分层
+
+三块相对独立的补强：
+
+**上线闸门**（`src/app/launch-gates.ts` + `docs/LAUNCH_BLOCKERS.md`）——
+把「上线前必须核实的事」从文档搬进代码。判断哪些阻断启动的标准是**「错了会不会
+安静地产出错误的对外结果」**：税率、NKBA 净空、鉴权、线索费率会 → 阻断；
+`GenericCatalog`（代码已如实降级标注）、留存 cron（不产出错误结果）→ 只告警。
+声明用**核实日期**而非 `true`，过了复核周期自动变回待办。
+
+**图纸解释**（`src/render/explain.ts`）—— 四视图对客户是陌生的表达形式，
+没有解释他只能说「感觉怪怪的」，说不出哪里怪，修改意见就无从提起。
+一条硬规则：**解释必须来自实际算出来的结果**。有个真实的 bug 是测试抓出来的——
+`renderRationaleText` 给条目做了 markdown 剥离却漏了 headline，纯文本里漏出 `**`。
+
+**LLM 分层**（`src/agents/model-tiers.ts` + `docs/LLM_ARCHITECTURE.md`）——
+轻量/主力/视觉三层。两个关键决定：视觉层**不回退**到文本模型（看不了图就是看不了，
+回退过去只会得到瞎猜的尺寸）；升级判断**确定性条件优先于模型自述**
+（模型判断力不足时恰恰最需要升级，这是个自指陷阱），兜底是连续 3 轮没进展强制升级。
+
 ### 5.5 下一轮候选
 
 1. **NKBA 净空数值核实**（阻断项）。
@@ -300,7 +320,7 @@ effectiveAccountType(account, verification)  // 未过门槛的 trade → "consu
 ```bash
 pnpm install
 pnpm typecheck     # 无错
-pnpm test          # 428 passing
+pnpm test          # 468 passing
 pnpm dev           # http://localhost:8790
 ```
 

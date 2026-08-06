@@ -15,6 +15,7 @@ import type { CompletionClient } from "../agents/types.js";
 import type { VisionExtractor } from "../floorplan/parse.js";
 import type { CabinetCompany, GenericCatalog, TaxRule } from "../domain/types.js";
 import { deriveCompanyStatus } from "../spec/version.js";
+import { genericCatalogVerified } from "./launch-gates.js";
 import type { PricingContext } from "../pricing/engine.js";
 import * as seed from "./seed.js";
 import * as second from "./seed-second.js";
@@ -63,8 +64,8 @@ export async function createAppContext(opts: CreateContextOptions = {}): Promise
     llm: opts.llm !== undefined ? opts.llm : createLlmClient(),
     vision: opts.vision,
     mailTransport: opts.mailTransport,
-    // 来源尚未定案（开放问题 5），预估文案必须如实标注为占位数据
-    catalogSourceVerified: process.env.GENERIC_CATALOG_VERIFIED === "true",
+    // 来源尚未定案（开放问题 5 / 闸门 A4），预估文案必须如实标注为占位数据
+    catalogSourceVerified: genericCatalogVerified(),
     termsVersion: process.env.TERMS_VERSION || "2026-01",
     baseUrl: process.env.BASE_URL || `http://localhost:${process.env.PORT || 8790}`,
   };
