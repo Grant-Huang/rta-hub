@@ -16,6 +16,10 @@ import {
   formatInches, renderFourViews, renderFrontElevation, renderSideView, renderTopView,
 } from "../src/render/views.js";
 import { pilotModules } from "../src/app/seed.js";
+import { applianceFrom, type ApplianceKind } from "../src/floorplan/appliances.js";
+
+/** 测试里造一台家电：不给宽度就走常见尺寸（标为推定值）。 */
+const appl = (kind: ApplianceKind) => applianceFrom({ kind });
 
 const AT = "2026-06-01T00:00:00.000Z";
 
@@ -225,9 +229,14 @@ test("按天花板高度选吊柜高度档位", () => {
   assert.equal(pickWallCabinetHeight(undefined, [30, 36, 42]), 30);
 });
 
+/** 已落位的灶具——落位本身由 planAppliances 负责，这里只测切段。 */
+const placedRange = (x: number, width = 30) => ({
+  spec: appl("range"), wallRunId: run.id, x, width,
+  layer: "base" as const, reason: "测试固定落位",
+});
+
 test("门洞与家电位把墙切成可用子段", () => {
-  const { segments, reserved } = splitIntoSegments(run, ["range"]);
-  // 燃气位置留了 30" 灶具净空
+  const { segments, reserved } = splitIntoSegments(run, [placedRange(60)]);
   const range = reserved.find((r) => r.kind === "range");
   assert.ok(range);
   assert.equal(range.width, 30);
@@ -236,7 +245,7 @@ test("门洞与家电位把墙切成可用子段", () => {
 });
 
 test("上下水所在子段被标记为必须放水槽柜", () => {
-  const { segments } = splitIntoSegments(run, ["range"]);
+  const { segments } = splitIntoSegments(run, [placedRange(60)]);
   assert.ok(segments.some((s) => s.requiresSink));
 });
 
@@ -320,7 +329,7 @@ test("放不下的家电给出警告", () => {
     wallRuns: [{ ...run, length: 24, features: [{ id: "f", kind: "electrical", offset: 12, width: 0 }] }],
     confidence: 1,
   };
-  const layout = generateLayout(tiny, pilotModules, { appliances: ["refrigerator"] });
+  const layout = generateLayout(tiny, pilotModules, { appliances: [appl("refrigerator")] });
   assert.ok(layout.warnings.some((w) => w.code === "APPLIANCE_NO_ROOM"));
 });
 

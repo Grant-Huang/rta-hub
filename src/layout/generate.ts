@@ -26,14 +26,40 @@ import {
 } from "./ergonomics.js";
 import { compareCandidates, scoreAesthetics, type AestheticScore } from "./aesthetics.js";
 import { capabilitiesFor, hasRole } from "../spec/capabilities.js";
+import { planAppliances, type AppliancePlan, type PlacedAppliance } from "./appliance-plan.js";
+import {
+  APPLIANCE_LABEL, applianceFrom, reservedWidth,
+  type ApplianceKind, type ApplianceSpec,
+} from "../floorplan/appliances.js";
 
-/** 北美标准家电净空（规范文档第七节）。 */
+/**
+ * 北美标准家电净空（规范文档第七节）。
+ *
+ * ⚠️ 这些**只是**洗碗机这类"由排布过程带着走、客户没单独声明"的家电的兜底宽度。
+ * 客户声明过的家电一律按 `ApplianceSpec` 的实际尺寸 + 通风间隙留空
+ * （`reservedWidth`）——写死常数会让 33" 的冰箱浪费 3"、36" 的对开门装不进去。
+ */
 export const APPLIANCE_CLEARANCE = {
   refrigerator: 36,
   range: 30,
   dishwasher: 24,
-  /** 洗碗机通常紧邻水槽。 */
 } as const;
+
+/**
+ * 没有家电信息时的兜底。
+ *
+ * 一律标 `provenance: "assumed"`，好让下游如实告诉客户「这是按常见尺寸猜的」
+ * （FR-3.2）。以前这里是两个字符串，猜了也不留痕。
+ */
+const DEFAULT_APPLIANCES: readonly ApplianceSpec[] = [
+  applianceFrom({ kind: "refrigerator" }),
+  applianceFrom({ kind: "range" }),
+];
+
+/** 宽度写成可读的样子，用于图上的家电标签。 */
+function formatWidth(inches: number): string {
+  return Number.isInteger(inches) ? `${inches}"` : `${inches}"`;
+}
 
 /** 建筑高度基线（规范文档第一节，已核实自洽）。 */
 export const HEIGHTS = {
@@ -69,7 +95,12 @@ export interface Placement {
    */
   faceTemplateId?: string;
   /** appliance 时标注是什么家电。 */
-  applianceKind?: keyof typeof APPLIANCE_CLEARANCE;
+  applianceKind?: ApplianceKind;
+  /**
+   * 家电的原始规格。渲染与解释都要读它——尤其是 `provenance`：
+   * 「冰箱位 33"」与「冰箱位 33"（推定）」对客户是两句话。
+   */
+  applianceSpec?: ApplianceSpec;
   label?: string;
 }
 
@@ -97,8 +128,21 @@ export interface LayoutOptions {
   ceilingHeight?: number;
   /** 是否生成吊柜层。 */
   includeWall?: boolean;
-  /** 需要留的家电位。 */
-  appliances?: (keyof typeof APPLIANCE_CLEARANCE)[];
+  /**
+   * 这个厨房里的家电（来自 `FloorPlan.appliances`）。
+   *
+   * 不传就用 `DEFAULT_APPLIANCES`（冰箱 + 灶具，标为推定值）。
+   */
+  appliances?: readonly ApplianceSpec[];
+  /**
+   * 预先算好的家电落位。
+   *
+   * `regenerateRun` 必须传：它只把**一段墙**交给 `generateLayout`，而家电落位
+   * 是**全局**决定的（冰箱可能在另一段墙上）。不传的话，重排一段墙会让家电
+   * 整体重新分配——"局部重算"就变成了"全局重排"，而且客户看不出来为什么
+   * 另一面墙的冰箱不见了。
+   */
+  appliancePlan?: AppliancePlan;
   /** 关闭人体工程硬约束（仅用于调试/对比，正常路径不应关）。 */
   skipErgonomics?: boolean;
   /**
@@ -132,23 +176,51 @@ interface Segment {
   length: number;
   /** 该段是否必须放水槽柜。 */
   requiresSink: boolean;
-  /** 该段起点/终点是否靠墙（决定填缝条放哪边）。 */
+  /** 该段起点/终点是否就是整面墙的两头。 */
   atRunStart: boolean;
   atRunEnd: boolean;
+  /**
+   * 这一头能不能放填缝条。
+   *
+   * 原来的规则是「填缝条只放墙角」，理由是夹在柜子中间会打断门缝节奏。
+   * 但**紧挨家电的那一头也是合法的填缝位**：那里的门缝节奏本来就被家电打断了，
+   * 再多一条 1" 的填缝条不会更难看。
+   *
+   * 不放开这一条的话，夹在冰箱与灶台之间的那段墙**一条填缝条都放不了**——
+   * 装箱剩下的 1" 就成了一个真实的缝，台面连续性被打断，随后人体工程检查
+   * 会判「灶具左侧落台区 0"」。方案被自己的检查器否掉，而根因在几十行之外。
+   */
+  fillerAtStart: boolean;
+  fillerAtEnd: boolean;
+}
+
+export type ReservedKind = ApplianceKind | "door" | "obstruction";
+
+export interface ReservedSpan {
+  x: number;
+  width: number;
+  kind: ReservedKind;
+  /** 家电时带上原始规格——下游要读 provenance 与实际宽度。 */
+  spec?: ApplianceSpec;
+  label?: string;
 }
 
 /**
  * 把一段墙按「家电留空 + 门洞 + 障碍」切成若干可放柜子的子段。
  *
  * 上下水（plumbing）不占空间，但会把它所在的子段标记为「必须放水槽柜」。
+ *
+ * **家电落位不在这里决定**——它是全局问题（跨墙段、跨层、互相牵制），
+ * 由 `planAppliances` 先算好再传进来（见 appliance-plan.ts 的模块注释）。
+ * 这个函数只负责"把已经定好的占位切成可用子段"。
  */
-export function splitIntoSegments(run: WallRun, appliances: (keyof typeof APPLIANCE_CLEARANCE)[]): {
+export function splitIntoSegments(run: WallRun, placed: readonly PlacedAppliance[] = []): {
   segments: Segment[];
-  reserved: { x: number; width: number; kind: keyof typeof APPLIANCE_CLEARANCE | "door" | "obstruction" }[];
+  reserved: ReservedSpan[];
   warnings: LayoutWarning[];
 } {
   const warnings: LayoutWarning[] = [];
-  const reserved: { x: number; width: number; kind: keyof typeof APPLIANCE_CLEARANCE | "door" | "obstruction" }[] = [];
+  const reserved: ReservedSpan[] = [];
 
   // 门洞与障碍：整段不可用
   for (const f of run.features) {
@@ -157,32 +229,19 @@ export function splitIntoSegments(run: WallRun, appliances: (keyof typeof APPLIA
     }
   }
 
-  // 家电：优先放在对应特征位置（燃气→灶具，强电→冰箱），否则从墙尾往前排
-  const featureFor = (kind: keyof typeof APPLIANCE_CLEARANCE): WallFeature | undefined => {
-    if (kind === "range") return run.features.find((f) => f.kind === "gas");
-    if (kind === "refrigerator") return run.features.find((f) => f.kind === "electrical");
-    return undefined;
-  };
-
-  for (const appliance of appliances) {
-    const need = APPLIANCE_CLEARANCE[appliance];
-    const anchor = featureFor(appliance);
-    if (!anchor) continue; // 没有对应特征就不在这段墙上放
-    // 以特征为中心留空
-    const x = quantize(Math.max(0, Math.min(anchor.offset - need / 2, run.length - need)));
-    if (need > run.length) {
-      warnings.push({
-        code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
-        message: `${run.label} 只有 ${run.length}"，放不下需要 ${need}" 净空的家电`,
-      });
-      continue;
-    }
-    reserved.push({ x, width: need, kind: appliance });
+  // 地柜层的家电占位。抽油烟机在吊柜层，不占地柜的地方
+  for (const p of placed) {
+    if (p.layer !== "base") continue;
+    reserved.push({
+      x: p.x, width: p.width, kind: p.spec.kind,
+      spec: p.spec, label: APPLIANCE_LABEL[p.spec.kind],
+    });
   }
 
   reserved.sort((a, b) => a.x - b.x);
 
-  // 由 reserved 切出可用子段
+  // 由 reserved 切出可用子段。
+  // 每一段的两头要么是墙角，要么紧挨一个占位（家电/门洞）——两种都能放填缝条。
   const segments: Segment[] = [];
   let cursor = 0;
   for (const r of reserved) {
@@ -190,6 +249,7 @@ export function splitIntoSegments(run: WallRun, appliances: (keyof typeof APPLIA
       segments.push({
         start: cursor, length: quantize(r.x - cursor),
         requiresSink: false, atRunStart: cursor === 0, atRunEnd: false,
+        fillerAtStart: true, fillerAtEnd: true,
       });
     }
     cursor = Math.max(cursor, quantize(r.x + r.width));
@@ -198,6 +258,7 @@ export function splitIntoSegments(run: WallRun, appliances: (keyof typeof APPLIA
     segments.push({
       start: cursor, length: quantize(run.length - cursor),
       requiresSink: false, atRunStart: cursor === 0, atRunEnd: true,
+      fillerAtStart: true, fillerAtEnd: true,
     });
   }
 
@@ -322,7 +383,12 @@ export function generateLayout(
 ): GeneratedLayout {
   const placements: Placement[] = [];
   const warnings: LayoutWarning[] = [];
-  const appliances = opts.appliances ?? ["refrigerator", "range"];
+  // 家电落位**先于分层**统一决定——烟机在吊柜层，位置却由地柜层的灶台定
+  const appliances = opts.appliances ?? DEFAULT_APPLIANCES;
+  const appliancePlan = opts.appliancePlan ?? planAppliances(geometry, appliances);
+  for (const w of appliancePlan.warnings) {
+    warnings.push({ code: "APPLIANCE_NO_ROOM", message: w.message });
+  }
   const drawerBias = opts.drawerBias ?? "highUseOnly";
 
   const baseCandidates = candidatesFor(modules, ["base"]);
@@ -334,7 +400,8 @@ export function generateLayout(
 
   for (const run of geometry.wallRuns) {
     if (run.length <= 0) continue;
-    const { segments, reserved, warnings: segWarnings } = splitIntoSegments(run, appliances);
+    const forThisRun = appliancePlan.byRun.get(run.id) ?? [];
+    const { segments, reserved, warnings: segWarnings } = splitIntoSegments(run, forThisRun);
     warnings.push(...segWarnings);
 
     for (const r of reserved) {
@@ -343,7 +410,21 @@ export function generateLayout(
         kind: "appliance", layer: "base", wallRunId: run.id,
         x: r.x, width: r.width, height: HEIGHTS.baseBox, depth: 24,
         applianceKind: r.kind,
-        label: { refrigerator: "冰箱位", range: "灶具位", dishwasher: "洗碗机位" }[r.kind],
+        // 标签带上实际宽度——图上要能看出"这是 33 寸的冰箱位"（FR-5.2）
+        label: `${r.label ?? APPLIANCE_LABEL[r.kind]}位 ${formatWidth(r.spec?.width ?? r.width)}`,
+        ...(r.spec ? { applianceSpec: r.spec } : {}),
+      });
+    }
+
+    // 吊柜层的家电（抽油烟机）：位置由地柜层的灶台决定，这里直接落位
+    for (const p of forThisRun) {
+      if (p.layer !== "wall") continue;
+      placements.push({
+        kind: "appliance", layer: "wall", wallRunId: run.id,
+        x: p.x, width: p.width, height: wallHeight ?? 30, depth: 12,
+        applianceKind: p.spec.kind,
+        label: `${APPLIANCE_LABEL[p.spec.kind]}位 ${formatWidth(p.spec.width)}`,
+        applianceSpec: p.spec,
       });
     }
 
@@ -396,8 +477,11 @@ export function generateLayout(
           highUseAnchors.push({ start: sinkX, end: sinkX + sink.w });
 
           // 洗碗机紧邻水槽（NKBA：距水槽最近边 ≤36"）
-          if (appliances.includes("dishwasher")) {
-            const dwWidth = APPLIANCE_CLEARANCE.dishwasher;
+          const dishwasher = appliances.find((a) => a.kind === "dishwasher");
+          if (dishwasher) {
+            // 洗碗机由水槽带着走（NKBA 要求紧邻），所以它的位置不在
+            // planAppliances 里定，但**宽度按客户给的算**
+            const dwWidth = reservedWidth(dishwasher);
             const leftRoom = sinkX - seg.start;
             const rightRoom = seg.start + seg.length - (sinkX + sink.w);
             const dwX = leftRoom >= dwWidth
@@ -425,13 +509,19 @@ export function generateLayout(
           const subSegments: { start: number; length: number; atStart: boolean; atEnd: boolean }[] = [];
           let sc = seg.start;
           for (const o of occupied) {
-            if (o.x > sc) subSegments.push({ start: sc, length: quantize(o.x - sc), atStart: sc === seg.start && seg.atRunStart, atEnd: false });
+            // 子段的两头要么是本段边界、要么紧挨水槽柜/洗碗机——都能放填缝条
+            if (o.x > sc) {
+              subSegments.push({
+                start: sc, length: quantize(o.x - sc),
+                atStart: sc !== seg.start || seg.fillerAtStart, atEnd: true,
+              });
+            }
             sc = Math.max(sc, quantize(o.x + o.width));
           }
           if (sc < seg.start + seg.length) {
             subSegments.push({
               start: sc, length: quantize(seg.start + seg.length - sc),
-              atStart: sc === seg.start && seg.atRunStart, atEnd: seg.atRunEnd,
+              atStart: sc !== seg.start || seg.fillerAtStart, atEnd: seg.fillerAtEnd,
             });
           }
           for (const sub of subSegments) {
@@ -448,7 +538,7 @@ export function generateLayout(
       }
 
       fillBaseSegment(
-        { start: cursor, length: remaining, atStart: seg.atRunStart, atEnd: seg.atRunEnd },
+        { start: cursor, length: remaining, atStart: seg.fillerAtStart, atEnd: seg.fillerAtEnd },
         run, modules, baseCandidates, highUseAnchors, placements, warnings, drawerBias,
       );
     }
@@ -511,7 +601,7 @@ export function generateLayout(
     for (const run of geometry.wallRuns) {
       if (run.length <= 0) continue;
       ergonomics.push(...checkErgonomics({
-        run, placements, hasDishwasher: appliances.includes("dishwasher"),
+        run, placements, hasDishwasher: appliances.some((a) => a.kind === "dishwasher"),
       }));
     }
     ergonomics.push(...checkWorkTriangle(trianglePoints(geometry, placements)));
@@ -671,8 +761,12 @@ export function regenerateRun(
   if (!run) return current;
 
   const untouched = current.placements.filter((p) => p.wallRunId !== wallRunId);
+  // 家电落位按**完整户型**算一次再传进去——只把一段墙交给 generateLayout
+  // 会让它以为整个厨房只有这一面墙，冰箱就跑过来了
+  const appliancePlan = opts.appliancePlan
+    ?? planAppliances(geometry, opts.appliances ?? DEFAULT_APPLIANCES);
   const regenerated = generateLayout(
-    { ...geometry, wallRuns: [run] }, modules, opts,
+    { ...geometry, wallRuns: [run] }, modules, { ...opts, appliancePlan },
   );
   const placements = [...untouched, ...regenerated.placements];
   // 硬约束与美观分要按合并后的整体重算——只重排一段墙也可能破坏工作三角
@@ -683,7 +777,7 @@ export function regenerateRun(
       if (r.length <= 0) continue;
       ergonomics.push(...checkErgonomics({
         run: r, placements,
-        hasDishwasher: (opts.appliances ?? []).includes("dishwasher"),
+        hasDishwasher: (opts.appliances ?? []).some((a) => a.kind === "dishwasher"),
       }));
     }
     ergonomics.push(...checkWorkTriangle(trianglePoints(geometry, placements)));

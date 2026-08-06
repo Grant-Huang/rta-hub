@@ -329,8 +329,18 @@ function leafFill(kind: string): { r: number; g: number; b: number } {
   }
 }
 
+/**
+ * 家电在 PDF 立面图上的标签。
+ *
+ * PDF 写入器只支持 WinAnsi，所以这里一律用英文缩写；认不出的种类退到
+ * `APPLIANCE` 而不是留空——图上一个没有字的方块，客户看不懂。
+ */
 function applianceLabel(p: Placement): string {
-  return { refrigerator: "FRIDGE", range: "RANGE", dishwasher: "DW" }[p.applianceKind ?? "range"] ?? "APPLIANCE";
+  const map: Partial<Record<NonNullable<Placement["applianceKind"]>, string>> = {
+    refrigerator: "FRIDGE", range: "RANGE", cooktop: "COOKTOP",
+    wallOven: "OVEN", rangeHood: "HOOD", microwave: "MICRO", dishwasher: "DW",
+  };
+  return (p.applianceKind ? map[p.applianceKind] : undefined) ?? "APPLIANCE";
 }
 
 function truncate(s: string, max: number): string {
