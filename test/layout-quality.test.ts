@@ -17,6 +17,10 @@ import {
 import { generateLayout, regenerateRun, HEIGHTS, type Placement } from "../src/layout/generate.js";
 import type { ParsedGeometry, WallRun } from "../src/floorplan/types.js";
 import { pilotModules } from "../src/app/seed.js";
+import { applianceFrom, type ApplianceKind } from "../src/floorplan/appliances.js";
+
+/** 测试里造一台家电：不给宽度就走常见尺寸（标为推定值）。 */
+const appl = (kind: ApplianceKind) => applianceFrom({ kind });
 
 const WIDTHS = [9, 12, 15, 18, 21, 24, 27, 30, 33, 36].map((w) => ({ width: w }));
 
@@ -358,7 +362,7 @@ test("水槽对齐窗中心", () => {
 
 test("要求洗碗机时它落在水槽旁边", () => {
   const layout = generateLayout(kitchen, pilotModules, {
-    ceilingHeight: 96, appliances: ["refrigerator", "range", "dishwasher"],
+    ceilingHeight: 96, appliances: [appl("refrigerator"), appl("range"), appl("dishwasher")],
   });
   const sink = layout.placements.find((p) => p.label === "sink")!;
   const dw = layout.placements.find((p) => p.applianceKind === "dishwasher");
@@ -402,7 +406,7 @@ test("灶具两侧的段能放下抽屉柜时就放抽屉柜", () => {
     ceilingHeight: 96, confidence: 1,
   };
   const layout = generateLayout(cooktopRun, pilotModules, {
-    ceilingHeight: 96, appliances: ["range"],
+    ceilingHeight: 96, appliances: [appl("range")],
   });
   const bases = layout.placements.filter((p) => p.kind === "cabinet" && p.layer === "base");
   assert.ok(bases.some((p) => /^(\d)DB/.test(p.moduleCode ?? "")),

@@ -1178,6 +1178,8 @@ app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
     drawerBias: drawerBiasFor(prefs),
+    // 客户报过的家电按实际尺寸留空；没报过就用兜底（标为推定值，FR-3.2）
+    ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
   });
   const lastRevision = session.revisionRequests?.[session.revisionRequests.length - 1];
   const { designLayoutId, revisionNo } = await persistLayout({
@@ -1250,6 +1252,8 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
     drawerBias: drawerBiasFor(prefs),
+    // 客户报过的家电按实际尺寸留空；没报过就用兜底（标为推定值，FR-3.2）
+    ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
   });
   const { designLayoutId, revisionNo } = await persistLayout({
     plan, companyId: company.id, layout,
@@ -1303,6 +1307,8 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
     drawerBias: drawerBiasFor(prefs),
+    // 客户报过的家电按实际尺寸留空；没报过就用兜底（标为推定值，FR-3.2）
+    ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
   });
   const { designLayoutId, revisionNo } = await persistLayout({
     plan, companyId, layout: next,

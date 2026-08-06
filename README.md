@@ -42,7 +42,7 @@
 ```bash
 pnpm install
 cp .env.example .env
-pnpm test          # 567 passing
+pnpm test          # 580 passing
 pnpm typecheck
 pnpm gates         # 上线闸门状态（有阻断项时退出码 1）
 pnpm simulate out 4  # 4 个场景走完整链路，产出图纸与解释到 out/
@@ -77,7 +77,7 @@ pnpm ops:prospects help
 
 ## 当前代码状态
 
-**MVP-1 ~ MVP-3 均已完成**，567 个测试用例覆盖。端到端可跑：
+**MVP-1 ~ MVP-3 均已完成**，580 个测试用例覆盖。端到端可跑：
 
 聊需求 → `@` 公司问规格 → 上传户型图 → 补齐尺寸 → **先问要不要出图** →
 **全局俯视图（多轮修改）** → 客户认可排布 → **完整四视图 + 解释** →
