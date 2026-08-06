@@ -59,6 +59,20 @@
   .status-pill.failed { background:#4d3f1c; color:#d8c37b; }
   .err { color:#d87b7b; font-size:12px; white-space:pre-wrap; }
   .cmp-lowest { color:#7bd88f; }
+  .qcard { background:#1c2129; border:1px solid #3a4250; border-radius:10px; padding:12px; margin:8px 0; }
+  .qcard .qp { font-size:13px; font-weight:600; margin-bottom:4px; }
+  .qcard .qw { font-size:11.5px; color:#8b94a3; line-height:1.5; margin-bottom:9px; }
+  .opts { display:flex; flex-wrap:wrap; gap:7px; }
+  .opt { text-align:left; background:#262b33; border:1px solid #3a4250; border-radius:9px;
+         padding:7px 10px; cursor:pointer; font-size:12.5px; color:#e6e8eb; line-height:1.4; }
+  .opt:hover { border-color:#4d7bd7; }
+  .opt.sel { background:#1e3566; border-color:#4d7bd7; }
+  .opt .ol { display:block; font-weight:500; }
+  .opt .od { display:block; color:#8b94a3; font-size:11px; }
+  .opt .op { display:block; color:#7bc0d8; font-size:11px; margin-top:2px; }
+  .opt .rec { color:#7bd88f; font-size:10.5px; }
+  .qskip { background:none; border:none; color:#6a7382; font-size:11.5px;
+           cursor:pointer; padding:6px 0 0; text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -95,6 +109,7 @@
       <select id="doorSel"></select>
       <button id="layoutBtn" disabled>② 生成方案</button>
       <button id="quoteBtn" disabled>③ 出报价</button>
+      <button id="prefBtn" class="ghost">偏好与预算</button>
       <button id="cmpBtn" class="ghost">比价</button>
       <span style="flex:1"></span>
       <span class="status-pill" id="quoteStatus" style="display:none"></span>
@@ -265,7 +280,93 @@ $('chatForm').addEventListener('submit', async (e) => {
   });
   for (const r of body.replies || []) addMsg('assistant', r.content);
   if (!body.replies?.length) addMsg('assistant', body.error || '（无响应）');
+  renderQuestions(body.questions || [], body.questionCompanyId || $('companySel').value);
 });
+
+// ── 价格与偏好的选择题 ────────────────────────────────────────────────────
+//
+// 客户不知道一套橱柜该是多少钱，也不知道 shaker 和 raised panel 差多少。
+// 与其开放式提问，不如把选项和**算出来的**价格影响摆出来让他选。
+// 选项与价格一律来自服务端（真实规格库 + 定价引擎），前端只负责渲染。
+
+let pendingQuestions = [];
+
+function renderQuestions(questions, companyId) {
+  pendingQuestions = questions;
+  if (!questions.length) return;
+
+  const box = document.createElement('div');
+  box.className = 'msg assistant';
+  box.style.maxWidth = '100%';
+  box.innerHTML = questions.map((q, qi) => `
+    <div class="qcard" data-q="${qi}">
+      <div class="qp">${esc(q.prompt)}</div>
+      <div class="qw">${esc(q.why)}</div>
+      <div class="opts">${q.options.map((o, oi) => `
+        <button class="opt" data-q="${qi}" data-o="${oi}">
+          <span class="ol">${esc(o.label)}${o.recommended ? ' <span class="rec">· 常见选择</span>' : ''}</span>
+          ${o.detail ? `<span class="od">${esc(o.detail)}</span>` : ''}
+          <span class="op">${esc(o.priceNote)}</span>
+        </button>`).join('')}</div>
+      ${q.multiSelect ? '<button class="qskip" data-done="' + qi + '">选好了 / 都不需要</button>'
+                      : q.skippable ? '<button class="qskip" data-skip="' + qi + '">跳过这一题</button>' : ''}
+    </div>`).join('');
+
+  box.addEventListener('click', (e) => {
+    const opt = e.target.closest('.opt');
+    if (opt) return onOptionClick(opt, companyId);
+    const done = e.target.closest('[data-done]');
+    if (done) return submitMulti(Number(done.dataset.done), companyId, done);
+    const skip = e.target.closest('[data-skip]');
+    if (skip) skip.closest('.qcard').remove();
+  });
+
+  $('chatLog').appendChild(box);
+  $('chatLog').scrollTop = $('chatLog').scrollHeight;
+}
+
+function onOptionClick(btn, companyId) {
+  const q = pendingQuestions[Number(btn.dataset.q)];
+  const opt = q.options[Number(btn.dataset.o)];
+  if (q.multiSelect) { btn.classList.toggle('sel'); return; }
+  // 单选：立即提交并把这一题收起来
+  btn.closest('.opts').querySelectorAll('.opt').forEach((b) => b.classList.remove('sel'));
+  btn.classList.add('sel');
+  savePreference(q.key, opt.id, companyId, btn.closest('.qcard'), opt.label);
+}
+
+function submitMulti(qi, companyId, doneBtn) {
+  const card = doneBtn.closest('.qcard');
+  const ids = [...card.querySelectorAll('.opt.sel')].map((b) =>
+    pendingQuestions[qi].options[Number(b.dataset.o)].id);
+  const labels = [...card.querySelectorAll('.opt.sel')].map((b) =>
+    pendingQuestions[qi].options[Number(b.dataset.o)].label);
+  savePreference(pendingQuestions[qi].key, ids, companyId, card,
+    labels.length ? labels.join('、') : '都不需要');
+}
+
+/** 偏好 key → 请求体字段。多选题传数组。 */
+const PREF_FIELD = {
+  budgetBand: 'budgetBand', doorStyle: 'doorStyleId', assembly: 'assembly',
+  storage: 'storage', hardware: 'hardwareOptionIds', accessories: 'accessoryOptionIds',
+  tradeoff: 'tradeoff',
+};
+
+async function savePreference(key, value, companyId, card, label) {
+  const { ok, body } = await api(`/api/conversations/${conversationId}/preferences`, {
+    method: 'POST',
+    body: JSON.stringify({ companyId, [PREF_FIELD[key]]: value }),
+  });
+  if (!ok) {
+    card.insertAdjacentHTML('beforeend', `<div class="err">${esc(body.error)}</div>`);
+    return;
+  }
+  card.innerHTML = `<div class="qw">已记录：<b style="color:#e6e8eb">${esc(label)}</b>` +
+    (body.layoutAffected ? '　<span style="color:#d8c37b">（会改变排布，重新生成方案后生效）</span>' : '') +
+    '</div>';
+  // 门板一旦选定，下游的报价就用它——顺手同步到下拉框，免得两处不一致
+  if (key === 'doorStyle') $('doorSel').value = value;
+}
 
 // ── ① 上传户型图 ──
 $('uploadBtn').addEventListener('click', async () => {
@@ -543,6 +644,20 @@ async function doConfirmAndSend() {
     ${(s.body.pdfWarnings || []).map((w) => `<p class="err">${esc(w)}</p>`).join('')}
   </div>`;
 }
+
+// ── 主动拉取选择题 ──
+$('prefBtn').addEventListener('click', async () => {
+  const companyId = $('companySel').value;
+  const { body } = await api(
+    `/api/conversations/${conversationId}/questions?companyId=${encodeURIComponent(companyId)}`);
+  if (!body.questions?.length) {
+    addMsg('system', '价格与偏好方面暂时没有需要你选的了。');
+    if (body.note) addMsg('system', body.note);
+    return;
+  }
+  if (body.note) addMsg('system', body.note);
+  renderQuestions(body.questions, companyId);
+});
 
 // ── 比价 ──
 $('cmpBtn').addEventListener('click', async () => {

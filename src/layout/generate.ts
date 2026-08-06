@@ -100,6 +100,13 @@ export interface LayoutOptions {
   appliances?: (keyof typeof APPLIANCE_CLEARANCE)[];
   /** 关闭人体工程硬约束（仅用于调试/对比，正常路径不应关）。 */
   skipErgonomics?: boolean;
+  /**
+   * 抽屉倾向 —— 来自客户的储物偏好（`preferences/questions.ts` 的 `storage` 题）。
+   *
+   * 默认 `highUseOnly`：只在灶台/水槽附近优先抽屉。这个选择必须真的改变排布，
+   * 而不是记下来给人看——所以它进的是装箱候选的 `preference` 项。
+   */
+  drawerBias?: "always" | "highUseOnly" | "never";
 }
 
 /**
@@ -304,6 +311,7 @@ export function generateLayout(
   const placements: Placement[] = [];
   const warnings: LayoutWarning[] = [];
   const appliances = opts.appliances ?? ["refrigerator", "range"];
+  const drawerBias = opts.drawerBias ?? "highUseOnly";
 
   const baseCandidates = candidatesFor(modules, ["base"]);
   const sinkModules = modules.filter((m) => m.type === "sinkBase");
@@ -403,7 +411,8 @@ export function generateLayout(
             });
           }
           for (const sub of subSegments) {
-            fillBaseSegment(sub, run, modules, baseCandidates, highUseAnchors, placements, warnings);
+            fillBaseSegment(sub, run, modules, baseCandidates, highUseAnchors,
+              placements, warnings, drawerBias);
           }
           continue; // 本段已处理完
         }
@@ -416,7 +425,7 @@ export function generateLayout(
 
       fillBaseSegment(
         { start: cursor, length: remaining, atStart: seg.atRunStart, atEnd: seg.atRunEnd },
-        run, modules, baseCandidates, highUseAnchors, placements, warnings,
+        run, modules, baseCandidates, highUseAnchors, placements, warnings, drawerBias,
       );
     }
 
@@ -511,12 +520,15 @@ function fillBaseSegment(
   highUseAnchors: readonly { start: number; end: number }[],
   placements: Placement[],
   warnings: LayoutWarning[],
+  drawerBias: "always" | "highUseOnly" | "never" = "highUseOnly",
 ): void {
   if (seg.length <= 0) return;
 
-  // 整段落在高频区时，装箱阶段就偏向有抽屉柜的宽度
-  const inHighUse = isHighUseZone(seg.start, seg.length, highUseAnchors);
-  const segCandidates = inHighUse
+  // 装箱阶段就偏向有抽屉柜的宽度。`always` 全段偏向，`highUseOnly` 只在灶台/水槽附近，
+  // `never` 完全不偏（客户明确选了以门板柜为主）。
+  const wantDrawers = drawerBias === "always"
+    || (drawerBias === "highUseOnly" && isHighUseZone(seg.start, seg.length, highUseAnchors));
+  const segCandidates = wantDrawers
     ? biasTowardDrawers(candidates, drawerWidths(modules))
     : candidates;
 
@@ -548,7 +560,8 @@ function fillBaseSegment(
 
   for (const w of packed.widths) {
     // 灶台/水槽两侧优先抽屉柜——放锅具与餐具的常用位置
-    const preferDrawers = isHighUseZone(cursor, w, highUseAnchors);
+    const preferDrawers = drawerBias === "always"
+      || (drawerBias === "highUseOnly" && isHighUseZone(cursor, w, highUseAnchors));
     const mod = pickModule(modules, ["base"], w, preferDrawers);
     if (!mod) continue;
     placements.push({

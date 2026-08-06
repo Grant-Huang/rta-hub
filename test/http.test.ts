@@ -908,3 +908,183 @@ test("计费透明度 → 公司提出争议 → 运营带证据裁定（完整�
   })).json() as { disputes: { event: { id: string } }[] };
   assert.ok(!board2.disputes.some((x) => x.event.id === billingEventId));
 });
+
+// ── 价格与偏好的选择式提问（FR-1 补强）────────────────────────────────────
+
+test("选择题：选项全部来自真实规格库，价格影响是算出来的", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+
+  const r = await req(`/api/conversations/${conversation.id}/questions?companyId=co_pilot`, {
+    accountId: CONSUMER,
+  });
+  assert.equal(r.status, 200);
+  const body = await r.json() as {
+    questions: { key: string; options: { id: string; priceNote: string }[] }[];
+    note?: string;
+  };
+
+  const door = body.questions.find((q) => q.key === "doorStyle");
+  assert.ok(door, "应该有门板样式题");
+  // 选项 id 必须是真实的 doorStyleId
+  const spec = await (await req("/api/companies/co_pilot/spec")).json() as {
+    doorStyles: { id: string }[];
+  };
+  const real = new Set(spec.doorStyles.map((d) => d.id));
+  for (const o of door!.options) assert.ok(real.has(o.id), `${o.id} 不在规格库中`);
+  // 每个选项都带可展示的价格说明
+  for (const o of door!.options) assert.ok(o.priceNote.length > 0);
+
+  // 没上传户型图 → 问不出预算题，且如实说明原因
+  assert.ok(!body.questions.some((q) => q.key === "budgetBand"));
+  assert.match(body.note ?? "", /上传户型图/);
+});
+
+test("有户型图后才出预算题，区间按尺寸锚定", async () => {
+  const { conversationId } = await readyProject(CONSUMER);
+  const body = await (await req(
+    `/api/conversations/${conversationId}/questions?companyId=co_pilot`, { accountId: CONSUMER },
+  )).json() as { questions: { key: string; prompt: string }[]; note?: string };
+
+  const budget = body.questions.find((q) => q.key === "budgetBand");
+  assert.ok(budget, "有户型图就该能给出预算区间");
+  assert.match(budget!.prompt, /144"/);
+  assert.equal(body.note, undefined);
+});
+
+test("偏好被记录，答过的不再问", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+
+  const save = await req(`/api/conversations/${conversation.id}/preferences`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ companyId: "co_pilot", doorStyleId: "ds_navy", storage: "drawers" }),
+  });
+  assert.equal(save.status, 200, await save.clone().text());
+  const saved = await save.json() as {
+    preferences: { doorStyleId: string; storage: string }; layoutAffected: boolean;
+  };
+  assert.equal(saved.preferences.doorStyleId, "ds_navy");
+  assert.equal(saved.layoutAffected, true, "储物偏好改变排布，应提示需要重排");
+
+  const after = await (await req(
+    `/api/conversations/${conversation.id}/questions?companyId=co_pilot`, { accountId: CONSUMER },
+  )).json() as { questions: { key: string }[] };
+  assert.ok(!after.questions.some((q) => q.key === "doorStyle"));
+  assert.ok(!after.questions.some((q) => q.key === "storage"));
+});
+
+test("伪造的门板 id 被拒——不能等到定价时才炸", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const r = await req(`/api/conversations/${conversation.id}/preferences`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ companyId: "co_pilot", doorStyleId: "ds_不存在" }),
+  });
+  assert.equal(r.status, 400);
+  assert.match((await r.json() as { error: string }).error, /不在该公司的规格库中/);
+});
+
+test("公司专属偏好按公司分开存，换公司不串味", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+
+  await req(`/api/conversations/${conversation.id}/preferences`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ companyId: "co_pilot", doorStyleId: "ds_navy", budgetBand: "premium" }),
+  });
+  const other = await (await req(`/api/conversations/${conversation.id}/questions?companyId=co_lakeside`, {
+    accountId: CONSUMER,
+  })).json() as { answered: { doorStyleId?: string; budgetBand?: string } };
+
+  // 门板 id 是 co_pilot 规格库里的，换到 co_lakeside 就不该带过来
+  assert.equal(other.answered.doorStyleId, undefined);
+  // 预算档位是跨公司的，应该保留——否则比价时两家用的是两套偏好
+  assert.equal(other.answered.budgetBand, "premium");
+});
+
+test("储物偏好真的改变排布结果", async () => {
+  const drawersIn = async (storage: string) => {
+    const { floorPlanId, conversationId } = await readyProject(CONSUMER);
+    await req(`/api/conversations/${conversationId}/preferences`, {
+      method: "POST", accountId: CONSUMER,
+      body: JSON.stringify({ companyId: "co_pilot", storage }),
+    });
+    const body = await (await req(`/api/floorplans/${floorPlanId}/layout`, {
+      method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+    })).json() as { moduleCounts: { moduleCode: string; qty: number }[] };
+    return body.moduleCounts
+      .filter((m) => /^\dDB/i.test(m.moduleCode))
+      .reduce((n, m) => n + m.qty, 0);
+  };
+
+  assert.ok(await drawersIn("drawers") > await drawersIn("doors"),
+    "选了「尽量多做抽屉」就该排出更多抽屉柜");
+});
+
+test("选过门板后出报价不必再传 doorStyleId", async () => {
+  const { conversationId, layout } = await readyProject(CONSUMER);
+  await req(`/api/conversations/${conversationId}/preferences`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ companyId: "co_pilot", doorStyleId: "ds_navy" }),
+  });
+  const r = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId, selections: layout.selections,
+    }),
+  });
+  assert.equal(r.status, 201, await r.clone().text());
+  const { quote } = await r.json() as { quote: { doorStyleId: string; priceGroupId: string } };
+  assert.equal(quote.doorStyleId, "ds_navy");
+  assert.equal(quote.priceGroupId, "pg_prem", "Navy 属高档价格组");
+});
+
+test("五金偏好进报价，且只加到适用柜体上", async () => {
+  const { conversationId, floorPlanId } = await readyProject(CONSUMER);
+  await req(`/api/conversations/${conversationId}/preferences`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", doorStyleId: "ds_shaker_white",
+      hardwareOptionIds: ["hw_softclose"], accessoryOptionIds: ["ac_rollout"],
+    }),
+  });
+  const layoutBody = await (await req(`/api/floorplans/${floorPlanId}/layout`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  })).json() as {
+    selections: { moduleId: string; hardwareOptionIds: string[]; accessoryOptionIds: string[] }[];
+  };
+
+  // 五金对所有柜型适用；抽拉层板只装在它 appliesToModuleIds 里的地柜上
+  assert.ok(layoutBody.selections.every((s) => s.hardwareOptionIds.includes("hw_softclose")));
+  const wall = layoutBody.selections.find((s) => s.moduleId.startsWith("m_w"));
+  if (wall) assert.deepEqual(wall.accessoryOptionIds, [], "吊柜装不了抽拉层板");
+
+  // 关键：带着这些偏好出报价必须通过 FR-8 校验，不能被整单拒绝
+  const r = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId, selections: layoutBody.selections,
+    }),
+  });
+  assert.equal(r.status, 201, await r.clone().text());
+  const { quote } = await r.json() as {
+    quote: { lineItems: { modifiers: { refId: string }[] }[] };
+  };
+  assert.ok(quote.lineItems.some((l) => l.modifiers.some((m) => m.refId === "hw_softclose")));
+});
+
+test("对话回复里带上本轮的选择题", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const r = await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ text: "@枫岭橱柜 你们有什么门板？" }),
+  });
+  const body = await r.json() as {
+    questions: { key: string; options: unknown[] }[]; questionCompanyId: string;
+  };
+  assert.equal(body.questionCompanyId, "co_pilot");
+  assert.ok(body.questions.length > 0);
+  assert.ok(body.questions.every((q) => q.options.length > 0), "不出没有选项的题");
+});

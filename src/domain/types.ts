@@ -63,6 +63,33 @@ export interface Conversation {
   designRequirements: string;
   perCompanyThreads: { companyId: string; messages: ChatMessage[] }[];
   createdAt: Timestamp;
+  /**
+   * 客户对价格与偏好的选择结果（`preferences/questions.ts`）。
+   *
+   * 按**公司**分开存：门板样式、五金、配件都是公司规格库里的实体 id，
+   * 换一家公司这些 id 就没有意义了。跨公司通用的项（预算档位、储物偏好、
+   * 取舍优先级）存在 `shared` 下，比价时才不会因为"在 A 家选过、B 家没选"
+   * 而拿两套不同偏好出来的方案比价。
+   */
+  preferences?: {
+    shared?: SharedPreferences;
+    byCompany?: Record<string, CompanyPreferences>;
+  };
+}
+
+/** 跨公司通用的偏好——换公司不失效。 */
+export interface SharedPreferences {
+  budgetBand?: "economy" | "standard" | "premium" | "unsure";
+  storage?: "drawers" | "doors" | "balanced";
+  tradeoff?: "price" | "quality" | "lookAndFeel";
+  assembly?: AssemblyOption;
+}
+
+/** 绑定到某家公司规格库的偏好——实体 id 只在该公司下有意义。 */
+export interface CompanyPreferences {
+  doorStyleId?: string;
+  hardwareOptionIds?: string[];
+  accessoryOptionIds?: string[];
 }
 
 // ── 供给侧：公司 ──────────────────────────────────────────────────────────

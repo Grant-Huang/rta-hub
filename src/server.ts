@@ -66,6 +66,10 @@ import {
   submitVerification, VerificationError, type TradeVerification,
 } from "./trade/verification.js";
 import { buildQuotePdf, quoteFilename } from "./pdf/quote-pdf.js";
+import {
+  applyPreferencesToSelections, buildQuestionSet, drawerBiasFor, PreferenceError,
+  resolvePreferences, validatePreferences, type CustomerPreferences,
+} from "./preferences/questions.js";
 import { disputeWindowEndsAt, isWithinDisputeWindow } from "./billing/lead-events.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -195,6 +199,22 @@ function verificationFor(accountId: string): TradeVerification | undefined {
   return appCtx.repos.tradeVerifications.byId(accountId);
 }
 
+/** 合成某会话在某公司下的偏好（跨公司项 + 该公司项）。 */
+function prefsFor(conv: Conversation, companyId: string): CustomerPreferences {
+  return resolvePreferences(
+    conv.preferences?.shared,
+    conv.preferences?.byCompany?.[companyId],
+  );
+}
+
+/** 地柜层总长度——预算区间的锚点。没有户型图时返回 undefined，不硬编一个数。 */
+function baseRunInches(conversationId: string): number | undefined {
+  const plan = planForConversation(conversationId);
+  if (!plan) return undefined;
+  const total = plan.parsedGeometry.wallRuns.reduce((sum, r) => sum + r.length, 0);
+  return total > 0 ? total : undefined;
+}
+
 // ── 基础 ──────────────────────────────────────────────────────────────────
 
 app.get("/health", (c) => c.json({ ok: true }));
@@ -311,6 +331,29 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     messages: [...messages, ...replies], perCompanyThreads, designRequirements,
   });
 
+  // 随回复带上本轮的选择题。
+  //
+  // 「预算大概多少」这类问题不该用开放式问法——客户不知道一套橱柜该是多少钱，
+  // 开放式提问等于让他先去做一遍市场调研。有公司上下文时给出真实门板/五金选项，
+  // 没有时至少能给按尺寸锚定的预算区间。
+  const questionCompanyId = routed[0]?.companyId ?? "";
+  const qBundle = questionCompanyId ? publishedBundle(appCtx, questionCompanyId) : undefined;
+  const inches = baseRunInches(conv.id);
+  const questions = buildQuestionSet({
+    ...(qBundle ? { bundle: qBundle } : {}),
+    ...(inches !== undefined
+      ? { budget: {
+          baseRunInches: inches,
+          catalog: appCtx.catalog,
+          sourceVerified: appCtx.catalogSourceVerified,
+        } }
+      : {}),
+    answered: prefsFor(updated, questionCompanyId),
+    maxPerTurn: interactionProfile(
+      effectiveAccountType(account, verificationFor(account.id)),
+    ).maxQuestionsPerTurn,
+  });
+
   return c.json({
     replies,
     reply: replies[0] ?? null,
@@ -318,12 +361,102 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     notices,
     requirements: updated.designRequirements,
     missingFields: missingFields(updated.designRequirements),
+    questions,
+    questionCompanyId,
   });
 });
 
 app.get("/api/conversations/:id", requireAccount, (c) => {
   const conv = ownedConversation(c, param(c, "id"));
   return conv ? c.json({ conversation: conv }) : c.json({ error: "会话不存在" }, 404);
+});
+
+// ── 价格与偏好的选择式提问（FR-1）─────────────────────────────────────────
+
+/**
+ * 本轮要问客户的选择题。
+ *
+ * 为什么不让 LLM 直接问：选项必须来自这家公司**真实的**规格库，价格影响必须是
+ * **算出来的**。模型会编出这家公司没有的门板，也会随口说"大概贵两成"——
+ * 这两件事都会让客户按错误信息做决定（FR-8 的同一条理由）。
+ */
+app.get("/api/conversations/:id/questions", requireAccount, (c) => {
+  const account = c.get("account");
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
+
+  const companyId = c.req.query("companyId") ?? "";
+  const bundle = companyId ? publishedBundle(appCtx, companyId) : undefined;
+  if (companyId && !bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+
+  const inches = baseRunInches(conv.id);
+  const plan = planForConversation(conv.id);
+  const stored = plan && companyId
+    ? appCtx.repos.storedLayouts.byId(layoutKey(plan.id, companyId))
+    : undefined;
+  const cabinetCount = stored
+    ? stored.moduleCounts.reduce((n, m) => n + m.qty, 0)
+    : undefined;
+
+  const effective = effectiveAccountType(account, verificationFor(account.id));
+  const questions = buildQuestionSet({
+    ...(bundle ? { bundle } : {}),
+    ...(inches !== undefined
+      ? { budget: {
+          baseRunInches: inches,
+          catalog: appCtx.catalog,
+          sourceVerified: appCtx.catalogSourceVerified,
+        } }
+      : {}),
+    answered: prefsFor(conv, companyId),
+    maxPerTurn: interactionProfile(effective).maxQuestionsPerTurn,
+    ...(cabinetCount !== undefined ? { estimatedCabinetCount: cabinetCount } : {}),
+  });
+
+  return c.json({
+    questions,
+    answered: prefsFor(conv, companyId),
+    // 没有户型图时预算题问不出来（区间需要尺寸锚定），如实说明而不是给个瞎猜的区间
+    ...(inches === undefined
+      ? { note: "上传户型图并补齐尺寸后，我们才能给出有依据的预算区间。" }
+      : {}),
+  });
+});
+
+/** 记录客户的选择。跨公司项与该公司项分开存（见 Conversation.preferences）。 */
+app.post("/api/conversations/:id/preferences", requireAccount, async (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
+
+  const body = await jsonBody<CustomerPreferences & { companyId: string }>(c);
+  const companyId = body.companyId ?? "";
+  const bundle = companyId ? publishedBundle(appCtx, companyId) : undefined;
+
+  let split;
+  try {
+    split = validatePreferences(body, bundle);
+  } catch (e) {
+    if (e instanceof PreferenceError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+
+  const prev = conv.preferences ?? {};
+  const byCompany = { ...(prev.byCompany ?? {}) };
+  if (companyId && Object.keys(split.company).length > 0) {
+    byCompany[companyId] = { ...(byCompany[companyId] ?? {}), ...split.company };
+  }
+  const updated = await appCtx.repos.conversations.update(conv.id, {
+    preferences: {
+      shared: { ...(prev.shared ?? {}), ...split.shared },
+      byCompany,
+    },
+  });
+
+  return c.json({
+    preferences: prefsFor(updated, companyId),
+    // 储物偏好会改变排布，已生成的方案需要重排才会生效——不要让客户以为改完就生效了
+    layoutAffected: split.shared.storage !== undefined,
+  });
 });
 
 // ── 冷启动通用预估（FR-10）────────────────────────────────────────────────
@@ -374,7 +507,9 @@ app.post("/api/quotes", requireAccount, async (c) => {
   if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
   const conv = ownedConversation(c, body.conversationId ?? "");
   if (!conv) return c.json({ error: "会话不存在" }, 404);
-  if (!body.doorStyleId) return c.json({ error: "必须选择门板样式（决定价格组）" }, 400);
+  // 客户在选择题里选过门板就直接用，不必再传一遍
+  const doorStyleId = body.doorStyleId || prefsFor(conv, company.id).doorStyleId;
+  if (!doorStyleId) return c.json({ error: "必须选择门板样式（决定价格组）" }, 400);
 
   const pricing = pricingContextFor(appCtx, company.id);
   if (!pricing) return c.json({ error: "该公司尚无已发布规格" }, 409);
@@ -406,7 +541,7 @@ app.post("/api/quotes", requireAccount, async (c) => {
     customerAccountId: account.id,
     accountType,
     province: account.province,
-    doorStyleId: body.doorStyleId,
+    doorStyleId,
     at: now(),
   });
 
@@ -652,9 +787,14 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
   const bundle = publishedBundle(appCtx, company.id);
   if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
 
+  // 储物偏好进的是**排布算法**，不是记下来给人看：选"尽量多做抽屉"会改变装箱
+  // 候选的偏好项，进而改变实际排出来的柜型（preferences/questions.ts 的 storage 题）
+  const conv = appCtx.repos.conversations.byId(plan.conversationId);
+  const prefs = conv ? prefsFor(conv, company.id) : {};
   const layout = generateLayout(plan.parsedGeometry, bundle.modules, {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
+    drawerBias: drawerBiasFor(prefs),
   });
   const { designLayoutId, revisionNo } = await persistLayout({
     plan, companyId: company.id, layout,
@@ -672,9 +812,11 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     ergonomics: layout.ergonomics,
     aesthetics: layout.aesthetics,
     acceptable: layout.acceptable,
-    // 直接可喂给 /api/quotes（结构里没有任何价格字段，FR-8）
-    selections: toSelections(layout),
+    // 直接可喂给 /api/quotes（结构里没有任何价格字段，FR-8）。
+    // 五金/配件按 appliesTo* 过滤后才加上——加到装不了的柜体上会被定价校验整单拒绝
+    selections: applyPreferencesToSelections(toSelections(layout), prefs, bundle),
     views: viewsFor(plan, layout, company.id),
+    appliedPreferences: prefs,
   }, 201);
 });
 
@@ -689,9 +831,12 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
   const bundle = companyId ? publishedBundle(appCtx, companyId) : undefined;
   if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
 
+  const conv = appCtx.repos.conversations.byId(plan.conversationId);
+  const prefs = conv ? prefsFor(conv, companyId) : {};
   const next = regenerateRun(current, plan.parsedGeometry, bundle.modules, body.wallRunId ?? "", {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
+    drawerBias: drawerBiasFor(prefs),
   });
   const { designLayoutId, revisionNo } = await persistLayout({
     plan, companyId, layout: next,
@@ -707,8 +852,9 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
     ergonomics: next.ergonomics,
     aesthetics: next.aesthetics,
     acceptable: next.acceptable,
-    selections: toSelections(next),
+    selections: applyPreferencesToSelections(toSelections(next), prefs, bundle),
     views: viewsFor(plan, next, companyId),
+    appliedPreferences: prefs,
   });
 });
 

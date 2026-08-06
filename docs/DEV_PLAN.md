@@ -244,6 +244,20 @@ effectiveAccountType(account, verification)  // 未过门槛的 trade → "consu
 注意这里比的是**内容哈希**而不是"拿当前规格复算"：公司发布新规格版本后本来就会算出不同的价，
 那不是篡改。用复算去判篡改会产生大量假阳性。
 
+### 5.6 价格与偏好的选择式提问（FR-1.1）
+
+原来对预算和偏好是开放式提问的。问题在于**客户不是行业内人士**——"你的预算是多少"这个问题，
+等于要求客户先自己做一遍市场调研。改成给选项 + 给算出来的价格影响。
+
+实现上有三个地方值得记一笔：
+
+1. **价格组溢价只在公共型号上算**（`priceGroupPremiums`）。价格矩阵允许有洞，两组各自求平均
+   再相比等于拿两个不同的篮子比总价。交集为空时返回「价格待确认」而不是硬给一个数。
+2. **偏好按「跨公司 / 公司专属」分开存**。门板/五金/配件 id 换公司就失效；预算档位、储物偏好
+   跨公司保留——否则比价时两家用的是两套不同偏好排出来的方案。
+3. **储物偏好进的是排布算法**（`LayoutOptions.drawerBias`），不是记下来展示。选"尽量多做抽屉"
+   会改变装箱候选的 `preference` 项：144" 的墙从 `B36×4` 变成 `3DB24 + 3DB30×4`。
+
 ### 5.5 下一轮候选
 
 1. **NKBA 净空数值核实**（阻断项）。
@@ -285,7 +299,7 @@ effectiveAccountType(account, verification)  // 未过门槛的 trade → "consu
 ```bash
 pnpm install
 pnpm typecheck     # 无错
-pnpm test          # 369 passing
+pnpm test          # 402 passing
 pnpm dev           # http://localhost:8790
 ```
 
