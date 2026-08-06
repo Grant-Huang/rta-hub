@@ -11,6 +11,14 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # 手动触发。排队等不到 runner 被取消时，不必靠推一个空提交来重跑
+  workflow_dispatch:
+
+# 同一分支上新的推送取消旧的排队任务——否则前一个还在排队，后一个又排上，
+# 两个都等不到 runner
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
