@@ -1,149 +1,593 @@
+/**
+ * RTA-Hub MVP-1 服务端。
+ *
+ * 与 v0.3 那版的关键差异（见 REQUIREMENTS 第 10 节）：
+ *   - 删除「搜索列表 → 勾选 → 群发询价」这套客户端功能（与 CASL 冲突，FR-12）；
+ *   - 全部状态按会话/租户隔离，落到平面文件持久化，不再有模块级全局单例；
+ *   - 加了鉴权；
+ *   - 发送闸门是服务端状态机，**不接受请求体里的 `confirm` 布尔字段**。
+ */
 import "dotenv/config";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
-import { generateText, Output } from "ai";
-import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { LlmService, loadConfig } from "@meso.ai/let-it-flow/runtime";
-import { searchCabinetLeads } from "./leads.js";
-import { composeQuoteEmail, isSendConfigured, sendDrafts } from "./email.js";
-import type { ChatMessage, DesignRequirements, EmailDraft, Lead } from "./types.js";
+import type { Context, Next } from "hono";
 
-/**
- * Canada Cabinet Quotes —— 独立 example 应用：
- *   1. 聊天获取橱柜设计需求（对话助手）
- *   2. 检索 + 抓取加拿大橱柜报价公司的邮箱/联系人
- *   3. 生成个性化询价邮件草稿，人工确认后才发送（未配置 SMTP 时始终 dry run）
- *
- * 用法：pnpm dev
- */
+import { fromDollars, format } from "./domain/money.js";
+import type { ChatMessage, Conversation, CustomerAccount, Quote } from "./domain/types.js";
+import { TenantScope } from "./tenancy/scoped-repo.js";
+import {
+  aggregateSignals, buildMentionSignal, clientFacingMessage, parseMentions, routeByText,
+} from "./routing/mention.js";
+import {
+  buildSendDisclosure, confirm, createQuoteFromLlmOutput, recordSendResult,
+} from "./app/quote-service.js";
+import { openDispute, resolveDispute } from "./billing/lead-events.js";
+import { layoutFace, toSvg } from "./render/face-grammar.js";
+import { buildFace, BASE_FACE_HEIGHT, matchFaceTemplate, type FaceTemplateId } from "./render/templates.js";
+import {
+  companyAgentReply, mergeRequirements, missingFields, orchestratorReply,
+} from "./agents/orchestrator.js";
+import { buildEstimateDraft, estimateCountsFromText, renderEstimateText } from "./estimate/generic.js";
+import { buildQuoteEmail, deIdentifySignal, resolveSenderIdentity, sendEmail } from "./email/sender.js";
+import { subscribe, SubscriptionError, unsubscribeByToken } from "./marketing/subscriptions.js";
+import {
+  deIdentifyBillingEvent, deIdentifyQuote, executeDeletionRequest, exportAccountData,
+  planRetentionSweep,
+} from "./privacy/retention.js";
+import {
+  createAppContext, isCompanyActive, pricingContextFor, publishedBundle, type AppContext,
+} from "./app/context.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const llm = new LlmService({
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: process.env.OPENAI_BASE_URL || undefined,
-  runtimeConfig: loadConfig(),
-});
+const LEAD_FEE = fromDollars(process.env.LEAD_FEE_CAD || "45.00");
+const now = (): string => new Date().toISOString();
 
-// ── 内存态存储（单会话 example，无需数据库）───────────────────────────────────
-const chatHistory: ChatMessage[] = [];
-let requirements: DesignRequirements = { summary: "" };
-const leadsStore = new Map<string, Lead>();
-const draftsStore = new Map<string, EmailDraft>();
+type AppVars = { account: CustomerAccount };
+type Ctx = Context<{ Variables: AppVars }>;
 
-const app = new Hono();
+let appCtx: AppContext;
+
+/** `c.req.param` 在 strict 下返回 string | undefined；路由已保证存在，统一收口。 */
+function param(c: Ctx, name: string): string {
+  return c.req.param(name) ?? "";
+}
+
+async function jsonBody<T extends object>(c: Ctx): Promise<Partial<T>> {
+  try {
+    const v = await c.req.json<T>();
+    return (v && typeof v === "object" ? v : {}) as Partial<T>;
+  } catch {
+    return {};
+  }
+}
+
+const app = new Hono<{ Variables: AppVars }>();
+
+/**
+ * MVP-1 的最小鉴权：`X-Account-Id` 头标识调用方。
+ * 生产需要真正的登录态与令牌（PRE_LAUNCH_CHECKLIST E1）。
+ */
+async function requireAccount(c: Ctx, next: Next) {
+  const id = c.req.header("x-account-id");
+  const account = id ? appCtx.repos.accounts.byId(id) : undefined;
+  if (!account) return c.json({ error: "未认证：请在 X-Account-Id 头中提供账号 id" }, 401);
+  c.set("account", account);
+  await next();
+}
+
+/** 平台运营端点的最小保护。未配置 ADMIN_TOKEN 时一律拒绝，不留默认口令。 */
+async function requireAdmin(c: Ctx, next: Next) {
+  const expected = process.env.ADMIN_TOKEN;
+  if (!expected || c.req.header("x-admin-token") !== expected) {
+    return c.json({ error: "未授权：需要有效的 X-Admin-Token" }, 401);
+  }
+  await next();
+}
+
+function ownedConversation(c: Ctx, id: string): Conversation | undefined {
+  const conv = appCtx.repos.conversations.byId(id);
+  return conv && conv.customerAccountId === c.get("account").id ? conv : undefined;
+}
+
+function ownedQuote(c: Ctx, id: string): Quote | undefined {
+  const q = appCtx.repos.quotes.byId(id);
+  return q && q.customerAccountId === c.get("account").id ? q : undefined;
+}
+
+// ── 基础 ──────────────────────────────────────────────────────────────────
 
 app.get("/health", (c) => c.json({ ok: true }));
 
-app.get("/", (c) => {
-  const html = readFileSync(path.join(__dirname, "../web/index.html"), "utf-8");
-  return c.html(html);
+app.get("/", (c) => c.html(readFileSync(path.join(__dirname, "../web/index.html"), "utf-8")));
+
+// ── 公司目录（只暴露客户可见信息，不暴露订阅/计费状态）────────────────────
+
+app.get("/api/companies", (c) =>
+  c.json({
+    companies: appCtx.repos.companies.filter(isCompanyActive).map((co) => ({
+      id: co.id, name: co.name, aliases: co.aliases, serviceAreas: co.serviceAreas,
+    })),
+  }));
+
+app.get("/api/companies/:id/spec", (c) => {
+  const co = appCtx.repos.companies.byId(param(c, "id"));
+  if (!co || !isCompanyActive(co)) return c.json({ error: "公司不存在或暂不可用" }, 404);
+  const bundle = publishedBundle(appCtx, co.id);
+  if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 404);
+  return c.json({
+    company: { id: co.id, name: co.name },
+    doorStyles: bundle.doorStyles.map((d) => ({ id: d.id, name: d.name, priceGroupId: d.priceGroupId })),
+    modules: bundle.modules.map((m) => ({
+      id: m.id, code: m.code, type: m.type,
+      widthOptions: m.widthOptions, heightOptions: m.heightOptions, depthOptions: m.depthOptions,
+      faceTemplateId: m.faceTemplateId,
+    })),
+    hardwareOptions: bundle.hardwareOptions.map((h) => ({ id: h.id, name: h.name })),
+    accessoryOptions: bundle.accessoryOptions.map((a) => ({ id: a.id, name: a.name })),
+  });
 });
 
-// ── 聊天：设计支持顾问 ─────────────────────────────────────────────────────────
-const ChatTurnSchema = z.object({
-  reply: z.string().describe("给用户看的回复"),
-  requirementsSummary: z.string().describe("截至目前整理出的橱柜项目需求摘要（尺寸/风格/材质/预算/工期/所在城市等），信息不足的字段留空即可，用一段自然语言描述"),
+// ── 对话：确定性 @ 路由 + Agent 应答 ──────────────────────────────────────
+
+app.post("/api/conversations", requireAccount, async (c) => {
+  const conv: Conversation = {
+    id: `cv_${randomUUID().slice(0, 8)}`,
+    customerAccountId: c.get("account").id,
+    messages: [], designRequirements: "", perCompanyThreads: [],
+    createdAt: now(),
+  };
+  await appCtx.repos.conversations.insert(conv);
+  return c.json({ conversation: conv }, 201);
 });
 
-app.post("/api/chat", async (c) => {
-  const body = await c.req.json<{ message: string }>();
-  const message = (body.message ?? "").trim();
-  if (!message) return c.json({ error: "message is required" }, 400);
+app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
+  const account = c.get("account");
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
 
-  chatHistory.push({ role: "user", content: message });
+  const body = await jsonBody<{ text: string }>(c);
+  const text = (body.text ?? "").trim();
+  if (!text) return c.json({ error: "text 不能为空" }, 400);
 
-  const model = llm.model("writer");
-  const foldSystem = llm.compatMode;
-  const system = [
-    "你是一位友善、专业的加拿大厨房橱柜设计顾问。通过对话帮用户理清装修需求：",
-    "厨房尺寸、橱柜风格（现代/传统/简约等）、材质（实木/板材/石英台面等）、预算范围、",
-    "期望完工时间、所在城市/省份。每次只问 1-2 个最关键的缺失信息，不要一次性列一堆问题。",
-    "已经了解足够信息后，简要复述需求让用户确认，并告知可以开始搜索报价公司了。",
-    "始终输出 reply（自然对话）和 requirementsSummary（当前已知需求的结构化摘要，逐轮累积更新）。",
+  const at = now();
+  const messages: ChatMessage[] = [...conv.messages, { role: "user", content: text, at }];
+  const routing = { companies: appCtx.repos.companies.all(), isActive: isCompanyActive };
+
+  const routed: { companyId: string; companyName: string }[] = [];
+  const notices: string[] = [];
+  const replies: ChatMessage[] = [];
+  const perCompanyThreads = conv.perCompanyThreads.map((t) => ({ ...t, messages: [...t.messages] }));
+
+  const mentions = parseMentions(text);
+  for (const raw of mentions) {
+    const outcome = routeByText(routing, raw);
+    if (outcome.kind === "routed") {
+      const bundle = publishedBundle(appCtx, outcome.company.id);
+      if (!bundle) continue;
+      routed.push({ companyId: outcome.company.id, companyName: outcome.company.name });
+
+      let thread = perCompanyThreads.find((t) => t.companyId === outcome.company.id);
+      if (!thread) {
+        thread = { companyId: outcome.company.id, messages: [] };
+        perCompanyThreads.push(thread);
+      }
+      const history = thread.messages.map(toHistory);
+      thread.messages.push({ role: "user", content: text, companyId: outcome.company.id, at });
+
+      // 公司 Agent：上下文里只有这家公司的 published 规格
+      const reply = await companyAgentReply(appCtx.llm, outcome.company.name, bundle,
+        { conversationId: conv.id, requirements: conv.designRequirements, history }, text);
+      const msg: ChatMessage = { role: "assistant", content: reply.content, companyId: outcome.company.id, at };
+      thread.messages.push(msg);
+      replies.push(msg);
+    } else {
+      notices.push(clientFacingMessage(outcome));
+      await appCtx.repos.mentionSignals.insert(buildMentionSignal(outcome, {
+        conversationId: conv.id, customerAccountId: account.id,
+        prospects: appCtx.repos.prospects.all(), at,
+      }));
+    }
+  }
+
+  let designRequirements = conv.designRequirements;
+  if (mentions.length === 0) {
+    const reply = await orchestratorReply(appCtx.llm,
+      { conversationId: conv.id, requirements: conv.designRequirements, history: conv.messages.map(toHistory) },
+      text, { accountType: account.accountType });
+    designRequirements = reply.requirements ?? designRequirements;
+    replies.push({ role: "assistant", content: reply.content, at });
+  } else {
+    designRequirements = mergeRequirements(designRequirements, text);
+    if (notices.length > 0 && replies.length === 0) {
+      replies.push({ role: "assistant", content: notices[0]!, at });
+    }
+  }
+
+  const updated = await appCtx.repos.conversations.update(conv.id, {
+    messages: [...messages, ...replies], perCompanyThreads, designRequirements,
+  });
+
+  return c.json({
+    replies,
+    reply: replies[0] ?? null,
+    routedTo: routed,
+    notices,
+    requirements: updated.designRequirements,
+    missingFields: missingFields(updated.designRequirements),
+  });
+});
+
+app.get("/api/conversations/:id", requireAccount, (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  return conv ? c.json({ conversation: conv }) : c.json({ error: "会话不存在" }, 404);
+});
+
+// ── 冷启动通用预估（FR-10）────────────────────────────────────────────────
+
+app.post("/api/conversations/:id/estimate", requireAccount, async (c) => {
+  const account = c.get("account");
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
+
+  const draft = buildEstimateDraft(appCtx.catalog, {
+    conversationId: conv.id,
+    moduleCounts: estimateCountsFromText(conv.designRequirements),
+    province: account.province,
+    at: now(),
+  }, { taxRules: appCtx.taxRules, sourceVerified: appCtx.catalogSourceVerified });
+
+  await appCtx.repos.estimates.insert(draft);
+  // EstimateDraft 没有 companyId —— 结构上不可能进入发送闸门（FR-8 第 4 条）
+  return c.json({ estimate: draft, text: renderEstimateText(draft) }, 201);
+});
+
+// ── 报价 ──────────────────────────────────────────────────────────────────
+
+app.post("/api/quotes", requireAccount, async (c) => {
+  const account = c.get("account");
+  const body = await jsonBody<{
+    companyId: string; conversationId: string; doorStyleId: string;
+    selections: unknown; designLayoutId: string;
+  }>(c);
+
+  const company = body.companyId ? appCtx.repos.companies.byId(body.companyId) : undefined;
+  if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
+  const conv = ownedConversation(c, body.conversationId ?? "");
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!body.doorStyleId) return c.json({ error: "必须选择门板样式（决定价格组）" }, 400);
+
+  const pricing = pricingContextFor(appCtx, company.id);
+  if (!pricing) return c.json({ error: "该公司尚无已发布规格" }, 409);
+
+  const result = createQuoteFromLlmOutput(new TenantScope(company.id), pricing, body.selections, {
+    quoteId: `q_${randomUUID().slice(0, 8)}`,
+    designLayoutId: body.designLayoutId ?? `dl_${randomUUID().slice(0, 8)}`,
+    designRevisionNo: 1,
+    conversationId: conv.id,
+    customerAccountId: account.id,
+    accountType: account.accountType,
+    province: account.province,
+    doorStyleId: body.doorStyleId,
+    at: now(),
+  });
+
+  for (const e of result.events) await appCtx.repos.auditEvents.insert(e);
+  if (!result.ok) return c.json({ error: "报价校验未通过，已拒绝生成", issues: result.issues }, 422);
+
+  await appCtx.repos.quotes.insert(result.quote);
+  return c.json({ quote: result.quote, formattedTotal: format(result.quote.total) }, 201);
+});
+
+app.get("/api/quotes/:id", requireAccount, (c) => {
+  const q = ownedQuote(c, param(c, "id"));
+  return q ? c.json({ quote: q, formattedTotal: format(q.total) }) : c.json({ error: "报价不存在" }, 404);
+});
+
+/** 发送前的二次披露（FR-13 第 2 条）——客户必须先看到这个清单。 */
+app.get("/api/quotes/:id/disclosure", requireAccount, (c) => {
+  const account = c.get("account");
+  const q = ownedQuote(c, param(c, "id"));
+  if (!q) return c.json({ error: "报价不存在" }, 404);
+  const company = appCtx.repos.companies.byId(q.companyId);
+  return c.json(buildSendDisclosure(q, company?.name ?? q.companyId, {
+    displayName: account.displayName, email: account.email,
+  }));
+});
+
+/** 客户确认 —— 独立的服务端状态迁移，留痕。 */
+app.post("/api/quotes/:id/confirm", requireAccount, async (c) => {
+  const q = ownedQuote(c, param(c, "id"));
+  if (!q) return c.json({ error: "报价不存在" }, 404);
+  try {
+    const r = confirm(q, now());
+    await appCtx.repos.quotes.update(r.quote.id, r.quote);
+    for (const e of r.events) await appCtx.repos.auditEvents.insert(e);
+    return c.json({ quote: r.quote });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+});
+
+/**
+ * 发送。
+ *
+ * **这里没有读取任何 `confirm` 字段**——报价必须已经处于 `confirmed` 状态，
+ * 否则状态机直接拒绝。这是 FR-8 第 3 条的闸门。
+ */
+app.post("/api/quotes/:id/send", requireAccount, async (c) => {
+  const account = c.get("account");
+  const q = ownedQuote(c, param(c, "id"));
+  if (!q) return c.json({ error: "报价不存在" }, 404);
+  if (q.status !== "confirmed") {
+    return c.json({ error: `报价当前状态为 ${q.status}，必须先由客户确认才能发送` }, 409);
+  }
+
+  const company = appCtx.repos.companies.byId(q.companyId);
+  const sender = resolveSenderIdentity();
+  const email = buildQuoteEmail({
+    companyName: company?.name ?? q.companyId,
+    customerName: account.displayName,
+    customerEmail: account.email,
+    province: q.province,
+    quoteText: renderQuoteText(q),
+    quoteId: q.id,
+  }, sender);
+
+  const sendResult = await sendEmail({ ...email, to: company?.quoteEmail ?? "" }, { sender });
+  const at = now();
+  const outcome = recordSendResult(
+    q, appCtx.repos.billingEvents.all(),
+    sendResult.delivered
+      ? { delivered: true }
+      : { delivered: false, error: "error" in sendResult ? sendResult.error : "未知错误" },
+    LEAD_FEE, at,
+  );
+
+  await appCtx.repos.quotes.update(outcome.quote.id, outcome.quote);
+  for (const e of outcome.events) await appCtx.repos.auditEvents.insert(e);
+  if (outcome.billingEvent) await appCtx.repos.billingEvents.insert(outcome.billingEvent);
+
+  return c.json({
+    quote: outcome.quote,
+    dryRun: sendResult.dryRun,
+    billingSuppressed: outcome.billingSuppressed,
+    billingEventId: outcome.billingEvent?.id,
+  });
+});
+
+app.get("/api/quotes/:id/audit", requireAccount, (c) => {
+  const q = ownedQuote(c, param(c, "id"));
+  if (!q) return c.json({ error: "报价不存在" }, 404);
+  return c.json({ events: appCtx.repos.auditEvents.filter((e) => e.quoteId === q.id) });
+});
+
+// ── 视图渲染（脸型文法）───────────────────────────────────────────────────
+
+app.get("/api/render/face", (c) => {
+  const code = c.req.query("code");
+  const width = Number(c.req.query("width") ?? 30);
+  const height = Number(c.req.query("height") ?? BASE_FACE_HEIGHT);
+  let templateId = c.req.query("template") as FaceTemplateId | undefined;
+  let params = {};
+
+  if (code) {
+    const match = matchFaceTemplate(code);
+    if (!match) return c.json({ error: `型号 ${code} 未能匹配脸型，需人工确认` }, 422);
+    templateId = match.templateId;
+    params = match.params;
+  }
+  if (!templateId) return c.json({ error: "需提供 code 或 template" }, 400);
+
+  try {
+    const layout = layoutFace(buildFace(templateId, params), width, height, {
+      overlay: "full", construction: "framed", faceFrameWidth: 1.5,
+    });
+    return c.body(toSvg(layout, { title: code ?? templateId }), 200, {
+      "content-type": "image/svg+xml; charset=utf-8",
+    });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+// ── 邮件列表（FR-12）──────────────────────────────────────────────────────
+
+app.post("/api/subscribe", async (c) => {
+  const body = await jsonBody<{ email: string; companyName: string; consent: boolean }>(c);
+  const ua = c.req.header("user-agent");
+  const ip = c.req.header("x-forwarded-for");
+  try {
+    const sub = subscribe({
+      email: body.email ?? "",
+      companyName: body.companyName ?? "",
+      consentGiven: body.consent === true,
+      termsVersion: appCtx.termsVersion,
+      ...(ua ? { userAgent: ua } : {}),
+      ...(ip ? { ipAddress: ip } : {}),
+      at: now(),
+    });
+    await appCtx.repos.subscriptions.insert(sub);
+    // 匹配市场库，形成「投放 → 订阅 → 入驻」的转化漏斗（场景 I 第 7 点）
+    const prospect = appCtx.repos.prospects.find((p) => p.email.toLowerCase() === sub.email);
+    if (prospect) await appCtx.repos.prospects.update(prospect.id, { status: "subscribed", lastUpdated: now() });
+    return c.json({ ok: true, unsubscribeToken: sub.unsubscribeToken }, 201);
+  } catch (e) {
+    if (e instanceof SubscriptionError) return c.json({ error: e.message, code: e.code }, 400);
+    return c.json({ error: "该邮箱已在邮件列表中" }, 409);
+  }
+});
+
+/** CASL：退订必须真的生效。GET 便于邮件里直接点击。 */
+app.get("/unsubscribe", async (c) => {
+  try {
+    const updated = unsubscribeByToken(appCtx.repos.subscriptions.all(), c.req.query("token") ?? "", now());
+    await appCtx.repos.subscriptions.update(updated.id, updated);
+    return c.html("<p>已退订。你不会再收到我们的邮件。</p>");
+  } catch {
+    return c.html("<p>退订链接无效或已失效。</p>", 400);
+  }
+});
+
+// ── 公司侧：计费透明度与争议（FR-7 / 8.1）─────────────────────────────────
+
+app.get("/api/company/:companyId/billing", (c) => {
+  const scope = new TenantScope(param(c, "companyId"));
+  return c.json({ events: scope.filter(appCtx.repos.billingEvents.all()) });
+});
+
+app.post("/api/company/:companyId/billing/:eventId/dispute", async (c) => {
+  const scope = new TenantScope(param(c, "companyId"));
+  const event = scope.find(appCtx.repos.billingEvents.all(), (e) => e.id === param(c, "eventId"));
+  if (!event) return c.json({ error: "计费事件不存在" }, 404);
+  const body = await jsonBody<{ reason: string; evidence: string; openedBy: string }>(c);
+  try {
+    const updated = openDispute(event, {
+      openedBy: body.openedBy ?? "company",
+      reason: (body.reason as never) ?? "other",
+      evidence: body.evidence ?? "",
+      at: now(),
+    });
+    await appCtx.repos.billingEvents.update(updated.id, updated);
+    return c.json({ event: updated });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+});
+
+// ── 平台运营 ──────────────────────────────────────────────────────────────
+
+app.post("/api/admin/billing/:eventId/resolve", requireAdmin, async (c) => {
+  const event = appCtx.repos.billingEvents.byId(param(c, "eventId"));
+  if (!event) return c.json({ error: "计费事件不存在" }, 404);
+  const body = await jsonBody<{ resolution: string; resolvedBy: string }>(c);
+  try {
+    const updated = resolveDispute(event, {
+      resolvedBy: body.resolvedBy ?? "ops",
+      resolution: (body.resolution as never) ?? "upheld",
+      at: now(),
+    });
+    await appCtx.repos.billingEvents.update(updated.id, updated);
+    return c.json({ event: updated });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+});
+
+/**
+ * 销售看板：按归一化名聚合的提及信号（FR-12.3）。
+ * **去标识化**：只给聚合计数与外联话术，不含任何客户身份（FR-13 第 3 条）。
+ */
+app.get("/api/admin/mention-signals", requireAdmin, (c) =>
+  c.json({
+    aggregated: aggregateSignals(appCtx.repos.mentionSignals.all()).map((a) => ({
+      normalizedName: a.normalizedName,
+      count: a.count,
+      latestAt: a.latestAt,
+      outreachLine: deIdentifySignal(a.count),
+    })),
+  }));
+
+/** 留存清除：返回**计划**而不是直接执行，便于预演与审计（FR-13 第 4 条）。 */
+app.get("/api/admin/retention/plan", requireAdmin, (c) =>
+  c.json({
+    plan: planRetentionSweep({
+      conversations: appCtx.repos.conversations.all(),
+      estimates: appCtx.repos.estimates.all(),
+      quotes: appCtx.repos.quotes.all(),
+      billingEvents: appCtx.repos.billingEvents.all(),
+      auditEvents: appCtx.repos.auditEvents.all(),
+      at: now(),
+    }),
+  }));
+
+// ── 数据主体权利（FR-13 第 5 条）──────────────────────────────────────────
+
+app.get("/api/me/export", requireAccount, (c) =>
+  c.json(exportAccountData(c.get("account"), {
+    conversations: appCtx.repos.conversations.all(),
+    estimates: appCtx.repos.estimates.all(),
+    quotes: appCtx.repos.quotes.all(),
+  }, now())));
+
+/**
+ * 删除权。与法定留存冲突时执行**去标识化保留**并如实说明，
+ * 而不是拒绝整个请求（FR-13 第 5 条）。
+ */
+app.post("/api/me/delete", requireAccount, async (c) => {
+  const account = c.get("account");
+  const outcome = executeDeletionRequest(account.id, {
+    conversations: appCtx.repos.conversations.all(),
+    estimates: appCtx.repos.estimates.all(),
+    quotes: appCtx.repos.quotes.all(),
+    billingEvents: appCtx.repos.billingEvents.all(),
+  });
+
+  for (const id of outcome.conversationsDeleted) await appCtx.repos.conversations.remove(id);
+  for (const id of outcome.estimatesDeleted) await appCtx.repos.estimates.remove(id);
+  for (const id of outcome.quotesDeIdentified) {
+    const q = appCtx.repos.quotes.byId(id);
+    if (q) await appCtx.repos.quotes.update(id, deIdentifyQuote(q));
+  }
+  for (const id of outcome.billingDeIdentified) {
+    const e = appCtx.repos.billingEvents.byId(id);
+    if (e) await appCtx.repos.billingEvents.update(id, deIdentifyBillingEvent(e));
+  }
+  return c.json({ outcome });
+});
+
+// ── 辅助 ──────────────────────────────────────────────────────────────────
+
+function toHistory(m: ChatMessage): { role: "user" | "assistant"; content: string } {
+  return { role: m.role, content: m.content };
+}
+
+/** 报价单的纯文本呈现（HTML 内嵌四视图版本属 MVP-2）。 */
+function renderQuoteText(q: Quote): string {
+  const lines = q.lineItems.map((l) =>
+    `  ${l.moduleCode.padEnd(10)} ${l.width}"x${l.height}"x${l.depth}"  x${String(l.qty).padStart(2)}  ` +
+    `${format(l.unitNetPrice).padStart(10)}  ${format(l.lineSubtotal).padStart(11)}`);
+  return [
+    "  型号        规格                数量        单价          小计",
+    "  " + "-".repeat(62),
+    ...lines,
+    "  " + "-".repeat(62),
+    `  小计: ${format(q.subtotal)}`,
+    ...q.discounts.map((d) => `  ${d.description}: -${format(d.amount)}`),
+    `  运费: ${format(q.shipping.amount)}`,
+    ...q.taxes.map((t) => `  ${t.name} ${t.ratePercent}%: ${format(t.amount)}`),
+    `  总计（${q.currency}）: ${format(q.total)}`,
+    "",
+    `  报价有效期至 ${q.validUntil.slice(0, 10)}`,
   ].join("\n");
-  const history = chatHistory.map((m) => `${m.role === "user" ? "用户" : "助手"}：${m.content}`).join("\n");
-  const priorSummary = requirements.summary ? `\n\n目前已知需求摘要：${requirements.summary}` : "";
-  const user = `对话历史：\n${history}${priorSummary}`;
+}
 
-  const callArgs = foldSystem
-    ? { messages: [{ role: "user" as const, content: `${system}\n\n---\n${user}` }] }
-    : { system, messages: [{ role: "user" as const, content: user }] };
+// ── 启动 ──────────────────────────────────────────────────────────────────
 
-  const { output } = await generateText({
-    model,
-    ...callArgs,
-    output: Output.object({ schema: ChatTurnSchema }),
-    temperature: 0.3,
+export async function createApp(opts: Parameters<typeof createAppContext>[0] = {}) {
+  appCtx = await createAppContext(opts);
+  return app;
+}
+
+export async function start(port = Number(process.env.PORT || 8790)) {
+  await createApp();
+  return serve({ fetch: app.fetch, port }, (info) => {
+    const smtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+    const company = appCtx.repos.companies.all()[0];
+    const bundle = company ? publishedBundle(appCtx, company.id) : undefined;
+    console.log(`[rta-hub] http://localhost:${info.port}`);
+    console.log(`[rta-hub] 试点公司：${company?.name ?? "（无）"}（${bundle?.modules.length ?? 0} 个型号）`);
+    console.log(`[rta-hub] LLM：${appCtx.llm ? "已接入" : "未配置 —— 对话降级为确定性问答"}`);
+    console.log(`[rta-hub] SMTP：${smtp ? "已配置" : "未配置 —— 发送为 dry-run"}`);
   });
+}
 
-  const reply = output?.reply ?? "抱歉，我没能理解，能再说一次吗？";
-  requirements = { summary: output?.requirementsSummary ?? requirements.summary };
-  chatHistory.push({ role: "assistant", content: reply });
+const isEntrypoint =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isEntrypoint) void start();
 
-  return c.json({ reply, requirements });
-});
-
-app.get("/api/requirements", (c) => c.json({ requirements }));
-
-// ── 线索检索 ───────────────────────────────────────────────────────────────
-app.post("/api/leads/search", async (c) => {
-  type SearchBody = { cities?: string[]; maxQueries?: number };
-  const body: SearchBody = await c.req.json<SearchBody>().catch(() => ({}));
-  const progress: string[] = [];
-  const leads = await searchCabinetLeads(llm, {
-    cities: body.cities,
-    maxQueries: body.maxQueries,
-    onProgress: (m) => progress.push(m),
-  });
-  for (const lead of leads) leadsStore.set(lead.id, lead);
-  return c.json({ leads: [...leadsStore.values()], progress });
-});
-
-app.get("/api/leads", (c) => c.json({ leads: [...leadsStore.values()] }));
-
-// ── 邮件：生成草稿 + 受控发送 ───────────────────────────────────────────────────
-app.post("/api/emails/compose", async (c) => {
-  const body = await c.req.json<{ leadIds: string[] }>();
-  if (!requirements.summary) {
-    return c.json({ error: "请先通过 /api/chat 收集设计需求" }, 400);
-  }
-  const drafts: EmailDraft[] = [];
-  for (const leadId of body.leadIds ?? []) {
-    const lead = leadsStore.get(leadId);
-    if (!lead) continue;
-    const { subject, body: text } = await composeQuoteEmail(llm, lead, requirements);
-    const draft: EmailDraft = {
-      id: `draft_${leadId}`,
-      leadId,
-      to: lead.email,
-      subject,
-      body: text,
-      status: "draft",
-    };
-    draftsStore.set(draft.id, draft);
-    drafts.push(draft);
-  }
-  return c.json({ drafts, sendConfigured: isSendConfigured() });
-});
-
-app.get("/api/emails", (c) => c.json({ drafts: [...draftsStore.values()], sendConfigured: isSendConfigured() }));
-
-app.post("/api/emails/send", async (c) => {
-  const body = await c.req.json<{ draftIds: string[]; confirm: boolean }>();
-  const targets = (body.draftIds ?? [])
-    .map((id) => draftsStore.get(id))
-    .filter((d): d is EmailDraft => !!d);
-  const results = await sendDrafts(targets, { confirm: !!body.confirm });
-  for (const r of results) draftsStore.set(r.id, r);
-  return c.json({ drafts: results });
-});
-
-const port = Number(process.env.CABINET_QUOTES_PORT || 8790);
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`[rta-hub] http://localhost:${info.port}`);
-  console.log(`[rta-hub] SMTP configured: ${isSendConfigured()}`);
-});
+export { app };

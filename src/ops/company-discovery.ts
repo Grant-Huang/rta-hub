@@ -1,12 +1,16 @@
 /**
- * 加拿大橱柜报价公司线索抓取管线。
+ * 公司发现（运营工具）—— docs/COMPANY_DISCOVERY.md、REQUIREMENTS FR-12。
  *
- * search（多查询变体覆盖主要城市/省份）→ fetch（复用平台 extractHtml 正文提取）
- * → LLM 结构化抽取（公司名/联系人/邮箱/电话）。
+ * ⚠️ **定位已变更**：这个模块不再是「消费者群发询价」的数据源。
+ * 抓来的邮箱**只用于识别与匹配**，不是可投递的营销名单——向抓取来的地址发冷邮件
+ * 违反 CASL。合法获客路径是「社媒广告 → 企业主动注册邮件列表」（FR-12）。
  *
- * 不复用 core.web_search / core.web_fetch 的 FlowConnector 包装（那层是为 DAG
- * 执行器的事件流设计的，需要 ExecutionContext）；直接调用底层 SearchProvider +
- * 平台导出的 extractHtml，保持这个独立 example 脚本简单可测。
+ * 现有用途：
+ *   1. 社媒广告的受众定向与地域投放决策；
+ *   2. CompanyMentionSignal 的回溯匹配数据源（FR-12.3）；
+ *   3. 市场情报（玩家数量、地域分布、覆盖缺口）。
+ *
+ * 由管理员在后台**手动触发**，非定时自动跑。
  */
 import { generateText, Output } from "ai";
 import { z } from "zod";
@@ -18,7 +22,7 @@ import {
   type SearchResult,
 } from "@meso.ai/let-it-flow/runtime";
 import { extractHtml } from "./html-extract.js";
-import type { Lead } from "./types.js";
+import type { Lead } from "../types.js";
 
 const DEFAULT_CITIES = [
   "Toronto",
@@ -82,7 +86,78 @@ interface FetchedPage {
   error?: string;
 }
 
+/**
+ * SSRF 防护：拒绝非 http(s)、以及指向内网/环回/链路本地地址的 URL。
+ *
+ * 当前入口只吃搜索结果，风险中等；但一旦这个函数被用户可控的 URL 调用就是漏洞，
+ * 所以护栏放在函数本身而不是调用点。
+ */
+export function blockedUrlReason(url: string): string | undefined {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return "URL 无法解析";
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return `不支持的协议 ${u.protocol}`;
+
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal")) {
+    return "指向本机或内网域名";
+  }
+  // IPv4 私网/环回/链路本地/元数据地址
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 127 || a === 0 || a === 10 ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 169 && b === 254) ||        // 含云元数据 169.254.169.254
+        (a === 100 && b >= 64 && b <= 127) // CGNAT
+    ) {
+      return `指向私网地址 ${host}`;
+    }
+  }
+  // IPv6 环回与唯一本地地址
+  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80")) {
+    return `指向私网地址 ${host}`;
+  }
+  return undefined;
+}
+
+/** 流式读取响应体，累计超过 maxBytes 即中断，避免大响应打满内存。 */
+async function readCapped(res: Response, maxBytes: number): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.byteLength;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const merged = new Uint8Array(Math.min(total, maxBytes));
+  let offset = 0;
+  for (const chunk of chunks) {
+    if (offset >= merged.length) break;
+    const slice = chunk.subarray(0, merged.length - offset);
+    merged.set(slice, offset);
+    offset += slice.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(merged);
+}
+
 async function fetchPage(url: string): Promise<FetchedPage> {
+  const blocked = blockedUrlReason(url);
+  if (blocked) return { url, title: url, content: "", mailtoEmails: [], error: blocked };
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -93,8 +168,9 @@ async function fetchPage(url: string): Promise<FetchedPage> {
     });
     if (!res.ok) return { url, title: url, content: "", mailtoEmails: [], error: `HTTP ${res.status}` };
     const ctype = res.headers.get("content-type") ?? "";
-    const buf = await res.arrayBuffer();
-    const raw = new TextDecoder("utf-8", { fatal: false }).decode(buf.slice(0, MAX_FETCH_BYTES));
+    // 流式读取并在超限时提前中断——旧实现先 await res.arrayBuffer() 再切片，
+    // 上限完全没起作用，整个响应体已经进内存了。
+    const raw = await readCapped(res, MAX_FETCH_BYTES);
     if (!ctype.includes("text/html")) return { url, title: url, content: raw, mailtoEmails: [] };
     const { title, content } = extractHtml(raw);
     const mailtoEmails = extractMailtoEmails(raw).filter((e) => !isJunkEmail(e));
@@ -156,16 +232,16 @@ async function extractLeadsFromPage(
   }
 }
 
-export interface SearchLeadsOptions {
+export interface DiscoveryOptions {
   cities?: string[];
   maxQueries?: number;
   onProgress?: (message: string) => void;
 }
 
 /** 完整管线：检索 → 去重 URL → 抓取 → LLM 抽取 → 按邮箱去重。 */
-export async function searchCabinetLeads(
+export async function discoverCompanyProspects(
   llm: LlmService,
-  opts: SearchLeadsOptions = {},
+  opts: DiscoveryOptions = {},
 ): Promise<Lead[]> {
   const provider = resolveSearchProvider();
   const queries = buildSearchQueries(opts.cities).slice(0, opts.maxQueries ?? 6);

@@ -29,32 +29,55 @@
 - [docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md) —— 公司发现与招商引流的合规路径（爬虫定位、社媒获客、CASL/邮件列表）
 - [docs/RENDERING.md](./docs/RENDERING.md) —— 二维视图渲染方案（脸型文法、模板清单、SKU 规则匹配、规范文档核实结果）
 - [docs/PRE_LAUNCH_CHECKLIST.md](./docs/PRE_LAUNCH_CHECKLIST.md) —— 上线前检查清单（税率核验、FR-2 抽样量、合规、安全、计费）
+- [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) —— MVP-1 开发计划与进度（已完成 / 未完成 / 下一轮顺序）
 - `rta-generic-spec/` —— 北美 RTA 橱柜通用规范参考（尺寸/编码/构造/替代逻辑），核实结果见 RENDERING.md 附录
 
 ## 运行
 
 ```bash
 pnpm install
-cp .env.example .env   # 至少填 OPENAI_API_KEY
-pnpm dev
-# 打开 http://localhost:8790
+cp .env.example .env
+pnpm test          # 226 passing
+pnpm typecheck
+pnpm dev           # 打开 http://localhost:8790
+```
+
+试点数据：`Maple Ridge Cabinetry`（31 个型号，别名 `枫岭橱柜`/`Maple Ridge`/`MRC`）。
+演示账号通过 `X-Account-Id` 头传入：`ca_demo_consumer`（消费者）、`ca_demo_trade`（贸易）。
+
+运营工具（公司发现，手动触发）：
+
+```bash
+pnpm ops:prospects help
 ```
 
 ## 当前代码状态
 
-`src/` 目前是从 let-it-flow demo 迁移过来的起步实现（线索检索 + 对话收集需求 + 询价邮件），
-对应 REQUIREMENTS.md 里的一小部分。多租户、四视图渲染、报价闸门等按文档逐步补齐。
+**MVP-1 已完成**，226 个测试用例覆盖。端到端可跑：聊需求 → `@` 公司问规格 → 通用预估 →
+生成报价（含税/运费/折扣/有效期）→ 发送前披露 → 确认 → 发送 → 计费。
 
-平台能力从 `@meso.ai/let-it-flow/runtime` 引入（`LlmService`、`loadConfig`、
-`createTavilyProvider`/`createNativeProvider`）；`extractHtml` 目前为本地实现
-（`src/html-extract.ts`），待上游导出后可改为从 runtime 引入。
+- **定价**：(型号 × 门板价格组) 价格矩阵 + 修饰项 + 折扣 + 运费 + 分省税，整数分运算
+- **可追溯**：规格版本化（发布后不可变）+ 报价价格快照 + 审计事件（含内容哈希）
+- **FR-8**：LLM 产出的任何价格字段一律丢弃；6 项硬校验；发送闸门是服务端状态机
+- **FR-2**：模板导入 + 入驻会话（待确认队列，零静默失败）+ 8 项量化验收
+- **合规**：CASL（身份、退订在发送路径强制校验）+ PIPEDA（同意、披露、留存、数据主体权利）
+- **多租户**：`companyId` 作用域在数据访问层强制，有跨租户负向测试
+
+尚未做的（按文档规划属 MVP-2/3）：户型图解析与自动排布、四视图完整渲染、HTML 邮件、
+多公司比价表、trade 多项目界面、PDF 报价单。详见 [docs/DEV_PLAN.md](./docs/DEV_PLAN.md)。
+
+原先的"搜索公司列表 → 勾选 → 群发询价"功能**已删除**（与 CASL 冲突）；抓取能力保留为
+运营侧的公司发现工具（`src/ops/`，手动触发），用途见
+[docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md)。
 
 ## 关于发送邮件（请先读这段）
 
-- **默认是 dry run。** `.env` 里 `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` 任一为空，
-  `/api/emails/send` 就只把草稿标记为 `skipped`，不发起任何网络请求。
-- 真正发送需要填好自己邮箱账号的 SMTP 信息，并且前端二次确认 + 请求体显式带 `confirm: true`。
-- 逐封发送之间有节流延迟。
-- **这不是营销邮件群发工具。** 生成的邮件是"向已公开报价业务邮箱的公司发送一次性询价"，内容
-  应只包含用户自己的真实项目需求。加拿大 CASL 对商业电子消息有严格的同意与身份披露要求；批量
-  群发推广邮件到抓取来的地址通常不合规。不要把这个工具改造成面向消费者的营销群发器。
+- **发送闸门有两道，且第一道在服务端。**
+  1. 报价必须由客户显式确认，`Quote.status` 经服务端状态机迁移到 `confirmed` 才可发送——
+     **请求体里带 `confirm: true` 不起任何作用**（旧实现的这个做法等于把闸门交给调用方）。
+  2. `.env` 里 `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` 任一为空，发送即为 dry-run，
+     不发起任何网络请求。
+- 发送前会向客户列出**将要提供给该公司的全部信息**（PIPEDA 意义上的第三方披露，见 FR-13）。
+- **这不是营销邮件群发工具。** 客户端的多选群发功能已删除。加拿大 CASL 对商业电子消息有
+  严格的同意与身份披露要求；向抓取来的地址批量发推广邮件通常不合规。合法获客路径是
+  「社媒广告 → 企业主动注册邮件列表」，见 [docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md)。
