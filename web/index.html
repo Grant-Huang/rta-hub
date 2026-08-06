@@ -239,16 +239,54 @@ $('layoutBtn').addEventListener('click', async () => {
   }
   layout = body;
   stepIndex = 3; renderSteps();
-  $('quoteBtn').disabled = false;
   renderLayout(body);
 });
 
 const VIEW_NAMES = { front: '正视图', topBase: '俯视图 · 地柜层', topWall: '俯视图 · 吊柜层', side: '侧视图' };
 
+const SCORE_LABELS = {
+  widthRhythm: '宽度节奏', narrowPenalty: '避免窄柜',
+  seamAlignment: '上下对缝', symmetry: '对称性', fillerPlacement: '填缝条位置',
+};
+
 function renderLayout(body) {
   const counts = body.moduleCounts.map((m) =>
     `<tr><td>${esc(m.moduleCode)}</td><td class="hint">${m.width}"×${m.height}"×${m.depth}"</td><td class="num">${m.qty}</td></tr>`).join('');
   const warns = (body.warnings || []).map((w) => `<div class="err">· ${esc(w.message)}</div>`).join('');
+
+  // 人体工程：blocking 会挡住出报价，advisory 只是提醒
+  const blocking = (body.ergonomics || []).filter((v) => v.severity === 'blocking');
+  const advisory = (body.ergonomics || []).filter((v) => v.severity === 'advisory');
+  const ergoBlock = blocking.length ? `
+    <div class="card" style="border-color:#7a3a3a">
+      <h3>⛔ 这版方案用起来有问题，需要先调整</h3>
+      ${blocking.map((v) => `<div class="err">· ${esc(v.message)}</div>`).join('')}
+      <p class="hint">这些是安全与使用便利的底线（依据北美 NKBA 厨房规划指南），不是省钱与否的取舍，所以暂时不能出报价。</p>
+    </div>` : '';
+  const advisoryBlock = advisory.length ? `
+    <div class="card">
+      <h3>建议</h3>
+      ${advisory.map((v) => `<div class="hint">· ${esc(v.message)}</div>`).join('')}
+    </div>` : '';
+
+  const scoreBlock = (body.aesthetics || []).map((a) => {
+    const b = a.score.breakdown;
+    const bars = Object.entries(SCORE_LABELS).map(([k, label]) => {
+      const pct = Math.round((b[k] ?? 0) * 100);
+      return `<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0">
+        <span style="width:70px;color:#9aa4b2">${label}</span>
+        <span style="flex:1;height:6px;background:#262b33;border-radius:3px;overflow:hidden">
+          <span style="display:block;height:100%;width:${pct}%;background:${pct >= 80 ? '#4c9a5f' : pct >= 50 ? '#8a7b3a' : '#8a4a4a'}"></span>
+        </span>
+        <span style="width:34px;text-align:right;color:#6a7382">${pct}%</span></div>`;
+    }).join('');
+    const notes = (a.score.notes || []).map((n) => `<div class="hint">· ${esc(n)}</div>`).join('');
+    return `<div class="card">
+      <h3>排布质量 <span class="status-pill">${a.score.total} / 100</span></h3>
+      ${bars}${notes ? `<div style="margin-top:8px">${notes}</div>` : ''}
+      <p class="hint" style="margin-top:8px">评分只影响观感，不影响能否下单；上面的 ⛔ 项才是硬性要求。</p>
+    </div>`;
+  }).join('');
   const viewBlocks = body.views.map((r) => `
     <div class="card">
       <h3>${esc(r.runLabel)}</h3>
@@ -262,12 +300,18 @@ function renderLayout(body) {
     </div>`).join('');
 
   $('content').innerHTML = `
+    ${ergoBlock}
     <div class="card">
       <h3>排布结果（按该公司真实型号与离散尺寸）</h3>
       <table><thead><tr><th>型号</th><th>规格</th><th class="num">数量</th></tr></thead><tbody>${counts}</tbody></table>
       ${warns}
     </div>
+    ${scoreBlock}
+    ${advisoryBlock}
     ${viewBlocks}`;
+
+  // 硬约束没过就不让往下走
+  $('quoteBtn').disabled = body.acceptable === false;
 }
 
 window.regen = async (wallRunId) => {
@@ -289,8 +333,10 @@ $('quoteBtn').addEventListener('click', async () => {
     }),
   });
   if (!ok) {
-    $('content').innerHTML = `<div class="err">报价被拒绝（FR-8 硬校验在起作用）：\n${
-      esc((body.issues || []).map((i) => `${i.code}: ${i.message}`).join('\n') || body.error)}</div>`;
+    const detail = (body.issues || []).map((i) => `${i.code}: ${i.message}`)
+      .concat((body.ergonomics || []).map((v) => v.message))
+      .join('\n');
+    $('content').innerHTML = `<div class="err">报价被拒绝：\n${esc(detail || body.error)}</div>`;
     return;
   }
   currentQuote = body.quote;

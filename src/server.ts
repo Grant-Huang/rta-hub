@@ -303,6 +303,17 @@ app.post("/api/quotes", requireAccount, async (c) => {
   const pricing = pricingContextFor(appCtx, company.id);
   if (!pricing) return c.json({ error: "该公司尚无已发布规格" }, 409);
 
+  // 方案违反人体工程硬约束时不允许出报价——那不是"便宜一点"的取舍，
+  // 是灶台旁没处放热锅、洗碗机离水槽太远这类不该发给客户的方案（FR-4）
+  const activePlan = [...floorPlans.values()].find((p) => p.conversationId === conv.id);
+  const activeLayout = activePlan ? layouts.get(`${activePlan.id}|${company.id}`) : undefined;
+  if (activeLayout && !activeLayout.acceptable) {
+    return c.json({
+      error: "当前方案未通过人体工程检查，请先调整",
+      ergonomics: activeLayout.ergonomics.filter((v) => v.severity === "blocking"),
+    }, 409);
+  }
+
   const result = createQuoteFromLlmOutput(new TenantScope(company.id), pricing, body.selections, {
     quoteId: `q_${randomUUID().slice(0, 8)}`,
     designLayoutId: body.designLayoutId ?? `dl_${randomUUID().slice(0, 8)}`,
@@ -518,6 +529,10 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     layoutKey: key,
     warnings: layout.warnings,
     moduleCounts: layout.moduleCounts,
+    // 人体工程硬约束与美观评分（FR-4）
+    ergonomics: layout.ergonomics,
+    aesthetics: layout.aesthetics,
+    acceptable: layout.acceptable,
     // 直接可喂给 /api/quotes（结构里没有任何价格字段，FR-8）
     selections: toSelections(layout),
     views: viewsFor(plan, layout, company.id),
@@ -544,6 +559,9 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
     layoutKey: key,
     warnings: next.warnings,
     moduleCounts: next.moduleCounts,
+    ergonomics: next.ergonomics,
+    aesthetics: next.aesthetics,
+    acceptable: next.acceptable,
     selections: toSelections(next),
     views: viewsFor(plan, next, body.companyId ?? ""),
   });
