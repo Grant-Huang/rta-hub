@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { fromDollars } from "../src/domain/money.js";
 import {
   buildCompanyAgentSystem, companyAgentReply, deterministicSpecAnswer,
-  mergeRequirements, missingFields, orchestratorReply, proposeDesign,
+  mergeRequirements, missingFields, optionsFor, orchestratorReply, proposeDesign,
 } from "../src/agents/orchestrator.js";
 import type { CompletionClient } from "../src/agents/types.js";
 import {
@@ -35,7 +35,7 @@ const bundle = importSpecTemplates("sv1", "co_1", {
 test("无 LLM 时降级为确定性引导，核心链路不中断", async () => {
   const r = await orchestratorReply(undefined,
     { conversationId: "cv", requirements: "", history: [] },
-    "我要装修厨房", { accountType: "consumer" });
+    "我要装修厨房", optionsFor("consumer"));
   assert.ok(r.content.length > 0);
   assert.equal(r.requirements, "我要装修厨房");
 });
@@ -55,9 +55,9 @@ test("缺失字段识别", () => {
 
 test("贸易账号得到更直给的话术", async () => {
   const consumer = await orchestratorReply(undefined,
-    { conversationId: "cv", requirements: "", history: [] }, "开始", { accountType: "consumer" });
+    { conversationId: "cv", requirements: "", history: [] }, "开始", optionsFor("consumer"));
   const trade = await orchestratorReply(undefined,
-    { conversationId: "cv", requirements: "", history: [] }, "开始", { accountType: "trade" });
+    { conversationId: "cv", requirements: "", history: [] }, "开始", optionsFor("trade"));
   assert.notEqual(consumer.content, trade.content);
   assert.match(trade.content, /一次给全/);
 });

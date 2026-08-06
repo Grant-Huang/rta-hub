@@ -24,12 +24,12 @@
 
 需求与场景是当前阶段的主交付物，开发按这两份文档推进：
 
-- [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) —— 需求说明书 v0.4（架构、定价模型、版本化与可追溯、数据模型、FR-1~13、商业模式）
+- [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) —— 需求说明书 v0.5（架构、定价模型、版本化与可追溯、数据模型、FR-1~13、商业模式、开放问题）
 - [docs/SCENARIOS.md](./docs/SCENARIOS.md) —— 场景走查 A–I（公司入驻、冷启动、@ 路由、四视图、比价发送、贸易账号、销售信号、招商引流）
 - [docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md) —— 公司发现与招商引流的合规路径（爬虫定位、社媒获客、CASL/邮件列表）
 - [docs/RENDERING.md](./docs/RENDERING.md) —— 二维视图渲染方案（脸型文法、模板清单、SKU 规则匹配、规范文档核实结果）
 - [docs/PRE_LAUNCH_CHECKLIST.md](./docs/PRE_LAUNCH_CHECKLIST.md) —— 上线前检查清单（税率核验、FR-2 抽样量、合规、安全、计费）
-- [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) —— MVP-1 开发计划与进度（已完成 / 未完成 / 下一轮顺序）
+- [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) —— MVP-1 ~ MVP-3 开发计划与进度（已完成 / 未完成 / 下一轮顺序）
 - `rta-generic-spec/` —— 北美 RTA 橱柜通用规范参考（尺寸/编码/构造/替代逻辑），核实结果见 RENDERING.md 附录
 
 ## 运行
@@ -37,13 +37,15 @@
 ```bash
 pnpm install
 cp .env.example .env
-pnpm test          # 330 passing
+pnpm test          # 369 passing
 pnpm typecheck
 pnpm dev           # 打开 http://localhost:8790
 ```
 
 试点数据：`Maple Ridge Cabinetry`（31 个型号，别名 `枫岭橱柜`/`Maple Ridge`/`MRC`）。
 演示账号通过 `X-Account-Id` 头传入：`ca_demo_consumer`（消费者）、`ca_demo_trade`（贸易）。
+注意 `ca_demo_trade` **未通过资质核实**，因此按零售价定价——这是有意为之的默认状态，
+走 `/api/me/verification` 提交、`/api/admin/verifications/:id/review` 审核后贸易价才生效。
 
 运营工具（公司发现，手动触发）：
 
@@ -53,11 +55,11 @@ pnpm ops:prospects help
 
 ## 当前代码状态
 
-**MVP-1 与 MVP-2 均已完成**，294 个测试用例覆盖。端到端可跑：
+**MVP-1 ~ MVP-3 均已完成**，369 个测试用例覆盖。端到端可跑：
 
 聊需求 → `@` 公司问规格 → 上传户型图 → 补齐尺寸 → **自动排布出四视图** →
 生成报价（含税/运费/折扣/有效期）→ **多公司比价** → 发送前披露 → 确认 →
-**HTML 邮件发送**（CID 内嵌四视图）→ 计费。
+**HTML 邮件发送**（CID 内嵌四视图 + PDF 报价单附件）→ 计费 → 争议裁定。
 
 - **定价**：(型号 × 门板价格组) 价格矩阵 + 修饰项 + 折扣 + 运费 + 分省税，整数分运算
 - **排布**：1/4 英寸整数 DP 装箱，只用该公司真实存在的离散尺寸。目标函数分三类处理——
@@ -74,8 +76,18 @@ pnpm ops:prospects help
 - **合规**：CASL（身份、退订在发送路径强制校验）+ PIPEDA（同意、披露、留存、数据主体权利）
 - **多租户**：`companyId` 作用域在数据访问层强制，有跨租户负向测试
 
-尚未做的（属 MVP-3）：PDF 报价单、trade 多项目界面、计费争议运营界面、
-户型与方案的持久化。详见 [docs/DEV_PLAN.md](./docs/DEV_PLAN.md)。
+- **PDF 报价单**：零依赖 PDF 1.4 写入器，立面图直接从 `Placement` 的绝对英寸坐标画成
+  矢量指令（不经 SVG 转换）。中文墙段标签译成英文，译不出的退到 `Wall N`，不留 `??`；
+  其余画不出的字符进 `warnings`，不静默丢字
+- **贸易账号**：多项目列表与组合概览；交互模式只在"问法"上有差异，不在能力上；
+  贸易价需要**人工资质核实 + 有效订阅**两道门槛，且门槛落在**定价链路**上——
+  未过门槛的 `trade` 账号按 `consumer` 定价，绕过界面直接打 API 也拿不到贸易价
+- **争议裁定**：公司侧看得到线索来源与剩余争议窗口（但看不到客户身份）；
+  运营侧裁定台带审计事件链与内容哈希一致性标记，不凭一面之词
+
+尚未做的：NKBA 净空数值的正式核实（阻断项）、生产级鉴权、留存清除的定时任务接线。
+详见 [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) 与
+[docs/PRE_LAUNCH_CHECKLIST.md](./docs/PRE_LAUNCH_CHECKLIST.md)。
 
 原先的"搜索公司列表 → 勾选 → 群发询价"功能**已删除**（与 CASL 冲突）；抓取能力保留为
 运营侧的公司发现工具（`src/ops/`，手动触发），用途见

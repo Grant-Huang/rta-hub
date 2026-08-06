@@ -26,6 +26,14 @@ export interface AppContext {
   llm: CompletionClient | undefined;
   /** 户型图视觉抽取；未配置时户型录入降级为手动（FR-3）。 */
   vision: VisionExtractor | undefined;
+  /**
+   * 邮件传输器。默认 undefined —— 走 `sendEmail` 里的 SMTP 解析，
+   * 没配 SMTP 就是 dry-run。
+   *
+   * 留这个注入口是因为「投递成功」这条路径上挂着计费、审计、争议窗口，
+   * 是整条链路里最要紧的部分，不能只靠 dry-run 覆盖。
+   */
+  mailTransport: { sendMail(msg: Record<string, unknown>): Promise<unknown> } | undefined;
   /** GenericCatalog 的价格来源是否已核实（检查清单 A4 / 开放问题 5）。 */
   catalogSourceVerified: boolean;
   termsVersion: string;
@@ -38,6 +46,7 @@ export interface CreateContextOptions {
   ephemeral?: boolean;
   llm?: CompletionClient | undefined;
   vision?: VisionExtractor | undefined;
+  mailTransport?: AppContext["mailTransport"];
   seedIfEmpty?: boolean;
 }
 
@@ -53,6 +62,7 @@ export async function createAppContext(opts: CreateContextOptions = {}): Promise
     catalog: seed.genericCatalog,
     llm: opts.llm !== undefined ? opts.llm : createLlmClient(),
     vision: opts.vision,
+    mailTransport: opts.mailTransport,
     // 来源尚未定案（开放问题 5），预估文案必须如实标注为占位数据
     catalogSourceVerified: process.env.GENERIC_CATALOG_VERIFIED === "true",
     termsVersion: process.env.TERMS_VERSION || "2026-01",

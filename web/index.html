@@ -64,8 +64,13 @@
 <body>
 <header>
   <h1>RTA-Hub · 橱柜设计与报价</h1>
+  <select id="acctSel" title="演示用账号切换">
+    <option value="ca_demo_consumer">消费者账号</option>
+    <option value="ca_demo_trade">建商账号（trade）</option>
+  </select>
   <span class="badge" id="acctBadge">consumer</span>
   <span style="flex:1"></span>
+  <button class="ghost" id="projBtn" style="display:none">我的项目</button>
   <span class="badge" id="sendBadge">预览模式</span>
 </header>
 <main>
@@ -102,9 +107,10 @@
 </main>
 
 <script>
-const ACCOUNT = 'ca_demo_consumer';
+let ACCOUNT = 'ca_demo_consumer';
 const $ = (id) => document.getElementById(id);
 let conversationId = null, floorPlanId = null, layout = null, currentQuote = null, spec = null;
+let profile = null;
 
 const api = async (path, opts = {}) => {
   const res = await fetch(path, {
@@ -136,11 +142,108 @@ function addMsg(role, text) {
 
 async function boot() {
   renderSteps();
+  await loadProfile();
   const { body } = await api('/api/companies');
   $('companySel').innerHTML = (body.companies || [])
     .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
   if (body.companies?.length) await loadSpec(body.companies[0].id);
   conversationId = (await api('/api/conversations', { method: 'POST' })).body.conversation?.id;
+}
+
+/**
+ * 账号画像：交互模式 + 贸易价门槛状态。
+ *
+ * 注意徽章显示的是 **effectiveAccountType**（定价实际按哪种账号走），
+ * 不是账号自己声明的类型——资质没过审的 trade 账号按零售价出单，
+ * 界面上就该照实说，而不是显示"trade"让人以为拿到了贸易价。
+ */
+async function loadProfile() {
+  const { body } = await api('/api/me/profile');
+  profile = body;
+  const eff = body.effectiveAccountType || 'consumer';
+  $('acctBadge').textContent = body.accountType === eff ? eff : `${body.accountType} → 按 ${eff} 定价`;
+  $('projBtn').style.display = body.accountType === 'trade' ? '' : 'none';
+}
+
+$('acctSel').addEventListener('change', async (e) => {
+  ACCOUNT = e.target.value;
+  conversationId = null; floorPlanId = null; layout = null; currentQuote = null;
+  stepIndex = 0; renderSteps();
+  $('quoteStatus').style.display = 'none';
+  $('layoutBtn').disabled = true; $('quoteBtn').disabled = true;
+  $('content').innerHTML = '<p class="hint">已切换账号，会话已重建。</p>';
+  await loadProfile();
+  conversationId = (await api('/api/conversations', { method: 'POST' })).body.conversation?.id;
+});
+
+// ── 建商：项目列表与资质核实 ──
+$('projBtn').addEventListener('click', renderProjects);
+
+const PROJECT_STATUS = {
+  collecting: '收集需求', designing: '已出方案', quoted: '已报价',
+  sent: '已发送', dormant: '沉寂',
+};
+
+async function renderProjects() {
+  const { body } = await api('/api/me/projects');
+  const projects = body.projects || [];
+  const p = body.portfolio || { byStatus: {} };
+
+  const rows = projects.map((x) => `<tr>
+    <td>${esc(x.title)}</td>
+    <td><span class="status-pill ${x.status === 'sent' ? 'sent' : x.status === 'dormant' ? 'failed' : ''}">${esc(PROJECT_STATUS[x.status] || x.status)}</span></td>
+    <td class="num">${x.companyCount}</td>
+    <td class="num">${x.quoteCount}</td>
+    <td class="num">${x.lowestQuote ? esc(x.lowestQuote.formatted) : '—'}</td>
+    <td class="num">${x.daysIdle}</td></tr>`).join('');
+
+  const dormant = (p.dormant || []).length;
+  $('content').innerHTML = `
+    <div class="card">
+      <h3>我的项目（${projects.length}）</h3>
+      ${projects.length ? `<table><thead><tr><th>项目</th><th>状态</th><th class="num">公司数</th>
+        <th class="num">报价数</th><th class="num">最低报价</th><th class="num">闲置天数</th></tr></thead>
+        <tbody>${rows}</tbody></table>` : '<p class="hint">还没有项目。在左侧开始一段对话即可。</p>'}
+      ${dormant ? `<p class="hint" style="margin-top:10px">有 ${dormant} 个项目超过 30 天没有动静，可能需要跟进。</p>` : ''}
+      <p class="hint" style="margin-top:10px">已发送报价合计：${esc(body.portfolioFormatted || '—')}</p>
+    </div>
+    ${renderTradeGate()}`;
+  const btn = $('verifyBtn');
+  if (btn) btn.addEventListener('click', submitVerification);
+}
+
+/** 贸易价门槛的当前状态——不允许显示成"已享贸易价"却按零售价出单。 */
+function renderTradeGate() {
+  if (!profile || profile.accountType !== 'trade') return '';
+  const gate = profile.tradePricing || {};
+  if (gate.allowed) {
+    return `<div class="card"><h3>贸易价已生效</h3>
+      <p class="hint">资质已通过审核，订阅有效。报价按贸易价计算，折扣明细会逐项列出。</p></div>`;
+  }
+  const form = gate.nextStep === 'submitVerification' || gate.nextStep === 'resubmit'
+    ? `<div class="q"><input id="legalName" placeholder="公司注册名称" style="width:200px" /></div>
+       <div class="q"><input id="bizNumber" placeholder="营业执照号 / GST 号" style="width:200px" /></div>
+       <button id="verifyBtn">提交资质核实</button>
+       <p class="hint" style="margin-top:8px">只需要编号与注册名，<b>不需要上传证件影像</b>——
+       核实只需一个可查证的号码，留存影像会平白扩大泄露面。</p>`
+    : '';
+  return `<div class="card">
+    <h3>当前按零售价报价</h3>
+    <p class="hint">${esc(gate.reason || '')}</p>
+    ${form}</div>`;
+}
+
+async function submitVerification() {
+  const { ok, body } = await api('/api/me/verification', {
+    method: 'POST',
+    body: JSON.stringify({
+      legalName: $('legalName').value.trim(),
+      businessNumber: $('bizNumber').value.trim(),
+    }),
+  });
+  if (!ok) { $('content').insertAdjacentHTML('beforeend', `<div class="err">${esc(body.error)}</div>`); return; }
+  await loadProfile();
+  await renderProjects();
 }
 
 async function loadSpec(companyId) {
@@ -340,9 +443,12 @@ $('quoteBtn').addEventListener('click', async () => {
     return;
   }
   currentQuote = body.quote;
+  lastTradeNotice = body.tradePricing || null;
   stepIndex = 4; renderSteps();
   renderQuote();
 });
+
+let lastTradeNotice = null;
 
 function renderQuote() {
   const q = currentQuote;
@@ -372,9 +478,36 @@ function renderQuote() {
       <div class="grand"><span>总计（${esc(q.currency)}）</span><span>${money(q.total)}</span></div>
       <div class="hint" style="justify-content:flex-end">有效期至 ${esc(q.validUntil.slice(0,10))}</div>
     </div>
-    <div style="margin-top:18px"><button id="discBtn">下一步：查看将发送的内容</button></div>
+    ${lastTradeNotice && !lastTradeNotice.applied ? `<div class="card" style="margin-top:14px">
+      <h3>本单按零售价计算</h3>
+      <p class="hint">${esc(lastTradeNotice.reason)}</p></div>` : ''}
+    <div style="margin-top:18px">
+      <button id="discBtn">下一步：查看将发送的内容</button>
+      <button class="ghost" id="pdfBtn">下载 PDF 报价单</button>
+    </div>
     <div id="discBox"></div>`;
   $('discBtn').addEventListener('click', showDisclosure);
+  $('pdfBtn').addEventListener('click', downloadPdf);
+}
+
+/**
+ * 下载正式报价单 PDF —— 与邮件附件是同一份，避免"客户看到的"和"公司收到的"不一致。
+ * 没有关联方案时服务端返回 409，这里如实说明而不是给一个空文件。
+ */
+async function downloadPdf() {
+  const res = await fetch(`/api/quotes/${currentQuote.id}/pdf`, { headers: { 'x-account-id': ACCOUNT } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    $('discBox').innerHTML = `<div class="err">${esc(body.error || '生成 PDF 失败')}</div>`;
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${currentQuote.id}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 async function showDisclosure() {
@@ -406,6 +539,8 @@ async function doConfirmAndSend() {
       : '报价已作为 HTML 邮件发送到该公司报价邮箱，四视图以 CID 内嵌，并附带纯文本与图片附件兜底。'}</p>
     ${s.body.billingEventId ? `<p class="hint">已记录计费事件 ${esc(s.body.billingEventId)}</p>` : ''}
     ${s.body.billingSuppressed ? '<p class="hint">命中 30 天去重窗口：邮件照发，但不重复计费。</p>' : ''}
+    ${s.body.attachedPdf ? '<p class="hint">正式报价单 PDF 已作为附件一并发出。</p>' : ''}
+    ${(s.body.pdfWarnings || []).map((w) => `<p class="err">${esc(w)}</p>`).join('')}
   </div>`;
 }
 

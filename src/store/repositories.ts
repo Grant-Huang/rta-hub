@@ -15,16 +15,24 @@ import type {
   LeadBillingEvent, ProductSpecVersion, Quote, QuoteAuditEvent,
 } from "../domain/types.js";
 import type { SpecBundle } from "../spec/bundle.js";
+import type { FloorPlan } from "../floorplan/types.js";
+import type { StoredLayout } from "../layout/store.js";
+import type { TradeVerification } from "../trade/verification.js";
 
 export interface Repositories {
   companies: JsonCollection<CabinetCompany>;
   accounts: JsonCollection<CustomerAccount>;
+  /** 贸易资质核实记录，一账号一条（开放问题 7）。 */
+  tradeVerifications: JsonCollection<TradeVerification>;
   conversations: JsonCollection<Conversation>;
   specVersions: JsonCollection<ProductSpecVersion>;
   /** 规格内容按版本整包存放，避免为每类子实体单开一个文件。 */
   specBundles: JsonCollection<SpecBundle>;
   designLayouts: JsonCollection<DesignLayout>;
   designRevisions: JsonCollection<DesignRevision>;
+  floorPlans: JsonCollection<FloorPlan>;
+  /** 排布结果（含 placements 与评分）。按 (floorPlanId, companyId) 唯一。 */
+  storedLayouts: JsonCollection<StoredLayout>;
   quotes: JsonCollection<Quote>;
   auditEvents: JsonCollection<QuoteAuditEvent>;
   billingEvents: JsonCollection<LeadBillingEvent>;
@@ -41,6 +49,8 @@ export function openRepositories(dataDir = process.env.DATA_DIR ?? path.join(pro
     companies: new JsonCollection<CabinetCompany>(f("companies")),
     accounts: new JsonCollection<CustomerAccount>(f("accounts"))
       .addUniqueKey("email", (a) => a.email.toLowerCase()),
+    tradeVerifications: new JsonCollection<TradeVerification>(f("trade-verifications"))
+      .addUniqueKey("accountId", (v) => v.accountId),
     conversations: new JsonCollection<Conversation>(f("conversations")),
     specVersions: new JsonCollection<ProductSpecVersion>(f("spec-versions"))
       .addUniqueKey("companyId+versionNo", (v) => `${v.companyId}:${v.versionNo}`),
@@ -48,6 +58,9 @@ export function openRepositories(dataDir = process.env.DATA_DIR ?? path.join(pro
     designLayouts: new JsonCollection<DesignLayout>(f("design-layouts")),
     designRevisions: new JsonCollection<DesignRevision>(f("design-revisions"))
       .addUniqueKey("layout+revision", (r) => `${r.designLayoutId}:${r.revisionNo}`),
+    floorPlans: new JsonCollection<FloorPlan>(f("floor-plans")),
+    storedLayouts: new JsonCollection<StoredLayout>(f("layouts"))
+      .addUniqueKey("plan+company", (l) => `${l.floorPlanId}:${l.companyId}`),
     quotes: new JsonCollection<Quote>(f("quotes")),
     auditEvents: new JsonCollection<QuoteAuditEvent>(f("audit-events")),
     // ★ 计费去重的数据层兜底
