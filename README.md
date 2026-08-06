@@ -24,12 +24,14 @@
 
 需求与场景是当前阶段的主交付物，开发按这两份文档推进：
 
-- [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) —— 需求说明书 v0.5（架构、定价模型、版本化与可追溯、数据模型、FR-1~13、商业模式、开放问题）
-- [docs/SCENARIOS.md](./docs/SCENARIOS.md) —— 场景走查 A–I（公司入驻、冷启动、@ 路由、四视图、比价发送、贸易账号、销售信号、招商引流）
+- [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) —— 需求说明书 v0.7（架构、定价模型、版本化与可追溯、数据模型、FR-1~13、商业模式、开放问题）
+- [docs/SCENARIOS.md](./docs/SCENARIOS.md) —— 场景走查 A–L（公司入驻、冷启动、@ 路由、四视图、比价发送、贸易账号、销售信号、招商引流、家电排布、商家规格差异、换花色比价）
 - [docs/COMPANY_DISCOVERY.md](./docs/COMPANY_DISCOVERY.md) —— 公司发现与招商引流的合规路径（爬虫定位、社媒获客、CASL/邮件列表）
-- [docs/RENDERING.md](./docs/RENDERING.md) —— 二维视图渲染方案（脸型文法、模板清单、SKU 规则匹配、规范文档核实结果）
+- [docs/RENDERING.md](./docs/RENDERING.md) —— 二维视图渲染方案（脸型文法、模板清单、SKU 规则匹配、规范文档核实结果、统一绘图内核）
+- [docs/CATALOG_MODEL.md](./docs/CATALOG_MODEL.md) —— **产品目录模型**：为什么不做「通用码↔商家码」映射表、能力标签、叠装吊柜求解、报价的唯一数据源
+- [docs/APPLIANCES.md](./docs/APPLIANCES.md) —— **家电与水槽**：采集（家电是客户的输入不是常数）、配套柜、排布、图纸标注
 - [docs/PRE_LAUNCH_CHECKLIST.md](./docs/PRE_LAUNCH_CHECKLIST.md) —— 上线前检查清单（税率核验、FR-2 抽样量、合规、安全、计费）
-- [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) —— MVP-1 ~ MVP-3 开发计划与进度（已完成 / 未完成 / 下一轮顺序）
+- [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) —— MVP-1 ~ MVP-5 开发计划与进度（已完成 / 未完成 / 下一轮顺序）
 - [docs/LAUNCH_BLOCKERS.md](./docs/LAUNCH_BLOCKERS.md) —— **上线阻断项台账**（每项的当前取值、错了会怎样、怎么核、核实历史）。这几项在代码里有对应闸门，生产未核实时服务拒绝启动
 - [docs/LLM_ARCHITECTURE.md](./docs/LLM_ARCHITECTURE.md) —— LLM 模型分层（轻量/主力/视觉）、升级触发条件、降级路径
 - [docs/DESIGN_REVIEW.md](./docs/DESIGN_REVIEW.md) —— **设计与实现的对齐审查**：哪些对齐了、哪些「库函数齐全但没接端点」、按优先级排的改进项
@@ -129,6 +131,24 @@ pnpm ops:prospects help
   未过门槛的 `trade` 账号按 `consumer` 定价，绕过界面直接打 API 也拿不到贸易价
 - **争议裁定**：公司侧看得到线索来源与剩余争议窗口（但看不到客户身份）；
   运营侧裁定台带审计事件链与内容哈希一致性标记，不凭一面之词
+
+### v0.7：已写设计、**尚未开发**
+
+第三轮审查（读模拟产出本身，而不是读代码）提出四组问题，设计已写完并合入，
+代码还没动。任务拆解见 [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) §5.1（MVP-5）：
+
+- **家电是客户的输入，不是常数**。现在冰箱一律按 36" 留空且从不问客户；
+  要改成问种类/尺寸/位置，答"不确定"合法但推定值必须标注出来
+  → [docs/APPLIANCES.md](./docs/APPLIANCES.md)
+- **图上没有水槽和家电**。排布器知道，渲染层只写 `moduleCode`——而家电位没有
+  `moduleCode`，于是它们是几个没有文字的灰色方块 → FR-5.2
+- **两组图看起来像两个软件画的**。技术相同（都是自己拼 SVG，没用绘图库），
+  但配色/标注/尺寸链的约定不同，要抽出共用绘图内核 → FR-5.3
+- **产品目录：编码不映射，能力才映射**。连体 pantry 与分体叠装 pantry 之间件数、
+  价格构成、外观、安装全不同，一张码映射表存不下这种差异
+  → [docs/CATALOG_MODEL.md](./docs/CATALOG_MODEL.md)
+- **换花色比价**：同一套方案换门板的重算价，逐行算不乘系数；填缝/收口/踢脚跟着
+  换色，塑料地脚不换 → FR-6.3
 
 尚未做的：NKBA 净空数值的正式核实（阻断项）、生产级鉴权、留存清除的定时任务接线。
 详见 [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) 与
