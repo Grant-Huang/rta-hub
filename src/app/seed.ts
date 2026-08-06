@@ -104,15 +104,29 @@ const MODULE_DEFS: [string, ModuleSpec["type"], number[], number[], number[], st
   ["BF3", "filler", [3], [34.5], [0.75], "38.00"],
   ["WF3", "filler", [3], [30, 36, 42], [0.75], "34.00"],
   ["TK8", "toeKick", [96], [4.5], [0.25], "42.00"],
+  // 塑料可调地脚：单个计价，按柜体数量配（见 ToeKickSystem）
+  ["LEG", "leg", [2], [4.5], [2], "3.50"],
+  // 配塑料地脚时的踢脚扣板——扣在腿上，不是整体底座
+  ["TKC8", "toeKick", [96], [4.5], [0.125], "36.00"],
   ["CM8", "crown", [96], [4.25], [0.75], "58.00"],
   ["BEP", "panel", [24], [34.5], [0.25], "76.00"],
   ["WEP", "panel", [12], [30, 36, 42], [0.25], "62.00"],
 ];
 
+/**
+ * 本来就没有「脸」的类别。
+ *
+ * 地脚是柜子底下的一根塑料柱，踢脚板是一条贴面板，顶线是一条装饰线——
+ * 它们在正视图上不是一个带门缝的面。要求它们匹配脸型模板是把渲染的
+ * 概念套到了不适用的东西上；给它们编一个脸才是错的。
+ */
+const FACELESS_TYPES: ReadonlySet<ModuleSpec["type"]> = new Set(["leg", "toeKick", "crown"]);
+
 export const pilotModules: ModuleSpec[] = MODULE_DEFS.map(([code, type, w, h, d]) => {
+  const faceless = FACELESS_TYPES.has(type);
   const match = matchFaceTemplate(code);
-  if (!match) {
-    // FR-2 的「零静默失败」：匹配不到脸型的型号不允许静默进入规格库
+  if (!match && !faceless) {
+    // FR-2 的「零静默失败」：**有脸的**型号匹配不到脸型就不允许静默进入规格库
     throw new Error(`型号 ${code} 未能匹配脸型模板，需人工确认后才能发布`);
   }
   return {
@@ -123,7 +137,7 @@ export const pilotModules: ModuleSpec[] = MODULE_DEFS.map(([code, type, w, h, d]
     widthOptions: w,
     heightOptions: h,
     depthOptions: d,
-    faceTemplateId: match.templateId,
+    ...(match ? { faceTemplateId: match.templateId } : {}),
     assemblyOptions: type === "base" || type === "sinkBase" ? ["RTA", "assembled"] : ["RTA"],
   };
 });

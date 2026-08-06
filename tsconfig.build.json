@@ -4,7 +4,10 @@
     "noEmit": false,
     "outDir": "dist",
     "rootDir": "src",
-    "sourceMap": true
+    "sourceMap": true,
+    // 根配置为 scripts/ 之间的 .mts 互引开了这个开关，但它与「真的产出文件」互斥
+    // （TS5096）。构建只编译 src/，那里没有 .mts 引用，关掉即可。
+    "allowImportingTsExtensions": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test"]

@@ -141,6 +141,13 @@ export interface ProductSpecVersion {
   construction: "framed" | "frameless";
   /** 门板覆盖方式——决定门缝留边（见 RENDERING.md 4.1）。 */
   overlay: "full" | "partial" | "inset";
+  /**
+   * 地柜支撑与踢脚做法。缺省 `plywoodPanel`（传统整体底座）。
+   *
+   * 选 `plasticLegs` 时物料清单里会出现地脚，不出现整体底座——
+   * 这是两份不同的清单，不是同一份清单的两种叫法。
+   */
+  toeKickSystem?: ToeKickSystem;
   effectiveFrom: Timestamp;
   effectiveTo?: Timestamp;
   publishedAt?: Timestamp;
@@ -150,7 +157,22 @@ export interface ProductSpecVersion {
 
 export type ModuleType =
   | "base" | "wall" | "tall" | "corner" | "sinkBase"
-  | "filler" | "panel" | "toeKick" | "crown";
+  | "filler" | "panel" | "toeKick" | "crown"
+  /** 塑料可调地脚（leg leveler）。见 `ToeKickSystem`。 */
+  | "leg";
+
+/**
+ * 地柜的支撑与踢脚做法。
+ *
+ * 两种在北美 RTA 里都常见，**决定的是完全不同的一份物料清单**：
+ *   - `plywoodPanel`：柜体自带整体底座，另配一条整长的踢脚板贴面；
+ *   - `plasticLegs`：柜体靠可调塑料地脚支撑，踢脚板用夹子扣在腿上。
+ *     好处是能逐个调平（旧房地面很少是平的），运输体积也小。
+ *
+ * 选错了做法，报价单上就会少几十条腿或多一条用不上的底座——
+ * 所以它是规格版本上的字段，不是渲染参数。
+ */
+export type ToeKickSystem = "plywoodPanel" | "plasticLegs";
 
 export type AssemblyOption = "RTA" | "assembled";
 
@@ -165,7 +187,11 @@ export interface ModuleSpec {
   widthOptions: number[];
   heightOptions: number[];
   depthOptions: number[];
-  faceTemplateId: string;
+  /**
+   * 脸型模板 id。**无脸型的类别（地脚、踢脚板、顶线）为空**——
+   * 它们在正视图上不是一个带门缝的面，硬给一个脸型才是错的。
+   */
+  faceTemplateId?: string;
   assemblyOptions: AssemblyOption[];
 }
 

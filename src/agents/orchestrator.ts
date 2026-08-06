@@ -55,13 +55,17 @@ export interface OrchestratorOptions {
    */
   escalation?: EscalationDecision;
   /**
-   * 上一轮是否已经问过同样的缺失字段。
+   * 已经连续问过同样的缺失字段几轮了（本轮不算）。
    *
    * 客户答了却没被识别出来时（"质感优先""门板选深色的" 匹配不上"风格"的关键词），
    * 再原样问一遍只会让人以为没被听见。这时候改口去用选择题——
    * 那本来就是为「客户答不上开放式问题」设计的（FR-1.1）。
+   *
+   * 但**改口也只改一次**。之前这里是个布尔值，一旦置真就每轮都回同一句
+   * "可能是我没问清楚…"，模拟里连着三轮一字不差——这正是它本来要治的病。
+   * 追问两次还没结果就该停下：选择题已经在下面了，客户会点的。
    */
-  repeatedAsk?: boolean;
+  repeatedAsk?: number | boolean;
 }
 
 /** 只有账号类型、没有 profile 时的便捷入口（测试与脚本用）。 */
@@ -120,17 +124,29 @@ export function missingFields(requirements: string): string[] {
 function fallbackPrompt(
   requirements: string,
   profile: TradeInteractionProfile,
-  repeatedAsk = false,
+  repeatedAsk: number | boolean = 0,
 ): string {
   const missing = missingFields(requirements);
   if (missing.length === 0) {
     return "需求信息已经比较完整了。你可以 @ 某家公司问具体产品，或者直接让我出一版方案与报价。";
   }
   const ask = missing.slice(0, profile.maxQuestionsPerTurn);
+  const repeats = repeatedAsk === true ? 1 : Number(repeatedAsk) || 0;
+
+  // 追问两轮还是对不上，就别再追了。客户已经在说话了，只是说法和关键词表对不上；
+  // 第三次把同样的字段名再念一遍，只会显得系统根本没在听。
+  if (repeats >= 3) {
+    // 到这一步就完全不要再提缺什么了，只确认在听
+    return "记下了。你随时可以继续补充，或者直接上传户型图，我这边就能开始排。";
+  }
+  if (repeats === 2) {
+    return "好的，我先按你说的记下来。剩下的几项下面点一下就行，" +
+      "也可以直接上传户型图——从图里读出来的数比打字准。";
+  }
 
   // 已经问过一遍还是没识别出来——多半是客户答了但说法对不上关键词。
   // 与其原样再问一遍（显得没在听），不如改用选择题，让他点一下就行。
-  if (repeatedAsk) {
+  if (repeats === 1) {
     return `可能是我没问清楚。${ask.join("、")}这几项，下面直接选就行——` +
       `选项里带了价格影响，比打字省事。`;
   }

@@ -73,6 +73,14 @@ import {
 } from "./trade/verification.js";
 import { buildQuotePdf, quoteFilename } from "./pdf/quote-pdf.js";
 import {
+  approvePlan, backToPlan, deferDrawing, grantDrawingConsent, markQuoted, markReadyToDraw,
+  newSession, recordPlanRevision, stagePrompt, StageError, allowedArtifacts,
+  type DesignSession,
+} from "./design/stages.js";
+import { renderPlanViews } from "./render/plan-view.js";
+import { buildBom, bomToSelections } from "./layout/bom.js";
+import { buildQuoteList, renderQuoteListHtml, renderQuoteListText } from "./quote/line-items.js";
+import {
   applyPreferencesToSelections, buildQuestionSet, drawerBiasFor, PreferenceError,
   resolvePreferences, unappliedPreferences, validatePreferences, type CustomerPreferences,
 } from "./preferences/questions.js";
@@ -263,12 +271,105 @@ function verificationFor(accountId: string): TradeVerification | undefined {
   return appCtx.repos.tradeVerifications.byId(accountId);
 }
 
+// ── 设计会话阶段（先问再画 → 全局俯视图评审 → 完整图纸）─────────────────
+
+async function sessionFor(conversationId: string, companyId: string): Promise<DesignSession> {
+  const existing = appCtx.repos.designSessions.byId(conversationId);
+  // 换了公司就重开一段设计进程——排布是绑定公司规格库的
+  let session = existing && existing.companyId === companyId
+    ? existing
+    : newSession({ conversationId, companyId, at: now() });
+
+  // 资料齐了就推进到「该问客户了」。
+  // 这个判断放在这里而不是某个 GET 端点里：阶段是**状态的函数**，
+  // 不该取决于有没有人先查过一次状态。
+  if (session.stage === "collecting" && isReadyToDraw(conversationId)) {
+    session = markReadyToDraw(session, now());
+  }
+  return appCtx.repos.designSessions.upsert(session);
+}
+
+/**
+ * 能不能开始问「要不要出图」。
+ *
+ * 判据只有一条：**户型几何完整**（墙段长度、层高都补齐了）。
+ *
+ * 刻意**不要求**聊天里说全尺寸/布局/风格/预算：
+ *   - 尺寸与布局就是户型图本身，再要求打一遍字是多余的；
+ *   - 省份在账号上（注册必填，定价要用）；
+ *   - 风格与预算是**选择题**的事（FR-1.1），不是从聊天里抠关键词。
+ *
+ * 把这些当成出图的前置条件，等于让客户为了看一眼排布先做一遍问卷。
+ */
+function isReadyToDraw(conversationId: string): boolean {
+  const plan = planForConversation(conversationId);
+  return plan !== undefined && isLayoutReady(plan);
+}
+
+/** 该公司的踢脚做法。缺省整体底座；`plasticLegs` 时物料清单里会出现地脚。 */
+function toeKickSystemFor(companyId: string) {
+  const company = appCtx.repos.companies.byId(companyId);
+  const version = company?.currentPublishedSpecVersionId
+    ? appCtx.repos.specVersions.byId(company.currentPublishedSpecVersionId)
+    : undefined;
+  return version?.toeKickSystem ?? "plywoodPanel";
+}
+
+/** 完整 BOM —— 柜体 + 填缝条 + 踢脚/地脚 + 收口板，缺料如实报出。 */
+function bomFor(plan: FloorPlan, layout: GeneratedLayout, companyId: string) {
+  const bundle = publishedBundle(appCtx, companyId);
+  return buildBom({
+    layout,
+    wallRuns: plan.parsedGeometry.wallRuns,
+    modules: bundle?.modules ?? [],
+    toeKickSystem: toeKickSystemFor(companyId),
+  });
+}
+
 /** 合成某会话在某公司下的偏好（跨公司项 + 该公司项）。 */
 function prefsFor(conv: Conversation, companyId: string): CustomerPreferences {
   return resolvePreferences(
     conv.preferences?.shared,
     conv.preferences?.byCompany?.[companyId],
   );
+}
+
+/**
+ * 把一轮俯视图修改落到偏好上。
+ *
+ * 和 `/preferences` 走**同一套校验**——修改排布时能改的东西，不该比第一次
+ * 回答选择题时能选的东西更宽松；否则会出现"问卷里没有的取值从这个口子进来"。
+ *
+ * 返回真正改到的键名，让上层能如实告诉客户哪几条被采纳了。
+ */
+async function applyRevision(
+  conversationId: string,
+  companyId: string,
+  changes: Partial<CustomerPreferences>,
+): Promise<{ keys: string[]; error?: string }> {
+  const conv = appCtx.repos.conversations.byId(conversationId);
+  if (!conv) return { keys: [], error: "会话不存在" };
+  const bundle = publishedBundle(appCtx, companyId);
+
+  let split;
+  try {
+    split = validatePreferences(changes, bundle);
+  } catch (e) {
+    if (e instanceof PreferenceError) return { keys: [], error: e.message };
+    throw e;
+  }
+  const keys = [...Object.keys(split.shared), ...Object.keys(split.company)];
+  if (keys.length === 0) return { keys };
+
+  const prev = conv.preferences ?? {};
+  const byCompany = { ...(prev.byCompany ?? {}) };
+  if (Object.keys(split.company).length > 0) {
+    byCompany[companyId] = { ...(byCompany[companyId] ?? {}), ...split.company };
+  }
+  await appCtx.repos.conversations.update(conv.id, {
+    preferences: { shared: { ...(prev.shared ?? {}), ...split.shared }, byCompany },
+  });
+  return { keys };
 }
 
 /** 地柜层总长度——预算区间的锚点。没有户型图时返回 undefined，不硬编一个数。 */
@@ -624,9 +725,29 @@ app.post("/api/quotes", requireAccount, async (c) => {
   if (!result.ok) return c.json({ error: "报价校验未通过，已拒绝生成", issues: result.issues }, 422);
 
   await appCtx.repos.quotes.insert(result.quote);
+
+  // 逐项清单：柜体与其门板一组、附件单列、分类汇总。
+  // 只给一个总价，客户既判断不了贵在哪，也没法跟别家比（quote/line-items.ts）
+  const bom = activePlan && stored
+    ? bomFor(activePlan, toGeneratedLayout(stored), company.id) : undefined;
+  const list = buildQuoteList({
+    quote: result.quote,
+    modules: pricing.modules,
+    doorStyles: pricing.doorStyles,
+    ...(bom ? { bomLines: bom.lines } : {}),
+  });
+
+  const session = appCtx.repos.designSessions.byId(conv.id);
+  if (session && session.companyId === company.id && session.stage === "fullDrawings") {
+    await appCtx.repos.designSessions.upsert(markQuoted(session, now()));
+  }
+
   return c.json({
     quote: result.quote,
     formattedTotal: format(result.quote.total),
+    quoteList: list,
+    quoteListText: renderQuoteListText(list),
+    quoteListHtml: renderQuoteListHtml(list),
     // trade 账号被降级定价时如实说明原因，不静默按零售价出单
     ...(account.accountType === "trade" && !gate.allowed
       ? { tradePricing: { applied: false, reason: gate.reason, nextStep: gate.nextStep } }
@@ -865,6 +986,167 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   return c.json({ floorPlan: next, ready: isLayoutReady(next), questions: pendingQuestions(next) });
 });
 
+// ── 设计会话：先问再画（FR-4.2）───────────────────────────────────────────
+
+/**
+ * 当前该做什么。
+ *
+ * 资料齐了会推进到 `readyToDraw` 并给出**「需要我帮你生成设计图吗？」**——
+ * 系统不替客户决定什么时候开始看方案。
+ */
+app.get("/api/conversations/:id/design", requireAccount, async (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  const companyId = c.req.query("companyId") ?? "";
+  if (!companyId) return c.json({ error: "需要 companyId" }, 400);
+
+  const session = await sessionFor(conv.id, companyId);
+  const plan = planForConversation(conv.id);
+  const missing = missingFields(conv.designRequirements);
+
+  const stored = plan
+    ? appCtx.repos.storedLayouts.byId(layoutKey(plan.id, companyId))
+    : undefined;
+
+  return c.json({
+    session,
+    prompt: stagePrompt(session, {
+      missingFields: missing,
+      ...(stored ? { planAcceptable: stored.acceptable } : {}),
+    }),
+    allowed: allowedArtifacts(session.stage),
+    floorPlanReady: plan ? isLayoutReady(plan) : false,
+    missingFields: missing,
+  });
+});
+
+/**
+ * 客户对「要不要出图」的回答，以及后续的阶段推进。
+ *
+ * 这些是**客户的动作**，不是系统自己往前走——这正是这套阶段机存在的理由。
+ */
+app.post("/api/conversations/:id/design/advance", requireAccount, async (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  const body = await jsonBody<{
+    companyId: string;
+    action: "consent" | "defer" | "approvePlan" | "backToPlan" | "revise";
+    note: string;
+    /** revise 专用：这一轮要改的偏好项（与 /preferences 同一套取值）。 */
+    changes: Partial<CustomerPreferences>;
+  }>(c);
+  const companyId = body.companyId ?? "";
+  if (!companyId) return c.json({ error: "需要 companyId" }, 400);
+
+  let session = await sessionFor(conv.id, companyId);
+  const at = now();
+  try {
+    switch (body.action) {
+      case "consent": session = grantDrawingConsent(session, at, body.note); break;
+      case "defer": session = deferDrawing(session, at); break;
+      case "approvePlan": session = approvePlan(session, at); break;
+      case "backToPlan": session = backToPlan(session, at); break;
+      case "revise": {
+        // 一轮修改要真的改到输入上，否则下一版会画出一模一样的图（stages.ts）
+        const applied = await applyRevision(conv.id, companyId, body.changes ?? {});
+        if (applied.error) return c.json({ error: applied.error }, 400);
+        session = recordPlanRevision(session, at, {
+          ...(body.note ? { note: body.note } : {}),
+          applied: applied.keys,
+          ...(applied.keys.length === 0
+            ? { unapplied: "这一轮没有可落到排布上的具体改动，方案与上一版相同。" }
+            : {}),
+        });
+        break;
+      }
+      default: return c.json({ error: `未知动作 ${String(body.action)}` }, 400);
+    }
+  } catch (e) {
+    if (e instanceof StageError) return c.json({ error: e.message, stage: session.stage }, 409);
+    throw e;
+  }
+
+  const saved = await appCtx.repos.designSessions.upsert(session);
+  const plan = planForConversation(conv.id);
+  const stored = plan ? appCtx.repos.storedLayouts.byId(layoutKey(plan.id, companyId)) : undefined;
+  return c.json({
+    session: saved,
+    prompt: stagePrompt(saved, {
+      missingFields: missingFields(conv.designRequirements),
+      ...(stored ? { planAcceptable: stored.acceptable } : {}),
+    }),
+    allowed: allowedArtifacts(saved.stage),
+    // 这一轮到底改到了什么——客户提的和系统改的分开报，不含糊
+    ...(body.action === "revise"
+      ? { revision: saved.revisionRequests?.[saved.revisionRequests.length - 1] }
+      : {}),
+  });
+});
+
+/**
+ * 全局俯视图 —— 客户第一个看到的图，多轮修改都在它上面进行。
+ *
+ * 单段墙的俯视图回答不了「L 型两条边怎么接」「U 型中间还剩多宽」，
+ * 而这恰恰是客户第一眼要判断的（见 render/plan-view.ts）。
+ */
+app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
+  const plan = ownedFloorPlan(c, param(c, "id"));
+  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  if (!isLayoutReady(plan)) {
+    return c.json({ error: "户型信息还不完整", questions: pendingQuestions(plan) }, 409);
+  }
+  const body = await jsonBody<{ companyId: string }>(c);
+  const company = body.companyId ? appCtx.repos.companies.byId(body.companyId) : undefined;
+  if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
+  const bundle = publishedBundle(appCtx, company.id);
+  if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+
+  const session = await sessionFor(plan.conversationId, company.id);
+  if (!allowedArtifacts(session.stage).planView) {
+    return c.json({
+      error: "还没到出图阶段——请先确认「需要我帮你生成设计图吗？」",
+      stage: session.stage,
+      prompt: stagePrompt(session, { missingFields: [] }),
+    }, 409);
+  }
+
+  const conv = appCtx.repos.conversations.byId(plan.conversationId);
+  const prefs = conv ? prefsFor(conv, company.id) : {};
+  const layout = generateLayout(plan.parsedGeometry, bundle.modules, {
+    ...(plan.parsedGeometry.ceilingHeight !== undefined
+      ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
+    drawerBias: drawerBiasFor(prefs),
+  });
+  const lastRevision = session.revisionRequests?.[session.revisionRequests.length - 1];
+  const { designLayoutId, revisionNo } = await persistLayout({
+    plan, companyId: company.id, layout,
+    triggeredBy: session.planRevisions > 0 ? "customerRequest" : "auto",
+    // 版本说明要写清「因为客户说了什么才改的」，而不是只留一个轮次编号——
+    // 一年后回看这条记录，"第 3 轮调整" 什么也没说明（§3.6 的版本可追溯）
+    changeSummary: lastRevision
+      ? `第 ${session.planRevisions + 1} 版：${lastRevision.note ?? "客户要求调整"}` +
+        (lastRevision.applied.length
+          ? `（改动：${lastRevision.applied.join("、")}）`
+          : "（无可落到排布上的改动）")
+      : "首版全局排布",
+  });
+
+  return c.json({
+    designLayoutId, revisionNo,
+    stage: session.stage,
+    planViews: renderPlanViews(plan.parsedGeometry, layout.placements),
+    moduleCounts: layout.moduleCounts,
+    ergonomics: layout.ergonomics,
+    aesthetics: layout.aesthetics,
+    acceptable: layout.acceptable,
+    warnings: layout.warnings,
+    explanation: explanationFor(plan, layout, company.id, prefs),
+    prompt: stagePrompt(session, { planAcceptable: layout.acceptable }),
+    /** 这一版是应哪次修改而出的——客户能对上自己刚说的话。 */
+    ...(lastRevision ? { revision: lastRevision } : {}),
+  }, 201);
+});
+
 // ── 方案生成与四视图（FR-4 / FR-5）────────────────────────────────────────
 
 app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
@@ -881,6 +1163,19 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
   if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
   const bundle = publishedBundle(appCtx, company.id);
   if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+
+  // 完整四视图要等客户在全局俯视图上点过头——一上来给四张图，
+  // 客户不知道该看哪张、该对哪张提意见（design/stages.ts）
+  const session = await sessionFor(plan.conversationId, company.id);
+  if (!allowedArtifacts(session.stage).fourViews) {
+    return c.json({
+      error: session.stage === "planReview"
+        ? "请先在全局俯视图上确认排布，再出完整四视图"
+        : "还没到出图阶段——请先确认「需要我帮你生成设计图吗？」",
+      stage: session.stage,
+      prompt: stagePrompt(session, { missingFields: [] }),
+    }, 409);
+  }
 
   // 储物偏好进的是**排布算法**，不是记下来给人看：选"尽量多做抽屉"会改变装箱
   // 候选的偏好项，进而改变实际排出来的柜型（preferences/questions.ts 的 storage 题）
@@ -909,9 +1204,15 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     acceptable: layout.acceptable,
     // 直接可喂给 /api/quotes（结构里没有任何价格字段，FR-8）。
     // 五金/配件按 appliesTo* 过滤后才加上——加到装不了的柜体上会被定价校验整单拒绝
-    selections: applyPreferencesToSelections(toSelections(layout), prefs, bundle),
+    // 完整 BOM：柜体 + 填缝条 + 踢脚/地脚 + 收口板。
+    // 只报柜体的话，客户拿到的是一份缺料的价格（见 layout/bom.ts）
+    selections: applyPreferencesToSelections(
+      bomToSelections(bomFor(plan, layout, company.id)), prefs, bundle),
+    bomMissing: bomFor(plan, layout, company.id).missing,
     // 偏好没能完全落实时如实说明——静默地部分落实最坏（客户拆箱才发现吊柜是平板的）
-    unappliedPreferences: unappliedPreferences(toSelections(layout), prefs, bundle),
+    unappliedPreferences: unappliedPreferences(
+      bomToSelections(bomFor(plan, layout, company.id)), prefs, bundle),
+    planViews: renderPlanViews(plan.parsedGeometry, layout.placements),
     views: viewsFor(plan, layout, company.id),
     // 图纸配解释：这是什么图、为什么这么排（全部来自算出来的结果）
     explanation: explanationFor(plan, layout, company.id, prefs),
@@ -1405,12 +1706,24 @@ function toHistory(m: ChatMessage): { role: "user" | "assistant"; content: strin
  * 但说法对不上我们的关键词（"质感优先" 匹配不到 "风格"）。这时候原样再问
  * 一遍最伤：客户会觉得没在听。
  */
-function askedSameFieldsBefore(conv: Conversation, nextRequirements: string): boolean {
-  const lastAssistant = [...conv.messages].reverse().find((m) => m.role === "assistant" && !m.companyId);
-  if (!lastAssistant) return false;
+/**
+ * 已经连着几轮在问同样的缺失字段。
+ *
+ * 返回**次数**而不是布尔值：只知道"重复了"没法决定该说什么，第二次和第五次
+ * 该说的话不一样（见 orchestrator.ts 的 fallbackPrompt）。
+ */
+function askedSameFieldsBefore(conv: Conversation, nextRequirements: string): number {
   const stillMissing = missingFields(nextRequirements);
-  if (stillMissing.length === 0) return false;
-  return stillMissing.some((f) => lastAssistant.content.includes(f));
+  if (stillMissing.length === 0) return 0;
+
+  // 数的是**总共问过几次**，不是"连着问了几次"。
+  //
+  // 连续计数有个反直觉的坑：追问两次后系统换成一句不点名字段的软化说法，
+  // 这句话本身会把连续计数打断，于是下一轮又从"第一次问"开始，客户会看到
+  // 「问 → 换选择题 → 软化 → 又问」的循环。问过两次就是问过两次。
+  return conv.messages.filter(
+    (m) => m.role === "assistant" && !m.companyId && stillMissing.some((f) => m.content.includes(f)),
+  ).length;
 }
 
 /** 把这一轮的输入并进需求摘要后的样子——用于判断本轮是否有进展。 */
