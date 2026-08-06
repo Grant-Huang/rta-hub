@@ -31,6 +31,42 @@ const ACCOUNTS = { consumer: "ca_demo_consumer", trade: "ca_demo_trade" } as con
 
 type Json = Record<string, any>;
 
+/**
+ * 时间线上的一条事件。
+ *
+ * ## 为什么产出物要按时间组织，而不是按数据种类
+ *
+ * 上一版报告分成「会话内容 / 选择题 / 全局俯视图 / 四视图 / 报价清单」五节。
+ * 每一节的内容都是对的，顺序也是对的，但读者在第一节末尾看到
+ * 「客户：排布可以了」，再往下才看到图——**读起来就是"先确认后看图"**，
+ * 而实际调用顺序恰恰相反（planReview 阶段才出俯视图，approvePlan 之后才出四视图，
+ * 且有闸门与测试保证）。
+ *
+ * 教训：**产出物的结构本身会传达一个因果关系。** 按数据种类分节是实现者的视角；
+ * 客户的视角是时间。分节方式选错，正确的数据也会讲出一个错误的故事。
+ *
+ * 所以改成一条时间线：每样东西出现在它**真正被产出的那一刻**。
+ */
+type Beat =
+  | { kind: "say"; role: "user" | "assistant"; text: string }
+  /** 系统就地给出的选择题（出现在它被提出的那一轮，不是集中到末尾）。 */
+  | { kind: "questions"; questions: Json[] }
+  /** 客户在选择题上的作答。 */
+  | { kind: "answered"; note: string }
+  /** 户型录入完成。 */
+  | { kind: "floorPlan"; walls: number; features: number; ceilingHeight: number }
+  /** 一版全局俯视图。 */
+  | {
+      kind: "planViews"; label: string; mix: string; changed: boolean | undefined;
+      applied: string[]; unapplied?: string; views: { base?: string; wall?: string; note?: string };
+    }
+  /** 完整四视图 + 解释。 */
+  | { kind: "fourViews"; runs: Json[]; explanation: Json; acceptable: boolean; aesthetics: Json[] }
+  /** 报价清单。 */
+  | { kind: "quote"; ok: boolean; text?: string; html?: string; total?: string; error?: string }
+  /** 提示 / 警告，就地出现。 */
+  | { kind: "note"; level: "info" | "warn"; text: string };
+
 async function main(): Promise<void> {
   const mod = await import("../src/server.js");
   const ctxMod = await import("../src/app/context.js");
@@ -71,15 +107,18 @@ async function main(): Promise<void> {
 
     // 1. 建会话 + 多轮对话
     const { conversation } = await call("/api/conversations", { method: "POST", acct });
-    const transcript: { role: string; text: string }[] = [];
+    /** 这一单从头到尾发生的事，按发生顺序。渲染只按这条线走。 */
+    const timeline: Beat[] = [];
+    const said = (role: "user" | "assistant", text: string) =>
+      timeline.push({ kind: "say", role, text });
     let lastQuestions: Json[] = [];
 
     for (const turn of k.turns) {
       const r = await call(`/api/conversations/${conversation.id}/messages`, {
         method: "POST", acct, body: JSON.stringify({ text: turn }),
       });
-      transcript.push({ role: "user", text: turn });
-      for (const reply of r.replies ?? []) transcript.push({ role: "assistant", text: reply.content });
+      said("user", turn);
+      for (const reply of r.replies ?? []) said("assistant", reply.content);
       lastQuestions = r.questions ?? [];
       console.log(`  客户：${turn}`);
       console.log(`  助手：${(r.replies?.[0]?.content ?? "（无）").slice(0, 76)}`);
@@ -112,30 +151,39 @@ async function main(): Promise<void> {
           method: "POST", acct, body: JSON.stringify({ addFeature: { wallRunId: run.id, ...f } }),
         });
         if (r.__status === 200) featureCount++;
-        else console.log(`    ⚠ 加特征失败：${r.error}`);
+        else {
+          console.log(`    ⚠ 加特征失败：${r.error}`);
+          timeline.push({ kind: "note", level: "warn", text: `加特征失败：${r.error}` });
+        }
       }
     }
+    timeline.push({
+      kind: "floorPlan", walls: k.walls.length,
+      features: featureCount, ceilingHeight: k.ceilingHeight,
+    });
     console.log(`  户型：${k.walls.length} 段墙，${featureCount} 个特征，层高 ${k.ceilingHeight}"`);
 
     // 3. 选择题 → 答偏好
     const qs = await call(
       `/api/conversations/${conversation.id}/questions?companyId=co_pilot`, { acct });
+    timeline.push({ kind: "questions", questions: qs.questions ?? [] });
     await call(`/api/conversations/${conversation.id}/preferences`, {
       method: "POST", acct, body: JSON.stringify({ companyId: "co_pilot", ...k.prefs }),
     });
+    timeline.push({ kind: "answered", note: prefNote(k) });
     console.log(`  选择题 ${(qs.questions ?? []).length} 道　偏好已记录`);
 
     // 4. **先问再画**：拿到「需要我帮你生成设计图吗？」
     const askDesign = await call(
       `/api/conversations/${conversation.id}/design?companyId=co_pilot`, { acct });
     console.log(`  阶段 ${askDesign.session?.stage}：${(askDesign.prompt?.message ?? "").split("\n")[0]}`);
-    transcript.push({ role: "assistant", text: askDesign.prompt?.message ?? "" });
+    said("assistant", askDesign.prompt?.message ?? "");
 
     // 5. 客户点头 → 全局俯视图（多轮改）
     await call(`/api/conversations/${conversation.id}/design/advance`, {
       method: "POST", acct, body: JSON.stringify({ companyId: "co_pilot", action: "consent" }),
     });
-    transcript.push({ role: "user", text: "好，出图看看" });
+    said("user", "好，出图看看");
 
     // 每一版都记下型号构成，用来验证「客户提的改动真的改到了图上」——
     // 光看接口返回 200 说明不了任何事，同一张图返回一百次也全是 200
@@ -148,17 +196,37 @@ async function main(): Promise<void> {
       planView = await call(`/api/floorplans/${floorPlanId}/plan-view`, {
         method: "POST", acct, body: JSON.stringify({ companyId: "co_pilot" }),
       });
-      if (planView.__status !== 201) { console.log(`    ⚠ 出俯视图失败：${planView.error}`); break; }
+      if (planView.__status !== 201) {
+        console.log(`    ⚠ 出俯视图失败：${planView.error}`);
+        timeline.push({ kind: "note", level: "warn", text: `出俯视图失败：${planView.error}` });
+        break;
+      }
       const mix = mixOf(planView);
       const prev = planRounds[planRounds.length - 1];
+      const label = `第 ${round + 1} 版`;
       planRounds.push({
-        label: `第 ${round + 1} 版`, mix,
+        label, mix,
         applied: planView.revision?.applied ?? [],
         ...(planView.revision?.unapplied ? { unapplied: planView.revision.unapplied } : {}),
       });
-      console.log(`  全局俯视图 第 ${round + 1} 版：${mix}` +
+
+      // 上一轮什么都没改到的话，别说"重排了一版"——那与刚说过的
+      // "这一轮没有可落到排布上的具体改动"自相矛盾
+      const appliedLast: string[] = planView.revision?.applied ?? [];
+      said("assistant", round === 0
+        ? "这是全局俯视图，分地柜层和吊柜层。先看排布——哪个柜子该挪、哪里想换成抽屉，直接说。"
+        : appliedLast.length
+          ? `按你说的重排了一版（${label}）。`
+          : `这是${label}。刚才那条我没法落到排布上，所以和上一版一样——还有别的要改吗？`);
+      timeline.push({
+        kind: "planViews", label, mix,
+        changed: prev ? prev.mix !== mix : undefined,
+        applied: planView.revision?.applied ?? [],
+        ...(planView.revision?.unapplied ? { unapplied: planView.revision.unapplied } : {}),
+        views: planView.planViews ?? {},
+      });
+      console.log(`  全局俯视图 ${label}：${mix}` +
         (prev ? (prev.mix === mix ? "　（与上一版相同）" : "　← 排布已变") : ""));
-      transcript.push({ role: "assistant", text: `全局俯视图 第 ${round + 1} 版：${mix}` });
 
       const rev = k.revisions[round];
       if (!rev) break;
@@ -168,12 +236,12 @@ async function main(): Promise<void> {
           companyId: "co_pilot", action: "revise", note: rev.note, changes: rev.changes,
         }),
       });
-      transcript.push({ role: "user", text: rev.note });
+      said("user", rev.note);
       const applied: string[] = adv.revision?.applied ?? [];
       const line = applied.length
         ? `好的，这就按「${applied.join("、")}」重排一版。`
         : (adv.revision?.unapplied ?? "这条我暂时改不到排布上。");
-      transcript.push({ role: "assistant", text: line });
+      said("assistant", line);
       console.log(`  客户：${rev.note}\n  助手：${line}`);
     }
 
@@ -181,15 +249,28 @@ async function main(): Promise<void> {
     await call(`/api/conversations/${conversation.id}/design/advance`, {
       method: "POST", acct, body: JSON.stringify({ companyId: "co_pilot", action: "approvePlan" }),
     });
-    transcript.push({ role: "user", text: "排布可以了，出完整图纸" });
+    said("user", "排布可以了，出完整图纸");
 
     const layout = await call(`/api/floorplans/${floorPlanId}/layout`, {
       method: "POST", acct, body: JSON.stringify({ companyId: "co_pilot" }),
     });
     console.log(`  完整四视图：人体工程${layout.acceptable ? "全过" : "未过"}　` +
       `美观 ${(layout.aesthetics ?? []).map((a: Json) => a.score.total).join("/")}`);
-    for (const n of layout.bomMissing ?? []) console.log(`    ⚠ 缺辅料型号：${n}`);
-    for (const n of layout.unappliedPreferences ?? []) console.log(`    ⚠ ${n}`);
+    said("assistant", "排布定下来了，这是完整的四视图和逐条说明。");
+    timeline.push({
+      kind: "fourViews", runs: layout.views ?? [],
+      explanation: layout.explanation ?? {},
+      acceptable: Boolean(layout.acceptable),
+      aesthetics: layout.aesthetics ?? [],
+    });
+    for (const n of layout.bomMissing ?? []) {
+      console.log(`    ⚠ 缺辅料型号：${n}`);
+      timeline.push({ kind: "note", level: "warn", text: `缺辅料型号：${n}` });
+    }
+    for (const n of layout.unappliedPreferences ?? []) {
+      console.log(`    ⚠ ${n}`);
+      timeline.push({ kind: "note", level: "warn", text: String(n) });
+    }
 
     // 7. 报价 + 清单
     const quote = await call("/api/quotes", {
@@ -202,12 +283,26 @@ async function main(): Promise<void> {
       const sums = (quote.quoteList?.subtotals ?? [])
         .map((x: Json) => `${x.label} ${x.includedIn ? "含在柜体价内" : fmtMoney(x.amount)}`).join("　");
       console.log(`  报价 ${quote.formattedTotal}　${sums}`);
+      timeline.push({
+        kind: "quote", ok: true,
+        ...(quote.quoteListText ? { text: quote.quoteListText } : {}),
+        ...(quote.quoteListHtml ? { html: quote.quoteListHtml } : {}),
+        ...(quote.formattedTotal ? { total: quote.formattedTotal } : {}),
+      });
       if (quote.quoteList?.reconciliationDelta) {
         console.log(`    ⚠ 清单与小计差 ${fmtMoney(quote.quoteList.reconciliationDelta)}`);
+        timeline.push({
+          kind: "note", level: "warn",
+          text: `清单与小计差 ${fmtMoney(quote.quoteList.reconciliationDelta)}`,
+        });
+      }
+      if (quote.tradePricing && !quote.tradePricing.applied) {
+        timeline.push({ kind: "note", level: "info", text: String(quote.tradePricing.reason) });
       }
     } else {
       console.log(`  报价被拒（${quote.__status}）：${quote.error}` +
         (quote.issues ? ` ${JSON.stringify(quote.issues)}` : ""));
+      timeline.push({ kind: "quote", ok: false, error: String(quote.error ?? "") });
     }
 
     // ── 冒烟断言 ──
@@ -225,6 +320,35 @@ async function main(): Promise<void> {
     }
     if (planRounds.length !== k.revisions.length + 1) {
       fail(`应出 ${k.revisions.length + 1} 版俯视图，实际 ${planRounds.length} 版`);
+    }
+
+    // 时间线的**顺序**本身就是一条要守的规则。上一版报告数据全对、顺序也对，
+    // 但分节方式让它读起来是"先确认后看图"——产出物的结构会传达因果关系，
+    // 所以这里直接盯住产出物里事件的先后。
+    const at = (pred: (b: Beat) => boolean) => timeline.findIndex(pred);
+    const iAsk = at((b) => b.kind === "say" && b.text.includes("需要我帮你生成设计图吗"));
+    const iFirstPlan = at((b) => b.kind === "planViews");
+    const iApprove = at((b) => b.kind === "say" && b.text.includes("排布可以了"));
+    const iFour = at((b) => b.kind === "fourViews");
+    const iQuote = at((b) => b.kind === "quote");
+
+    for (const [label, idx] of [
+      ["询问是否出图", iAsk], ["首版俯视图", iFirstPlan],
+      ["客户认可排布", iApprove], ["完整四视图", iFour], ["报价清单", iQuote],
+    ] as [string, number][]) {
+      if (idx < 0) fail(`时间线上找不到「${label}」`);
+    }
+    if (iAsk >= 0 && iFirstPlan >= 0 && iAsk > iFirstPlan) {
+      fail("时间线上「问要不要出图」排在了首版俯视图之后");
+    }
+    if (iFirstPlan >= 0 && iApprove >= 0 && iFirstPlan > iApprove) {
+      fail("时间线上首版俯视图排在了客户认可之后——客户得先看到图才能认可");
+    }
+    if (iApprove >= 0 && iFour >= 0 && iApprove > iFour) {
+      fail("时间线上四视图排在了客户认可之前");
+    }
+    if (iFour >= 0 && iQuote >= 0 && iFour > iQuote) {
+      fail("时间线上报价清单排在了四视图之前");
     }
     // 客户提了能落下去的改动，图就必须真的变
     for (const [i, rev] of k.revisions.entries()) {
@@ -265,9 +389,8 @@ async function main(): Promise<void> {
     }
 
     results.push({
-      kitchen: k, conversation, transcript, questions: lastQuestions,
-      offeredQuestions: qs.questions ?? [], planView, planRounds, layout, quote,
-      designPrompt: askDesign.prompt,
+      kitchen: k, conversation, timeline, questions: lastQuestions,
+      planRounds, layout, quote, designPrompt: askDesign.prompt,
     });
   }
 
@@ -323,12 +446,22 @@ function prefNote(k: Scenario): string {
   return parts.join(" · ");
 }
 
+/**
+ * 纯文本报告 —— **按时间线走**，不按数据种类分节。
+ *
+ * 每样东西出现在它真正被产出的那一刻：客户说了什么、系统就地给出哪几道选择题、
+ * 哪一刻出的俯视图、客户在图上提了什么、哪一刻才认可、然后才是四视图与报价。
+ * 见 Beat 的注释。
+ */
 function renderText(results: Json[], set: ScenarioSet): string {
   const out: string[] = [
-    "RTA-Hub 端到端模拟 —— 会话内容、设计图与报价清单",
+    "RTA-Hub 端到端模拟 —— 按时间顺序记录的完整会话",
     "=".repeat(76), "",
     `场景来源：${set.source === "llm" ? "LLM 动态生成" : "确定性生成器（未配置 LLM）"}`,
     set.note, "",
+    "说明：下面是一条时间线。图纸出现在它实际被生成的位置——",
+    "     客户先看到全局俯视图、在上面改，**改到认可之后**才有四视图与报价清单。",
+    "",
   ];
 
   for (const r of results) {
@@ -337,48 +470,62 @@ function renderText(results: Json[], set: ScenarioSet): string {
       `   ${k.shape}　层高 ${k.ceilingHeight}"　账号 ${k.accountType}`,
       `   覆盖意图：${k.covers}`, "█".repeat(76), "");
 
-    out.push("【会话内容】");
-    for (const t of r.transcript) {
-      const who = t.role === "user" ? "客户" : "助手";
-      out.push(...String(t.text).split("\n").map((line, i) =>
-        `  ${i === 0 ? who + "：" : "     "}${line}`));
-    }
-    out.push("");
-
-    out.push("【系统提出的选择题】（选项来自真实规格库，价格影响由代码算出）");
-    for (const q of r.offeredQuestions) {
-      out.push(`  ▸ ${q.prompt}`);
-      for (const o of q.options) {
-        out.push(`     · ${String(o.label).padEnd(24)} → ${o.priceNote}${o.recommended ? "　[常见选择]" : ""}`);
+    for (const b of (r.timeline ?? []) as Beat[]) {
+      switch (b.kind) {
+        case "say": {
+          const who = b.role === "user" ? "客户" : "助手";
+          out.push(...b.text.split("\n").map((line, i) =>
+            `  ${i === 0 ? who + "：" : "     "}${line}`));
+          break;
+        }
+        case "floorPlan":
+          out.push("",
+            `  ▣ 户型已录入：${b.walls} 段墙、${b.features} 个特征、层高 ${b.ceilingHeight}"`, "");
+          break;
+        case "questions":
+          out.push("", "  ▸ 系统就地给出选择题（选项来自真实规格库，价格影响由代码算出）：");
+          for (const q of b.questions) {
+            out.push(`      ${q.prompt}`);
+            for (const o of q.options ?? []) {
+              out.push(`        · ${String(o.label).padEnd(24)} → ${o.priceNote}` +
+                `${o.recommended ? "　[常见选择]" : ""}`);
+            }
+          }
+          break;
+        case "answered":
+          out.push(`  客户（在选项上勾选）：${b.note}`, "");
+          break;
+        case "planViews": {
+          const changed = b.changed === undefined ? ""
+            : b.changed ? "　← 排布已变" : "　（排布未变）";
+          out.push(`  ▤ 全局俯视图 ${b.label}：${b.mix}${changed}`);
+          // unapplied 上一条助手发言已经说过了，这里不复述
+          if (b.applied.length) out.push(`      应客户要求改动：${b.applied.join("、")}`);
+          if (b.views.note) out.push(`      ${b.views.note}`);
+          out.push("");
+          break;
+        }
+        case "fourViews":
+          out.push(`  ▦ 完整四视图（人体工程${b.acceptable ? "全部通过" : "未通过"}）`, "");
+          if (b.explanation?.viewGuideText) {
+            out.push(indent(b.explanation.viewGuideText, 4), "");
+          }
+          for (const per of b.explanation?.perRun ?? []) {
+            out.push(`  ── ${per.runLabel} ` +
+              `${"─".repeat(Math.max(0, 54 - String(per.runLabel).length * 2))}`);
+            out.push(indent(per.text, 4), "");
+          }
+          break;
+        case "quote":
+          out.push("  ▥ 报价清单");
+          if (b.text) out.push(indent(b.text, 4));
+          out.push("", `     总计（含税运）：${b.ok ? b.total : `被拒：${b.error}`}`, "");
+          break;
+        case "note":
+          out.push(`  ${b.level === "warn" ? "⚠" : "·"} ${b.text}`);
+          break;
       }
     }
-    out.push("", `【客户的选择】${prefNote(k)}`, "");
-
-    out.push(`【全局俯视图】客户在这一版上改了 ${k.revisions.length} 轮`);
-    for (const [i, round] of (r.planRounds ?? []).entries()) {
-      const prev = (r.planRounds ?? [])[i - 1];
-      out.push(`  ${round.label}：${round.mix}` +
-        (prev ? (prev.mix === round.mix ? "　（排布未变）" : "　← 排布已变") : ""));
-      if (round.applied?.length) out.push(`    应客户要求改动：${round.applied.join("、")}`);
-      if (round.unapplied) out.push(`    ${round.unapplied}`);
-    }
-    out.push("");
-
-    if (r.layout?.explanation?.viewGuideText) {
-      out.push(indent(r.layout.explanation.viewGuideText, 2), "");
-    }
-    for (const per of r.layout?.explanation?.perRun ?? []) {
-      out.push(`── ${per.runLabel} ${"─".repeat(Math.max(0, 56 - per.runLabel.length * 2))}`);
-      out.push(indent(per.text, 2), "");
-    }
-
-    out.push("【报价清单】");
-    if (r.quote?.quoteListText) out.push(indent(r.quote.quoteListText, 2));
-    out.push("", `  总计（含税运）：${r.quote?.formattedTotal ?? `被拒：${r.quote?.error}`}`);
-    if (r.quote?.tradePricing && !r.quote.tradePricing.applied) {
-      out.push(`  注：${r.quote.tradePricing.reason}`);
-    }
-    for (const n of r.layout?.unappliedPreferences ?? []) out.push(`  ⚠ ${n}`);
     out.push("");
   }
   return out.join("\n");
@@ -399,68 +546,85 @@ function renderHtml(results: Json[], set: ScenarioSet): string {
     front: "正视图", topBase: "俯视图 · 地柜层", topWall: "俯视图 · 吊柜层", side: "侧视图",
   };
 
+  /** 一条时间线上的一个事件 → 一段 HTML。顺序就是发生的顺序。 */
+  const beatHtml = (b: Beat): string => {
+    switch (b.kind) {
+      case "say":
+        return `<div class="msg ${b.role}"><b>${b.role === "user" ? "客户" : "助手"}</b>${
+          esc(b.text).replace(/\n/g, "<br/>")
+            .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</div>`;
+
+      case "floorPlan":
+        return `<div class="beat sys">▣ 户型已录入：${b.walls} 段墙、${b.features} 个特征、` +
+          `层高 ${b.ceilingHeight}"</div>`;
+
+      case "questions":
+        return `<div class="beat">
+          <div class="note">系统就地给出选择题——选项来自公司真实规格库，价格影响由定价引擎算出。</div>
+          ${b.questions.map((q: Json) => `
+            <div class="qcard"><div class="qp">${esc(q.prompt)}</div>
+              <div class="qw">${esc(q.why)}</div>
+              <div class="opts">${(q.options ?? []).map((o: Json) => `
+                <div class="opt${o.recommended ? " rec" : ""}"><span class="ol">${esc(o.label)}</span>
+                ${o.detail ? `<span class="od">${esc(o.detail)}</span>` : ""}
+                <span class="op">${esc(o.priceNote)}</span></div>`).join("")}</div></div>`).join("")}
+        </div>`;
+
+      case "answered":
+        return `<div class="msg user"><b>客户（在选项上勾选）</b>${esc(b.note)}</div>`;
+
+      case "planViews": {
+        const changed = b.changed === undefined ? ""
+          : b.changed ? `<span class="chg">← 排布已变</span>`
+          : `<span class="same">（排布未变）</span>`;
+        return `<div class="beat">
+          <div class="bt">▤ 全局俯视图 ${esc(b.label)} ${changed}</div>
+          <div class="mix"><code>${esc(b.mix)}</code></div>
+          ${b.applied.length ? `<div class="note">应客户要求改动：${esc(b.applied.join("、"))}</div>` : ""}
+          ${b.views.note ? `<div class="warn">${esc(b.views.note)}</div>` : ""}
+          <div class="views">
+            ${b.views.base ? `<figure>${b.views.base}<figcaption>地柜层</figcaption></figure>` : ""}
+            ${b.views.wall ? `<figure>${b.views.wall}<figcaption>吊柜层</figcaption></figure>` : ""}
+          </div>
+        </div>`;
+      }
+
+      case "fourViews":
+        return `<div class="beat">
+          <div class="bt">▦ 完整四视图（人体工程${b.acceptable ? "全部通过" : "未通过"}）</div>
+          ${b.explanation?.viewGuideHtml ?? ""}
+          ${b.runs.map((run: Json) => {
+            const per = (b.explanation?.perRun ?? []).find((p: Json) => p.runId === run.runId);
+            return `<div class="run"><h4>${esc(run.runLabel)}</h4>
+              <div class="views">${Object.entries(run.views as Record<string, string>)
+                .map(([key, svg]) =>
+                  `<figure>${svg}<figcaption>${VIEW_NAMES[key] ?? key}</figcaption></figure>`)
+                .join("")}</div>
+              ${per?.html ?? ""}</div>`;
+          }).join("")}
+        </div>`;
+
+      case "quote":
+        return `<div class="beat">
+          <div class="bt">▥ 报价清单</div>
+          ${b.ok ? (b.html ?? "") : `<p class="warn">${esc(b.error)}</p>`}
+          <p class="quote">总计（含税运）：${esc(b.ok ? (b.total ?? "—") : "被拒")}</p>
+        </div>`;
+
+      case "note":
+        return `<p class="${b.level === "warn" ? "warn" : "note"}">` +
+          `${b.level === "warn" ? "⚠" : "·"} ${esc(b.text)}</p>`;
+    }
+  };
+
   const sections = results.map((r) => {
     const k = r.kitchen as Scenario;
-
-    const chat = r.transcript.map((t: Json) =>
-      `<div class="msg ${t.role}"><b>${t.role === "user" ? "客户" : "助手"}</b>${
-        esc(t.text).replace(/\n/g, "<br/>").replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</div>`).join("");
-
-    const questions = r.offeredQuestions.map((q: Json) => `
-      <div class="qcard"><div class="qp">${esc(q.prompt)}</div>
-        <div class="qw">${esc(q.why)}</div>
-        <div class="opts">${q.options.map((o: Json) => `
-          <div class="opt${o.recommended ? " rec" : ""}"><span class="ol">${esc(o.label)}</span>
-          ${o.detail ? `<span class="od">${esc(o.detail)}</span>` : ""}
-          <span class="op">${esc(o.priceNote)}</span></div>`).join("")}</div></div>`).join("");
-
-    const planViews = r.planView?.planViews
-      ? `<div class="views">
-           <figure>${r.planView.planViews.base}<figcaption>全局俯视图 · 地柜层</figcaption></figure>
-           <figure>${r.planView.planViews.wall}<figcaption>全局俯视图 · 吊柜层</figcaption></figure>
-         </div>` : "";
-
-    const fourViews = (r.layout?.views ?? []).map((run: Json) => {
-      const per = (r.layout.explanation?.perRun ?? []).find((p: Json) => p.runId === run.runId);
-      return `<div class="run"><h4>${esc(run.runLabel)}</h4>
-        <div class="views">${Object.entries(run.views as Record<string, string>).map(([key, svg]) =>
-          `<figure>${svg}<figcaption>${VIEW_NAMES[key] ?? key}</figcaption></figure>`).join("")}</div>
-        ${per?.html ?? ""}</div>`;
-    }).join("");
-
     return `<section class="kitchen">
       <h2><span class="tag">${esc(k.id)}</span>${esc(k.name)}</h2>
       <p class="meta">${esc(k.shape)}　层高 ${k.ceilingHeight}"　${k.walls.length} 段墙　
         ${k.accountType === "trade" ? "建商（trade）" : "消费者"}账号</p>
       <p class="covers"><b>覆盖意图：</b>${esc(k.covers)}</p>
-
-      <h3>1 · 会话内容</h3>
-      <div class="chat">${chat}</div>
-
-      <h3>2 · 系统提出的选择题</h3>
-      <p class="note">选项来自公司真实规格库；价格影响由定价引擎从价格矩阵算出。</p>
-      ${questions}
-      <p class="picked">客户的选择：<b>${esc(prefNote(k))}</b></p>
-
-      <h3>3 · 全局俯视图（先看排布，改了 ${k.revisions.length} 轮）</h3>
-      <ol class="rounds">${(r.planRounds ?? []).map((rd: Json, i: number) => {
-        const prev = (r.planRounds ?? [])[i - 1];
-        const changed = prev ? (prev.mix === rd.mix ? "（排布未变）" : "← 排布已变") : "";
-        return `<li>${esc(rd.label)}：<code>${esc(rd.mix)}</code> ${esc(changed)}` +
-          (rd.applied?.length ? `<br><span class="note">应客户要求改动：${esc(rd.applied.join("、"))}</span>` : "") +
-          (rd.unapplied ? `<br><span class="note">${esc(rd.unapplied)}</span>` : "") + "</li>";
-      }).join("")}</ol>
-      ${planViews}
-
-      <h3>4 · 完整四视图与解释</h3>
-      ${r.layout?.explanation?.viewGuideHtml ?? ""}
-      ${fourViews}
-
-      <h3>5 · 报价清单</h3>
-      ${r.quote?.quoteListHtml ?? `<p class="note">${esc(r.quote?.error ?? "")}</p>`}
-      <p class="quote">总计（含税运）：${esc(r.quote?.formattedTotal ?? "—")}</p>
-      ${(r.layout?.unappliedPreferences ?? []).map((n: string) =>
-        `<p class="warn">⚠ ${esc(n)}</p>`).join("")}
+      <div class="timeline">${((r.timeline ?? []) as Beat[]).map(beatHtml).join("")}</div>
     </section>`;
   }).join("");
 
@@ -500,6 +664,15 @@ function renderHtml(results: Json[], set: ScenarioSet): string {
   figure svg { max-width:100%; height:auto; display:block; }
   figcaption { color:#555; font-size:11px; text-align:center; padding-top:4px; }
   .quote { font-size:19px; font-weight:600; color:#7bd88f; }
+  /* 时间线：一条竖线串起所有事件，顺序即发生顺序 */
+  .timeline { display:flex; flex-direction:column; gap:8px;
+              border-left:2px solid #262b33; padding-left:16px; margin-top:14px; }
+  .beat { background:#171c24; border:1px solid #262b33; border-radius:11px; padding:12px 14px; }
+  .beat.sys { background:none; border:none; padding:2px 0; color:#8b94a3; font-size:12.5px; }
+  .bt { font-size:13px; font-weight:600; margin-bottom:7px; }
+  .mix code { font-size:11.5px; color:#9aa4b2; word-break:break-all; }
+  .chg { color:#7bd88f; font-size:11.5px; font-weight:400; margin-left:6px; }
+  .same { color:#8b94a3; font-size:11.5px; font-weight:400; margin-left:6px; }
   .warn { color:#d8c37b; font-size:12.5px; }
   table.ql { width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:12px; }
   table.ql th,table.ql td { text-align:left; padding:5px 6px; border-bottom:1px solid #262b33; vertical-align:top; }
@@ -526,9 +699,8 @@ function renderHtml(results: Json[], set: ScenarioSet): string {
   .x-guide p { color:#8b94a3; }
 </style></head><body><div class="wrap">
 <h1>RTA-Hub · 端到端模拟</h1>
-<p class="lede">走真实 HTTP 端点：建会话 → 多轮对话 → 上传户型 → 补齐尺寸与窗/上下水 →
-回答选择题 → <b>问客户要不要出图</b> → 全局俯视图（多轮改）→ 认可排布 →
-完整四视图 + 解释 → 报价清单。</p>
+<p class="lede">走真实 HTTP 端点。下面是一条<b>时间线</b>——每样东西出现在它真正被产出的那一刻：
+客户先看到全局俯视图、在上面改，<b>改到认可之后</b>才有四视图与报价清单。</p>
 <p class="src"><b>场景来源：</b>${set.source === "llm" ? "LLM 动态生成" : "确定性生成器"}　${esc(set.note)}</p>
 ${sections}
 </div></body></html>`;
