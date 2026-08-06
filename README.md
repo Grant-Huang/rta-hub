@@ -32,6 +32,7 @@
 - [docs/DEV_PLAN.md](./docs/DEV_PLAN.md) —— MVP-1 ~ MVP-3 开发计划与进度（已完成 / 未完成 / 下一轮顺序）
 - [docs/LAUNCH_BLOCKERS.md](./docs/LAUNCH_BLOCKERS.md) —— **上线阻断项台账**（每项的当前取值、错了会怎样、怎么核、核实历史）。这几项在代码里有对应闸门，生产未核实时服务拒绝启动
 - [docs/LLM_ARCHITECTURE.md](./docs/LLM_ARCHITECTURE.md) —— LLM 模型分层（轻量/主力/视觉）、升级触发条件、降级路径
+- [docs/DESIGN_REVIEW.md](./docs/DESIGN_REVIEW.md) —— **设计与实现的对齐审查**：哪些对齐了、哪些「库函数齐全但没接端点」、按优先级排的改进项
 - `rta-generic-spec/` —— 北美 RTA 橱柜通用规范参考（尺寸/编码/构造/替代逻辑），核实结果见 RENDERING.md 附录
 
 ## 运行
@@ -39,10 +40,17 @@
 ```bash
 pnpm install
 cp .env.example .env
-pnpm test          # 468 passing
+pnpm test          # 492 passing
 pnpm typecheck
+pnpm gates         # 上线闸门状态（有阻断项时退出码 1）
+pnpm simulate out  # 三套厨房走完整链路，产出图纸与解释到 out/
 pnpm dev           # 打开 http://localhost:8790
 ```
+
+`pnpm simulate` 是端到端冒烟：走真实 HTTP 端点建会话 → 多轮对话 → 上传户型 →
+补齐尺寸与窗/上下水 → 回答选择题 → 冷启动预估 → 公司方案 → 报价，
+产出 `designs.html`（四视图 + 逐条解释）与 `explanations.txt`。
+这次审查里的三个 bug 都是它跑出来的，单元测试全绿也没发现。
 
 试点数据：`Maple Ridge Cabinetry`（31 个型号，别名 `枫岭橱柜`/`Maple Ridge`/`MRC`）。
 演示账号通过 `X-Account-Id` 头传入：`ca_demo_consumer`（消费者）、`ca_demo_trade`（贸易）。
@@ -57,7 +65,7 @@ pnpm ops:prospects help
 
 ## 当前代码状态
 
-**MVP-1 ~ MVP-3 均已完成**，468 个测试用例覆盖。端到端可跑：
+**MVP-1 ~ MVP-3 均已完成**，492 个测试用例覆盖。端到端可跑：
 
 聊需求 → `@` 公司问规格 → 上传户型图 → 补齐尺寸 → **自动排布出四视图** →
 生成报价（含税/运费/折扣/有效期）→ **多公司比价** → 发送前披露 → 确认 →

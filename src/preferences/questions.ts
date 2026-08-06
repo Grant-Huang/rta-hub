@@ -562,11 +562,16 @@ export function drawerBiasFor(prefs: CustomerPreferences): "always" | "highUseOn
 }
 
 /**
- * 把五金/配件偏好套到排布产出的选择上。
+ * 把偏好套到排布产出的选择上。
  *
- * 配件有 `appliesToModuleIds` 限制，五金有 `appliesToModuleTypes` 限制——
- * 只加到**真正适用**的柜体上。不做这层过滤的话，定价引擎会因为"这个配件装不了
- * 这个柜"而整单拒绝（FR-8 校验第 3 项）。
+ * **每一项都要按适用性过滤**，这是同一个教训的三个面：
+ *   - 配件有 `appliesToModuleIds` 限制；
+ *   - 五金有 `appliesToModuleTypes` 限制；
+ *   - **组装方式有 `assemblyOptions` 限制**——多数公司只提供地柜的组装服务，
+ *     吊柜一律平板发货。
+ *
+ * 不做这层过滤，定价引擎会因为「这个柜体不提供这种形式」而**整单拒绝**
+ * （FR-8 校验），而客户看到的只是一句"报价校验未通过"。
  */
 export function applyPreferencesToSelections<
   T extends { moduleId: string; hardwareOptionIds: string[]; accessoryOptionIds: string[]; assembly: string },
@@ -589,9 +594,13 @@ export function applyPreferencesToSelections<
       ? hardware.filter((h) => !h.appliesToModuleTypes || h.appliesToModuleTypes.includes(mod.type))
       : [];
     const ac = accessories.filter((a) => !a.appliesToModuleIds || a.appliesToModuleIds.includes(s.moduleId));
+    // 该型号不提供客户选的组装方式时保持原值（通常是 RTA），而不是整单被拒
+    const assembly = prefs.assembly && (!mod || mod.assemblyOptions.includes(prefs.assembly))
+      ? prefs.assembly
+      : s.assembly;
     return {
       ...s,
-      ...(prefs.assembly ? { assembly: prefs.assembly } : {}),
+      assembly,
       hardwareOptionIds: [...new Set([...s.hardwareOptionIds, ...hw.map((h) => h.id)])],
       accessoryOptionIds: [...new Set([...s.accessoryOptionIds, ...ac.map((a) => a.id)])],
     };
@@ -600,4 +609,58 @@ export function applyPreferencesToSelections<
 
 function indexModules(bundle: SpecBundle): Map<string, ModuleSpec> {
   return new Map(bundle.modules.map((m) => [m.id, m]));
+}
+
+/**
+ * 偏好里有哪些项在这版方案上没能完全落实。
+ *
+ * 静默地部分落实是最坏的做法——客户选了「组装好发货」，结果吊柜还是平板到货，
+ * 拆箱时才发现。这里如实列出来，让界面能说清楚。
+ */
+export function unappliedPreferences(
+  selections: readonly { moduleId: string }[],
+  prefs: CustomerPreferences,
+  bundle: SpecBundle,
+): string[] {
+  const notes: string[] = [];
+  const byId = indexModules(bundle);
+
+  if (prefs.assembly) {
+    const cannot = [...new Set(
+      selections
+        .map((s) => byId.get(s.moduleId))
+        .filter((m): m is ModuleSpec => !!m && !m.assemblyOptions.includes(prefs.assembly!))
+        .map((m) => m.code),
+    )];
+    if (cannot.length > 0) {
+      notes.push(
+        `${cannot.join("、")} 不提供「${prefs.assembly === "assembled" ? "组装好发货" : "平板发货"}」，` +
+        `这几个柜体按${prefs.assembly === "assembled" ? "平板" : "组装好"}发货——` +
+        `多数公司只对地柜提供组装服务。`,
+      );
+    }
+  }
+
+  for (const [ids, pool, label] of [
+    [prefs.accessoryOptionIds ?? [], bundle.accessoryOptions, "配件"],
+    [prefs.hardwareOptionIds ?? [], bundle.hardwareOptions, "五金"],
+  ] as const) {
+    for (const id of ids) {
+      const opt = pool.find((o) => o.id === id);
+      if (!opt) continue;
+      const applicable = selections.filter((s) => {
+        const m = byId.get(s.moduleId);
+        if (!m) return false;
+        return "appliesToModuleIds" in opt && opt.appliesToModuleIds
+          ? opt.appliesToModuleIds.includes(s.moduleId)
+          : "appliesToModuleTypes" in opt && opt.appliesToModuleTypes
+            ? opt.appliesToModuleTypes.includes(m.type)
+            : true;
+      }).length;
+      if (applicable === 0) {
+        notes.push(`${label}「${opt.name}」在这版方案的柜体上都装不了，未计入报价。`);
+      }
+    }
+  }
+  return notes;
 }

@@ -16,6 +16,7 @@ import type { VisionExtractor } from "../floorplan/parse.js";
 import type { CabinetCompany, GenericCatalog, TaxRule } from "../domain/types.js";
 import { deriveCompanyStatus } from "../spec/version.js";
 import { genericCatalogVerified } from "./launch-gates.js";
+import { generateCompanyToken } from "../tenancy/company-auth.js";
 import type { PricingContext } from "../pricing/engine.js";
 import * as seed from "./seed.js";
 import * as second from "./seed-second.js";
@@ -79,8 +80,9 @@ export async function createAppContext(opts: CreateContextOptions = {}): Promise
 /** 首次启动时写入试点公司与演示账号。 */
 export async function seedInitialData(ctx: AppContext): Promise<void> {
   const { repos } = ctx;
-  await repos.companies.upsert(seed.pilotCompany);
-  await repos.companies.upsert(seed.unsubscribedCompany);
+  // 每家公司发一个访问令牌——没有它，公司侧端点就是"谁填哪个 id 就读哪家数据"
+  await repos.companies.upsert({ ...seed.pilotCompany, accessToken: generateCompanyToken() });
+  await repos.companies.upsert({ ...seed.unsubscribedCompany, accessToken: generateCompanyToken() });
   for (const account of seed.demoAccounts) {
     if (!repos.accounts.byId(account.id)) await repos.accounts.insert(account);
   }
@@ -100,7 +102,7 @@ export async function seedInitialData(ctx: AppContext): Promise<void> {
   await repos.specBundles.upsert(bundle);
 
   // 第二家试点公司：完全通过 FR-2 的模板导入路径建立，验证可复制性
-  await repos.companies.upsert(second.secondCompany);
+  await repos.companies.upsert({ ...second.secondCompany, accessToken: generateCompanyToken() });
   await repos.specVersions.upsert(second.secondSpecVersion);
   await repos.specBundles.upsert(second.buildSecondCompanyBundle().bundle);
 }
