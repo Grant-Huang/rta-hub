@@ -18,6 +18,8 @@ import type { Context, Next } from "hono";
 
 import { fromDollars, format } from "./domain/money.js";
 import type { ChatMessage, Conversation, CustomerAccount, Quote } from "./domain/types.js";
+import type { FloorPlan } from "./floorplan/types.js";
+import type { GeneratedLayout } from "./layout/generate.js";
 import { TenantScope } from "./tenancy/scoped-repo.js";
 import {
   aggregateSignals, buildMentionSignal, clientFacingMessage, parseMentions, routeByText,
@@ -31,15 +33,27 @@ import { buildFace, BASE_FACE_HEIGHT, matchFaceTemplate, type FaceTemplateId } f
 import {
   companyAgentReply, mergeRequirements, missingFields, orchestratorReply,
 } from "./agents/orchestrator.js";
-import { buildEstimateDraft, estimateCountsFromText, renderEstimateText } from "./estimate/generic.js";
+import {
+  buildEstimateDraft, buildIllustratedEstimate, estimateCountsFromText, renderEstimateText,
+} from "./estimate/generic.js";
 import { buildQuoteEmail, deIdentifySignal, resolveSenderIdentity, sendEmail } from "./email/sender.js";
+import { buildHtmlQuoteEmail } from "./email/html-quote.js";
+import { buildComparison, renderComparisonHtml, renderComparisonText } from "./quote/comparison.js";
+import {
+  addWallRun, createFloorPlan, pendingQuestions, resolveCeilingHeight, resolveItem,
+  resolveWallLength,
+} from "./floorplan/parse.js";
+import { isLayoutReady } from "./floorplan/types.js";
+import { generateLayout, regenerateRun, toSelections } from "./layout/generate.js";
+import { renderFourViews } from "./render/views.js";
 import { subscribe, SubscriptionError, unsubscribeByToken } from "./marketing/subscriptions.js";
 import {
   deIdentifyBillingEvent, deIdentifyQuote, executeDeletionRequest, exportAccountData,
   planRetentionSweep,
 } from "./privacy/retention.js";
 import {
-  createAppContext, isCompanyActive, pricingContextFor, publishedBundle, type AppContext,
+  createAppContext, isCompanyActive, pricingContextFor, publishedBundle, renderStyleFor,
+  type AppContext,
 } from "./app/context.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,6 +65,15 @@ type AppVars = { account: CustomerAccount };
 type Ctx = Context<{ Variables: AppVars }>;
 
 let appCtx: AppContext;
+
+/**
+ * 户型图与方案的运行时缓存。
+ *
+ * 它们的体量（解析几何 + SVG）与生命周期都跟报价不同——报价一旦确认就是不可变快照，
+ * 而方案在对话里反复重算。MVP-2 先放内存，随持久化一起迁移。
+ */
+const floorPlans = new Map<string, FloorPlan>();
+const layouts = new Map<string, GeneratedLayout>();
 
 /** `c.req.param` 在 strict 下返回 string | undefined；路由已保证存在，统一收口。 */
 function param(c: Ctx, name: string): string {
@@ -234,6 +257,22 @@ app.post("/api/conversations/:id/estimate", requireAccount, async (c) => {
   const conv = ownedConversation(c, param(c, "id"));
   if (!conv) return c.json({ error: "会话不存在" }, 404);
 
+  // 有户型图就出**含四视图**的版本（MVP-2，场景 B 第 4 点）；否则退回纯文本版
+  const plan = [...floorPlans.values()].find((p) => p.conversationId === conv.id && isLayoutReady(p));
+
+  if (plan) {
+    const illustrated = buildIllustratedEstimate(appCtx.catalog, plan.parsedGeometry, {
+      conversationId: conv.id, province: account.province, at: now(),
+    }, { taxRules: appCtx.taxRules, sourceVerified: appCtx.catalogSourceVerified });
+    await appCtx.repos.estimates.insert(illustrated.draft);
+    return c.json({
+      estimate: illustrated.draft,
+      text: renderEstimateText(illustrated.draft),
+      views: illustrated.viewsByRun,
+      viewsDisclaimer: illustrated.viewsDisclaimer,
+    }, 201);
+  }
+
   const draft = buildEstimateDraft(appCtx.catalog, {
     conversationId: conv.id,
     moduleCounts: estimateCountsFromText(conv.designRequirements),
@@ -329,16 +368,41 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
 
   const company = appCtx.repos.companies.byId(q.companyId);
   const sender = resolveSenderIdentity();
-  const email = buildQuoteEmail({
-    companyName: company?.name ?? q.companyId,
-    customerName: account.displayName,
-    customerEmail: account.email,
-    province: q.province,
-    quoteText: renderQuoteText(q),
-    quoteId: q.id,
-  }, sender);
 
-  const sendResult = await sendEmail({ ...email, to: company?.quoteEmail ?? "" }, { sender });
+  // 有方案就发 HTML 版（CID 内嵌四视图 + 表格 + 纯文本兜底 + 附件兜底，FR-7）
+  const plan = [...floorPlans.values()].find((p) => p.conversationId === q.conversationId);
+  const layout = plan ? layouts.get(`${plan.id}|${q.companyId}`) : undefined;
+  const bundle = publishedBundle(appCtx, q.companyId);
+
+  const outbound = plan && layout && bundle
+    ? (() => {
+        const html = buildHtmlQuoteEmail({
+          quote: q,
+          companyName: company?.name ?? q.companyId,
+          customerName: account.displayName,
+          customerEmail: account.email,
+          viewsByRun: viewsFor(plan, layout, q.companyId),
+          senderName: sender.name,
+          ...(sender.contact ? { senderContact: sender.contact } : {}),
+        });
+        return {
+          kind: "lead" as const, to: company?.quoteEmail ?? "",
+          subject: html.subject, text: html.text, html: html.html, attachments: html.attachments,
+        };
+      })()
+    : (() => {
+        const plainEmail = buildQuoteEmail({
+          companyName: company?.name ?? q.companyId,
+          customerName: account.displayName,
+          customerEmail: account.email,
+          province: q.province,
+          quoteText: renderQuoteText(q),
+          quoteId: q.id,
+        }, sender);
+        return { ...plainEmail, to: company?.quoteEmail ?? "" };
+      })();
+
+  const sendResult = await sendEmail(outbound, { sender });
   const at = now();
   const outcome = recordSendResult(
     q, appCtx.repos.billingEvents.all(),
@@ -364,6 +428,139 @@ app.get("/api/quotes/:id/audit", requireAccount, (c) => {
   const q = ownedQuote(c, param(c, "id"));
   if (!q) return c.json({ error: "报价不存在" }, 404);
   return c.json({ events: appCtx.repos.auditEvents.filter((e) => e.quoteId === q.id) });
+});
+
+// ── 户型图（FR-3）─────────────────────────────────────────────────────────
+
+app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  const body = await jsonBody<{ fileName: string; mimeType: string; sizeBytes: number; image: string }>(c);
+
+  const plan = await createFloorPlan(
+    {
+      conversationId: conv.id,
+      file: {
+        name: body.fileName ?? "floorplan",
+        mimeType: body.mimeType ?? "image/png",
+        sizeBytes: body.sizeBytes ?? 0,
+      },
+      at: now(),
+    },
+    body.image,
+    appCtx.vision,
+  );
+  floorPlans.set(plan.id, plan);
+  return c.json({
+    floorPlan: plan,
+    ready: isLayoutReady(plan),
+    // 完整性优先：拿不准的地方逐条追问，不静默跳过（FR-3）
+    questions: pendingQuestions(plan),
+  }, 201);
+});
+
+app.get("/api/floorplans/:id", requireAccount, (c) => {
+  const plan = ownedFloorPlan(c, param(c, "id"));
+  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  return c.json({ floorPlan: plan, ready: isLayoutReady(plan), questions: pendingQuestions(plan) });
+});
+
+/** 客户回答追问 / 手动补齐尺寸。 */
+app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
+  const plan = ownedFloorPlan(c, param(c, "id"));
+  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  const body = await jsonBody<{
+    itemId: string; wallRunId: string; length: number; ceilingHeight: number;
+    addRun: { label: string; length: number };
+  }>(c);
+
+  let next = plan;
+  try {
+    if (body.addRun) next = addWallRun(next, body.addRun, now());
+    if (body.wallRunId && typeof body.length === "number") {
+      next = resolveWallLength(next, body.wallRunId, body.length, now());
+    }
+    if (typeof body.ceilingHeight === "number") next = resolveCeilingHeight(next, body.ceilingHeight, now());
+    if (body.itemId) next = resolveItem(next, body.itemId, now());
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+  }
+
+  floorPlans.set(next.id, next);
+  return c.json({ floorPlan: next, ready: isLayoutReady(next), questions: pendingQuestions(next) });
+});
+
+// ── 方案生成与四视图（FR-4 / FR-5）────────────────────────────────────────
+
+app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
+  const plan = ownedFloorPlan(c, param(c, "id"));
+  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  if (!isLayoutReady(plan)) {
+    return c.json({
+      error: "户型信息还不完整，请先补齐待确认项",
+      questions: pendingQuestions(plan),
+    }, 409);
+  }
+  const body = await jsonBody<{ companyId: string }>(c);
+  const company = body.companyId ? appCtx.repos.companies.byId(body.companyId) : undefined;
+  if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
+  const bundle = publishedBundle(appCtx, company.id);
+  if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+
+  const layout = generateLayout(plan.parsedGeometry, bundle.modules, {
+    ...(plan.parsedGeometry.ceilingHeight !== undefined
+      ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
+  });
+  const key = `${plan.id}|${company.id}`;
+  layouts.set(key, layout);
+
+  return c.json({
+    layoutKey: key,
+    warnings: layout.warnings,
+    moduleCounts: layout.moduleCounts,
+    // 直接可喂给 /api/quotes（结构里没有任何价格字段，FR-8）
+    selections: toSelections(layout),
+    views: viewsFor(plan, layout, company.id),
+  }, 201);
+});
+
+/** 局部重算：只重排指定墙段，其余原样保留（场景 D 第 4 点）。 */
+app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
+  const plan = ownedFloorPlan(c, param(c, "id"));
+  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  const body = await jsonBody<{ companyId: string; wallRunId: string }>(c);
+  const key = `${plan.id}|${body.companyId ?? ""}`;
+  const current = layouts.get(key);
+  if (!current) return c.json({ error: "还没有生成过方案" }, 404);
+  const bundle = body.companyId ? publishedBundle(appCtx, body.companyId) : undefined;
+  if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+
+  const next = regenerateRun(current, plan.parsedGeometry, bundle.modules, body.wallRunId ?? "", {
+    ...(plan.parsedGeometry.ceilingHeight !== undefined
+      ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
+  });
+  layouts.set(key, next);
+  return c.json({
+    layoutKey: key,
+    warnings: next.warnings,
+    moduleCounts: next.moduleCounts,
+    selections: toSelections(next),
+    views: viewsFor(plan, next, body.companyId ?? ""),
+  });
+});
+
+// ── 多公司比价（FR-6）─────────────────────────────────────────────────────
+
+app.get("/api/conversations/:id/comparison", requireAccount, (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  const cmp = buildComparison(
+    conv.id,
+    appCtx.repos.quotes.filter((q) => q.conversationId === conv.id),
+    (id) => appCtx.repos.companies.byId(id)?.name,
+    now(),
+  );
+  return c.json({ comparison: cmp, text: renderComparisonText(cmp), html: renderComparisonHtml(cmp) });
 });
 
 // ── 视图渲染（脸型文法）───────────────────────────────────────────────────
@@ -541,6 +738,25 @@ app.post("/api/me/delete", requireAccount, async (c) => {
 });
 
 // ── 辅助 ──────────────────────────────────────────────────────────────────
+
+function ownedFloorPlan(c: Ctx, id: string): FloorPlan | undefined {
+  const plan = floorPlans.get(id);
+  if (!plan) return undefined;
+  const conv = appCtx.repos.conversations.byId(plan.conversationId);
+  return conv && conv.customerAccountId === c.get("account").id ? plan : undefined;
+}
+
+/** 按公司的面框/覆盖方式出四视图——这两个是渲染参数（REQUIREMENTS 3.3 第 5 点）。 */
+function viewsFor(plan: FloorPlan, layout: GeneratedLayout, companyId: string) {
+  const { construction, overlay } = renderStyleFor(appCtx, companyId);
+  return plan.parsedGeometry.wallRuns.map((run) => ({
+    runLabel: run.label,
+    runId: run.id,
+    views: renderFourViews(run, layout.placements, {
+      construction, overlay, faceFrameWidth: 1.5, pxPerInch: 6, showDimensions: true,
+    }),
+  }));
+}
 
 function toHistory(m: ChatMessage): { role: "user" | "assistant"; content: string } {
   return { role: m.role, content: m.content };

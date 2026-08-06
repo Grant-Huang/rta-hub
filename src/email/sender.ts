@@ -28,7 +28,15 @@ export interface OutboundEmail {
   kind: EmailKind;
   to: string;
   subject: string;
+  /** 纯文本兜底版本 —— 始终必填，内容必须完整（FR-7）。 */
   text: string;
+  /** HTML 正文（可选）。CID 内嵌图片引用 attachments 里的 cid。 */
+  html?: string;
+  /** 附件。既作 CID 内嵌源，也作图片被拦截时的兜底（FR-7）。 */
+  attachments?: {
+    filename: string; cid?: string; contentType: string;
+    content: string; encoding?: "utf-8" | "base64";
+  }[];
   /** 退订链接；invite/mailing 必填。 */
   unsubscribeUrl?: string;
 }
@@ -92,12 +100,19 @@ export function assertCaslCompliant(email: OutboundEmail, sender: SenderIdentity
         "MISSING_UNSUBSCRIBE",
       );
     }
+    // 两个版本都要有 —— 只在其中一个里放退订链接，另一版的收件人就无从退订
     if (!email.text.includes(email.unsubscribeUrl)) {
-      throw new CaslComplianceError("退订链接必须出现在邮件正文里", "UNSUBSCRIBE_NOT_IN_BODY");
+      throw new CaslComplianceError("退订链接必须出现在纯文本正文里", "UNSUBSCRIBE_NOT_IN_BODY");
+    }
+    if (email.html && !email.html.includes(email.unsubscribeUrl)) {
+      throw new CaslComplianceError("退订链接必须出现在 HTML 正文里", "UNSUBSCRIBE_NOT_IN_BODY");
     }
   }
   if (!email.text.includes(sender.name)) {
-    throw new CaslComplianceError("邮件正文必须包含发件人身份", "IDENTITY_NOT_IN_BODY");
+    throw new CaslComplianceError("纯文本正文必须包含发件人身份", "IDENTITY_NOT_IN_BODY");
+  }
+  if (email.html && !email.html.includes(sender.name)) {
+    throw new CaslComplianceError("HTML 正文必须包含发件人身份", "IDENTITY_NOT_IN_BODY");
   }
 }
 
@@ -162,6 +177,19 @@ export async function sendEmail(email: OutboundEmail, opts: SendOptions = {}): P
       to: email.to,
       subject: email.subject,
       text: email.text,
+      ...(email.html ? { html: email.html } : {}),
+      ...(email.attachments?.length
+        ? {
+            attachments: email.attachments.map((a) => ({
+              filename: a.filename,
+              contentType: a.contentType,
+              content: a.content,
+              ...(a.encoding === "base64" ? { encoding: "base64" as const } : {}),
+              // 有 cid 的附件同时作为正文内嵌图；没有 cid 的是纯附件
+              ...(a.cid ? { cid: a.cid, contentDisposition: "inline" as const } : {}),
+            })),
+          }
+        : {}),
       ...(email.unsubscribeUrl
         ? { headers: { "List-Unsubscribe": `<${email.unsubscribeUrl}>` } }
         : {}),
