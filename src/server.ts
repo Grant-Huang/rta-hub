@@ -81,9 +81,14 @@ import { renderPlanViews } from "./render/plan-view.js";
 import { buildBom, bomToSelections } from "./layout/bom.js";
 import { buildQuoteList, renderQuoteListHtml, renderQuoteListText } from "./quote/line-items.js";
 import {
-  applyPreferencesToSelections, buildQuestionSet, drawerBiasFor, PreferenceError,
-  resolvePreferences, unappliedPreferences, validatePreferences, type CustomerPreferences,
+  applyPreferencesToSelections, buildApplianceQuestions, buildQuestionSet, drawerBiasFor,
+  PreferenceError, resolvePreferences, unappliedPreferences, validatePreferences,
+  type CustomerPreferences,
 } from "./preferences/questions.js";
+import {
+  applianceFrom, normalizeAppliances, provenanceNote, violationCaveat,
+  type ApplianceKind, type ApplianceSpec,
+} from "./floorplan/appliances.js";
 import { disputeWindowEndsAt, isWithinDisputeWindow } from "./billing/lead-events.js";
 import {
   assertLaunchReady, launchGateReport, launchGateSummary, LaunchGatesNotMet,
@@ -324,6 +329,27 @@ function bomFor(plan: FloorPlan, layout: GeneratedLayout, companyId: string) {
     modules: bundle?.modules ?? [],
     toeKickSystem: toeKickSystemFor(companyId),
   });
+}
+
+/**
+ * 家电相关的两句话：推定值说明，以及硬约束否决时的注脚。
+ *
+ * 两者分开，因为用途不同：前者任何时候都该说（客户要知道图是按什么尺寸画的），
+ * 后者**只在方案被否决时**才有意义——「你的厨房排不下」和
+ * 「按我们猜的尺寸排不下」对客户是完全不同的两句话。
+ */
+function applianceNotes(plan: FloorPlan, acceptable: boolean): {
+  applianceProvenance?: string;
+  ergonomicsCaveat?: string;
+} {
+  const list = plan.appliances ?? [];
+  if (list.length === 0) return {};
+  const note = provenanceNote(list);
+  const caveat = acceptable ? undefined : violationCaveat(list);
+  return {
+    ...(note ? { applianceProvenance: note } : {}),
+    ...(caveat ? { ergonomicsCaveat: caveat } : {}),
+  };
 }
 
 /** 合成某会话在某公司下的偏好（跨公司项 + 该公司项）。 */
@@ -949,6 +975,16 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
     itemId: string; wallRunId: string; length: number; ceilingHeight: number;
     addRun: { label: string; length: number };
     addFeature: { wallRunId: string; kind: WallFeature["kind"]; offset: number; width: number };
+    /**
+     * 这个厨房里的家电（FR-3.2）。
+     *
+     * 不给 `width` 就走常见尺寸并标 `provenance: "assumed"`——「我不确定」是
+     * 合法答案，但推定值要留痕，下游的解释与硬约束提示都读它。
+     */
+    appliances: {
+      kind: ApplianceKind; width?: number;
+      clearanceEachSide?: number; preferredZone?: ApplianceSpec["preferredZone"];
+    }[];
   }>(c);
 
   let next = plan;
@@ -977,13 +1013,39 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
         kind: f.kind, offset: f.offset, width: f.width,
       }, now());
     }
+    if (body.appliances) {
+      if (!Array.isArray(body.appliances)) {
+        return c.json({ error: "appliances 必须是数组" }, 400);
+      }
+      next = {
+        ...next,
+        appliances: normalizeAppliances([
+          ...(next.appliances ?? []),
+          ...body.appliances.map((a) => applianceFrom(a)),
+        ]),
+        updatedAt: now(),
+      };
+    }
     if (body.itemId) next = resolveItem(next, body.itemId, now());
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
   }
 
   await appCtx.repos.floorPlans.upsert(next);
-  return c.json({ floorPlan: next, ready: isLayoutReady(next), questions: pendingQuestions(next) });
+  return c.json({
+    floorPlan: next, ready: isLayoutReady(next), questions: pendingQuestions(next),
+    // 有推定尺寸就如实说出来，并把还能问的问题一并给出——
+    // 「我们假设了什么」不该只活在文案里
+    ...(next.appliances?.length
+      ? {
+          appliances: next.appliances,
+          ...(provenanceNote(next.appliances) ? { provenanceNote: provenanceNote(next.appliances) } : {}),
+          applianceQuestions: buildApplianceQuestions({
+            known: next.appliances, kindsAnswered: true, maxPerTurn: 2,
+          }),
+        }
+      : { applianceQuestions: buildApplianceQuestions({ known: [], kindsAnswered: false, maxPerTurn: 1 }) }),
+  });
 });
 
 // ── 设计会话：先问再画（FR-4.2）───────────────────────────────────────────
@@ -1137,6 +1199,9 @@ app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
     planViews: renderPlanViews(plan.parsedGeometry, layout.placements),
     moduleCounts: layout.moduleCounts,
     ergonomics: layout.ergonomics,
+    // 推定的家电尺寸会影响硬约束结论——**由推定值导致的否决必须说明它是推定的**，
+    // 否则客户会以为自己的厨房真的排不下（FR-3.2）
+    ...applianceNotes(plan, layout.acceptable),
     aesthetics: layout.aesthetics,
     acceptable: layout.acceptable,
     warnings: layout.warnings,
@@ -1200,6 +1265,7 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     moduleCounts: layout.moduleCounts,
     // 人体工程硬约束与美观评分（FR-4）
     ergonomics: layout.ergonomics,
+    ...applianceNotes(plan, layout.acceptable),
     aesthetics: layout.aesthetics,
     acceptable: layout.acceptable,
     // 直接可喂给 /api/quotes（结构里没有任何价格字段，FR-8）。

@@ -22,6 +22,10 @@ import type {
   Modifier, ModuleSpec, SharedPreferences,
 } from "../domain/types.js";
 import type { SpecBundle } from "../spec/bundle.js";
+import { hasRole } from "../spec/capabilities.js";
+import {
+  APPLIANCE_LABEL, COMMON_WIDTHS, type ApplianceKind, type ApplianceSpec,
+} from "../floorplan/appliances.js";
 
 export type PreferenceKey =
   | "budgetBand"
@@ -30,7 +34,11 @@ export type PreferenceKey =
   | "storage"
   | "hardware"
   | "accessories"
-  | "tradeoff";
+  | "tradeoff"
+  /** 厨房里有哪些家电（多选）。 */
+  | "appliances"
+  /** 各个家电多宽。答"不确定"合法，走推定值并留痕（见 floorplan/appliances.ts）。 */
+  | "applianceWidths";
 
 /** 价格影响。分三种，因为能算准的程度本来就不同——不把估算伪装成精确值。 */
 export type PriceImpact =
@@ -309,8 +317,10 @@ export function assemblyQuestion(bundle: SpecBundle): PreferenceQuestion | undef
  * 选择结果进排布算法的 `preference` 项（`biasTowardDrawers`），不是记下来给人看。
  */
 export function storageQuestion(bundle: SpecBundle): PreferenceQuestion | undefined {
+  // 「这家有没有抽屉柜」问能力，不问型号码——与 M5-2 同一条原则：
+  // 靠 /^\dDB/ 判断，第二家公司（NW- 命名）会答"没有抽屉柜"而其实有
   const hasDrawers = bundle.modules.some(
-    (m) => m.type === "base" && (/^\dDB/i.test(m.code) || m.faceTemplateId === "F6_DRAWER_STACK"));
+    (m) => m.type === "base" && hasRole(m, "drawerStorage") && !hasRole(m, "doorStorage"));
   if (!hasDrawers) return undefined;
 
   return {
@@ -334,6 +344,123 @@ export function storageQuestion(bundle: SpecBundle): PreferenceQuestion | undefi
         id: "doors", label: "以门板柜为主",
         detail: "造价最低",
         priceImpact: { kind: "unknown", reason: "取决于最终排布" },
+      }),
+    ],
+    skippable: true,
+  };
+}
+
+// ── 家电：客户已经拥有的东西，是输入不是常数 ──────────────────────────────
+
+/**
+ * 厨房里有哪些家电。
+ *
+ * 改造前这件事是**推**出来的：户型图上识别出燃气特征就放灶具，识别出强电就放
+ * 冰箱，都没识别到就一个家电也不放——而没有哪家厨房是没冰箱的。
+ * 家电是客户已经拥有或已经选定的东西，得问。
+ */
+export function applianceQuestion(): PreferenceQuestion {
+  const kinds: ApplianceKind[] = [
+    "refrigerator", "range", "wallOven", "rangeHood", "dishwasher", "microwave",
+  ];
+  const why =
+    "家电占的墙面是从柜子里扣出来的，尺寸差 3 寸就可能少一个柜。" +
+    "另外冰箱把手一侧、灶具两侧都有净空要求（放刚端下来的热锅），会影响整体排布。";
+
+  return {
+    key: "appliances",
+    prompt: "厨房里会有哪些家电？",
+    why,
+    multiSelect: true,
+    options: kinds.map((kind) => option({
+      id: kind,
+      label: APPLIANCE_LABEL[kind],
+      ...(kind === "rangeHood" ? { detail: "会占用灶台正上方的吊柜位" } : {}),
+      ...(kind === "dishwasher" ? { detail: "需要紧邻水槽（NKBA 要求 36 英寸以内）" } : {}),
+      priceImpact: { kind: "unknown", reason: "家电本身不在报价内；它影响的是柜体数量" },
+      ...(kind === "refrigerator" || kind === "range" || kind === "dishwasher"
+        ? { recommended: true } : {}),
+    })),
+    skippable: false,
+  };
+}
+
+/**
+ * 各个家电多宽。
+ *
+ * **「我去量一下再说」是合法选项。** 多数客户不知道自己冰箱多宽，逼他量了才能
+ * 继续，是把系统的困难转嫁给他。选了它就走常见尺寸，但会标成推定值
+ * （`provenance: "assumed"`），并在图纸解释与硬约束提示里如实说明。
+ */
+export function applianceWidthQuestion(kind: ApplianceKind): PreferenceQuestion | undefined {
+  const widths = COMMON_WIDTHS[kind];
+  if (!widths || widths.length === 0) return undefined;
+  const label = APPLIANCE_LABEL[kind];
+
+  return {
+    key: "applianceWidths",
+    prompt: `${label}的宽度是多少？`,
+    why: "柜位会按你的尺寸留空（冰箱两侧还要各留 1 英寸通风）。" +
+      "按常见尺寸猜的话，你的机器更宽就装不进去，更窄就白白浪费储物。",
+    multiSelect: false,
+    options: [
+      ...widths.map((w, i) => option({
+        id: `${kind}:${w}`,
+        label: `${w} 英寸`,
+        ...(widthDetail(kind, w) ? { detail: widthDetail(kind, w)! } : {}),
+        priceImpact: { kind: "unknown", reason: "影响的是能排下多少柜子，不是单价" },
+        // 中间那档是最常见的
+        ...(i === Math.floor(widths.length / 2) ? { recommended: true } : {}),
+      })),
+      option({
+        id: `${kind}:unsure`,
+        label: "我去量一下再说",
+        detail: `先按 ${label}常见尺寸预留；图上会标出这是推定值`,
+        priceImpact: { kind: "unknown", reason: "按常见尺寸预留，之后可改" },
+      }),
+    ],
+    skippable: true,
+  };
+}
+
+/** 常见宽度的口语化说明。没有说法的就不编一个。 */
+function widthDetail(kind: ApplianceKind, width: number): string | undefined {
+  if (kind !== "refrigerator") return undefined;
+  if (width === 30) return "窄款，小户型常见";
+  if (width === 33) return "最常见";
+  if (width === 36) return "对开门 / 法式";
+  return undefined;
+}
+
+/**
+ * 家电想放在哪。
+ *
+ * 位置是客户的偏好，不是几何推导的结果。排布器会尽量满足；满足不了要说明，
+ * 不静默忽略——「你说想靠近入口，但那面墙放不下 35" 的冰箱位」是有用的信息。
+ */
+export function appliancePlacementQuestion(kind: ApplianceKind): PreferenceQuestion {
+  const label = APPLIANCE_LABEL[kind];
+  return {
+    key: "appliances",
+    prompt: `${label}想放在哪个位置？`,
+    why: `${label}的位置会牵动整条动线：冰箱把手一侧要留 15 英寸以上的落台面，` +
+      "灶具两侧要能放热锅，水槽和洗碗机要挨着。",
+    multiSelect: false,
+    options: [
+      option({
+        id: `${kind}:nearEntry`, label: "靠近入口",
+        detail: "买菜进门先放下",
+        priceImpact: { kind: "unknown", reason: "不影响单价" },
+        recommended: kind === "refrigerator",
+      }),
+      option({
+        id: `${kind}:nearSink`, label: "靠近水槽",
+        priceImpact: { kind: "unknown", reason: "不影响单价" },
+      }),
+      option({
+        id: `${kind}:any`, label: "我不确定，你帮我定",
+        detail: "按人体工程与动线自动安排",
+        priceImpact: { kind: "unknown", reason: "不影响单价" },
       }),
     ],
     skippable: true,
@@ -478,7 +605,37 @@ function isAnswered(key: PreferenceKey, prefs: CustomerPreferences): boolean {
     case "hardware": return prefs.hardwareOptionIds !== undefined;
     case "accessories": return prefs.accessoryOptionIds !== undefined;
     case "tradeoff": return prefs.tradeoff !== undefined;
+    // 家电问的是**这个厨房的物理事实**，答案存在 FloorPlan 上而不是偏好里
+    // （贸易账号一个人有多个项目，各自的家电不同）。所以它们不走这条判断，
+    // 由 buildApplianceQuestions 按户型自己的状态决定还该问什么。
+    case "appliances":
+    case "applianceWidths": return false;
   }
+}
+
+/**
+ * 按户型当前的家电信息，决定还该问什么。
+ *
+ * 与 `buildQuestionSet` 分开，因为两者的**状态源不同**：偏好在会话上，
+ * 家电在户型上。合在一起会出现「换一家公司问一遍你冰箱多宽」。
+ */
+export function buildApplianceQuestions(input: {
+  /** 户型上已经记下的家电。 */
+  known: readonly ApplianceSpec[];
+  /** 客户是否已经答过「有哪些家电」。没答过就先问这个。 */
+  kindsAnswered: boolean;
+  maxPerTurn: number;
+}): PreferenceQuestion[] {
+  if (!input.kindsAnswered) return [applianceQuestion()];
+
+  // 只对**推定尺寸**的家电追问宽度——客户已经给了准确数字的不再打扰
+  const out: PreferenceQuestion[] = [];
+  for (const a of input.known) {
+    if (a.provenance !== "assumed") continue;
+    const q = applianceWidthQuestion(a.kind);
+    if (q) out.push(q);
+  }
+  return out.slice(0, Math.max(1, input.maxPerTurn));
 }
 
 // ── 答案校验 ──────────────────────────────────────────────────────────────
