@@ -10,6 +10,7 @@
 import {
   ZERO, add, sub, mulQty, percentOf, fromCents, type Money,
 } from "../domain/money.js";
+import { priceEntryFor } from "../spec/finish.js";
 import type {
   AccessoryOption, AccountType, AppliedDiscount, DiscountRule, DoorStyle,
   HardwareOption, ModuleSelection, ModuleSpec, Modifier, PriceMatrixEntry,
@@ -84,9 +85,11 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
     if (!mod) {
       throw new PricingError(`型号不存在：${sel.moduleId}`, "MODULE_NOT_FOUND");
     }
-    const entry = ctx.priceMatrix.find(
-      (e) => e.moduleId === sel.moduleId && e.priceGroupId === priceGroupId,
-    );
+    // 查价走 `priceEntryFor`：`finishDependent: false` 的型号（塑料地脚）
+    // 在矩阵里只有一行，那一行对所有花色都适用（§3.5.5）。
+    // 与 FR-8 校验读同一个函数——两边各写一遍的话，会出现"校验放行、定价当场
+    // 抛价格空洞"，而客户看到的只是一句"报价校验未通过"。
+    const entry = priceEntryFor(mod, priceGroupId, ctx.priceMatrix);
     if (!entry) {
       // 价格矩阵空洞：该型号不供应该价格组。绝不回退到「某个默认价」。
       throw new PricingError(

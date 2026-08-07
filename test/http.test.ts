@@ -622,7 +622,7 @@ test("别人的户型图读不到", async () => {
 const TRADE = "ca_demo_trade";
 
 /** 建一个补齐了户型、出过方案的会话，供后面的 PDF / 修订链测试复用。 */
-async function readyProject(accountId: string) {
+async function readyProject(accountId: string, appliances?: unknown[]) {
   const convRes = await req("/api/conversations", { method: "POST", accountId });
   const { conversation } = await convRes.json() as { conversation: { id: string } };
   const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
@@ -633,6 +633,11 @@ async function readyProject(accountId: string) {
   await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId, body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
   });
+  if (appliances) {
+    await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+      method: "POST", accountId, body: JSON.stringify({ appliances }),
+    });
+  }
   await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId, body: JSON.stringify({ ceilingHeight: 96 }),
   });
@@ -734,6 +739,35 @@ test("报价交付前跑完整审核，并把查了哪几项告诉客户", async
     assert.ok(body.audit.checked.includes(need), `没跑 ${need}：${body.audit.checked.join()}`);
   }
   assert.ok(body.auditText.includes("交付前检查"), body.auditText);
+});
+
+test("推定的家电尺寸要跟着**报价单**一起走，不能只写在图纸说明里", async () => {
+  // SCENARIOS 场景 J：客户对烤箱选了「我不确定」→ 走常见默认值，但**报价单上
+  // 要如实写「烤箱按 30" 预留」**。报价单是客户拿去下单的那一份；只在图纸说明里
+  // 说过一次，订柜的人看不到，柜子做出来装不进去。
+  const { conversationId, layout } = await readyProject(CONSUMER, [
+    { kind: "refrigerator", width: 33 },  // 客户给的尺寸
+    { kind: "wallOven" },                 // 「不确定」→ 推定
+  ]);
+  const res = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId,
+      doorStyleId: "ds_shaker_white", selections: layout.selections,
+    }),
+  });
+  assert.equal(res.status, 201, await res.clone().text());
+  const body = await res.json() as {
+    quoteListText: string; audit: { ok: boolean; checked: string[] };
+  };
+
+  assert.ok(body.audit.checked.includes("UNDISCLOSED_ASSUMPTION"),
+    `没跑推定值披露检查：${body.audit.checked.join()}`);
+  assert.match(body.quoteListText, /烤箱/, "报价单上没提烤箱");
+  assert.match(body.quoteListText, /推定|预留/, "报价单上没说那个尺寸是推定的");
+  // 客户真给了尺寸的那一件不该被说成"推定"——那会让客户以为自己没说过
+  assert.equal(/冰箱按 .*推定|冰箱按 .*预留/.test(body.quoteListText), false,
+    `客户给过尺寸的冰箱被写成了推定：${body.quoteListText}`);
 });
 
 test("四视图与俯视图交付前也各自跑审核", async () => {

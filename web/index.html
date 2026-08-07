@@ -853,6 +853,7 @@ $('quoteBtn').addEventListener('click', async () => {
   }
   currentQuote = body.quote;
   lastTradeNotice = body.tradePricing || null;
+  lastFinishes = body.finishComparison || null;
   stepIndex = 4; renderSteps();
   renderQuote();
   // 正式报价单进产出物栏。走服务端的 PDF 端点，与邮件附件是同一份——
@@ -862,6 +863,43 @@ $('quoteBtn').addEventListener('click', async () => {
 });
 
 let lastTradeNotice = null;
+/** 换花色比价（FR-6.3）。同一套方案换门板后的**重算价**，不是总价乘系数。 */
+let lastFinishes = null;
+
+/**
+ * 换花色比价表。
+ *
+ * 报不出价的花色**照样列出来**，并写清是哪个型号卡住的——不列的话，
+ * 那个花色会像不存在一样消失，而客户可能正想选它。
+ */
+function renderFinishComparison() {
+  if (!lastFinishes || (lastFinishes.options || []).length <= 1) return '';
+  const rows = lastFinishes.options.map((o) => {
+    if (o.current) {
+      return `<tr><td><b>${esc(o.doorStyleName)}</b> <span class="hint">当前</span></td>
+        <td class="num">${money(o.total)}</td><td class="num hint">—</td></tr>`;
+    }
+    if (o.unavailable) {
+      return `<tr><td>${esc(o.doorStyleName)}</td>
+        <td colspan="2" class="ql-warn">${esc(o.unavailable.reason)}</td></tr>`;
+    }
+    const pct = o.deltaPercent === 0 ? '同价'
+      : o.deltaPercent > 0 ? `贵 ${o.deltaPercent}%` : `便宜 ${-o.deltaPercent}%`;
+    const sign = o.delta > 0 ? '+' : o.delta < 0 ? '−' : '±';
+    return `<tr><td>${esc(o.doorStyleName)} <span class="hint">${pct}</span></td>
+      <td class="num">${money(o.total)}</td>
+      <td class="num ${o.delta > 0 ? '' : 'cmp-lowest'}">${sign}${money(Math.abs(o.delta))}</td></tr>`;
+  }).join('');
+
+  return `<div class="card" style="margin-top:14px">
+    <h3>换一种门板花色</h3>
+    <table><thead><tr><th>花色</th><th class="num">总价</th><th class="num">差额</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <p class="hint" style="margin-top:8px">同一套方案换门板后的<b>重算价</b>，柜体数量与排布完全不变。
+      逐行重算，不是给总价乘一个系数——同一个价格组里各型号的涨幅并不一致，折扣与税也一并重算。<br/>
+      填缝条、收口板、踢脚板跟着换色；<b>塑料地脚不换</b>——它藏在踢脚板后面，一个价。</p>
+  </div>`;
+}
 
 function renderQuote() {
   const q = currentQuote;
@@ -894,6 +932,7 @@ function renderQuote() {
     ${lastTradeNotice && !lastTradeNotice.applied ? `<div class="card" style="margin-top:14px">
       <h3>本单按零售价计算</h3>
       <p class="hint">${esc(lastTradeNotice.reason)}</p></div>` : ''}
+    ${renderFinishComparison()}
     <div style="margin-top:18px">
       <button id="discBtn">下一步：查看将发送的内容</button>
       <button class="ghost" id="pdfBtn">下载 PDF 报价单</button>

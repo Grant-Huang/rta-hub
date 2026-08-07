@@ -39,6 +39,21 @@ export interface Scenario {
   turns: string[];
   ceilingHeight: number;
   walls: ScenarioWall[];
+  /**
+   * 这个厨房里的家电（FR-3.2）。
+   *
+   * 不给就走 `DEFAULT_APPLIANCES`（冰箱 + 灶具，标为推定值）。给了才测得到
+   * 「按实际尺寸留空」「推定值如实披露」「配套柜按能力标签查」这几条——
+   * 而那正是场景 J 要覆盖的。
+   *
+   * `width` 省略表示客户说"不确定"：系统按常见档位取值并标 `provenance: "assumed"`，
+   * 解释里必须写明它是推定的。
+   */
+  appliances?: {
+    kind: "refrigerator" | "range" | "cooktop" | "wallOven" | "rangeHood" | "microwave" | "dishwasher";
+    width?: number;
+    preferredZone?: "nearEntry" | "nearSink" | "nearWindow" | "any";
+  }[];
   prefs: {
     budgetBand?: "economy" | "standard" | "premium" | "unsure";
     doorStyleId?: string;
@@ -280,6 +295,14 @@ function quantize(n: number): number {
  * 这不是"随便造几个"——每个场景对应 SYSTEM 里列的一条覆盖要求，
  * 所以没有 LLM 时覆盖面依然成立，只是对话措辞是固定的。
  */
+/**
+ * 内置场景的条数。
+ *
+ * 模拟器的默认条数用它，不写死一个数字：**加了场景却忘了改默认值**，
+ * 新场景就再也不会被跑到，而"跑通了"的报告看起来和真跑全了一模一样。
+ */
+export const BUILTIN_SCENARIO_COUNT = 8;
+
 function deterministicScenarios(input: GenerateInput): Scenario[] {
   const doors = input.doorStyleIds;
   const d = (i: number) => doors[i % Math.max(1, doors.length)] ?? "";
@@ -487,7 +510,53 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
       },
       revisions: [],
     },
+    {
+      id: "H", name: "家电驱动的排布 · 尺寸有已知有不确定", shape: "L 型",
+      covers: "场景 J：客户声明家电（冰箱 33\"、灶台 30\"、烟机、洗碗机、"
+        + "烤箱「不确定」）→ 留空按实际尺寸算、推定值如实披露、配套柜按能力标签查",
+      accountType: "consumer",
+      turns: [
+        "厨房要重做，家电基本都定好了",
+        "L 型，长边十五尺，短边十尺",
+        "冰箱 33 寸，灶台 30 寸，有抽油烟机也有洗碗机",
+        "烤箱还没挑好，尺寸不确定",
+      ],
+      ceilingHeight: 96,
+      walls: [
+        {
+          label: "北墙", length: 180,
+          features: [
+            { kind: "window", offset: 78, width: 36 },
+            { kind: "plumbing", offset: 84, width: 24 },
+            { kind: "electrical", offset: 6, width: 36 },
+          ],
+        },
+        { label: "东墙", length: 120, features: [{ kind: "gas", offset: 54, width: 30 }] },
+      ],
+      appliances: [
+        // 尺寸已知：留空按 33 + 2×1"（通风）= 35"，不是写死的 36"
+        { kind: "refrigerator", width: 33, preferredZone: "nearEntry" },
+        { kind: "range", width: 30 },
+        { kind: "rangeHood", width: 30 },
+        { kind: "dishwasher", width: 24 },
+        // 客户说"不确定"：走常见默认值，但要标成推定并在解释里写清楚
+        { kind: "wallOven" },
+      ],
+      prefs: {
+        budgetBand: "standard", doorStyleId: d(0), storage: "balanced", assembly: "RTA",
+        tradeoff: "quality",
+      },
+      revisions: [
+        { note: "烤箱那边先按标准的来吧", changes: {} },
+      ],
+    },
   ];
 
+  // 常量与实际条数对不上就当场喊出来——静默取小值等于悄悄少跑几个场景
+  if (base.length !== BUILTIN_SCENARIO_COUNT) {
+    throw new Error(
+      `BUILTIN_SCENARIO_COUNT=${BUILTIN_SCENARIO_COUNT}，实际内置 ${base.length} 个场景，` +
+      `请同步改常量，否则模拟器默认跑不全`);
+  }
   return base.slice(0, Math.max(1, input.count));
 }
