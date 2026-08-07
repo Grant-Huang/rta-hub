@@ -64,6 +64,8 @@ type Beat =
   | { kind: "fourViews"; runs: Json[]; explanation: Json; acceptable: boolean; aesthetics: Json[] }
   /** 报价清单。 */
   | { kind: "quote"; ok: boolean; text?: string; html?: string; total?: string; error?: string }
+  /** 交付前审核的结论——**在把东西给客户之前**跑的那一遍。 */
+  | { kind: "audit"; on: string; ok: boolean; text: string; checked: string[] }
   /** 提示 / 警告，就地出现。 */
   | { kind: "note"; level: "info" | "warn"; text: string };
 
@@ -218,6 +220,13 @@ async function main(): Promise<void> {
         : appliedLast.length
           ? `按你说的重排了一版（${label}）。`
           : `这是${label}。刚才那条我没法落到排布上，所以和上一版一样——还有别的要改吗？`);
+      if (planView.audit) {
+        timeline.push({
+          kind: "audit", on: `全局俯视图 ${label}`,
+          ok: Boolean(planView.audit.ok), text: planView.auditText ?? "",
+          checked: planView.audit.checked ?? [],
+        });
+      }
       timeline.push({
         kind: "planViews", label, mix,
         changed: prev ? prev.mix !== mix : undefined,
@@ -257,6 +266,13 @@ async function main(): Promise<void> {
     console.log(`  完整四视图：人体工程${layout.acceptable ? "全过" : "未过"}　` +
       `美观 ${(layout.aesthetics ?? []).map((a: Json) => a.score.total).join("/")}`);
     said("assistant", "排布定下来了，这是完整的四视图和逐条说明。");
+    if (layout.audit) {
+      timeline.push({
+        kind: "audit", on: "完整四视图",
+        ok: Boolean(layout.audit.ok), text: layout.auditText ?? "",
+        checked: layout.audit.checked ?? [],
+      });
+    }
     timeline.push({
       kind: "fourViews", runs: layout.views ?? [],
       explanation: layout.explanation ?? {},
@@ -279,6 +295,13 @@ async function main(): Promise<void> {
         companyId: "co_pilot", conversationId: conversation.id, selections: layout.selections,
       }),
     });
+    if (quote.audit) {
+      timeline.push({
+        kind: "audit", on: "报价清单",
+        ok: Boolean(quote.audit.ok), text: quote.auditText ?? "",
+        checked: quote.audit.checked ?? [],
+      });
+    }
     if (quote.__status === 201) {
       const sums = (quote.quoteList?.subtotals ?? [])
         .map((x: Json) => `${x.label} ${x.includedIn ? "含在柜体价内" : fmtMoney(x.amount)}`).join("　");
@@ -350,6 +373,25 @@ async function main(): Promise<void> {
     if (iFour >= 0 && iQuote >= 0 && iFour > iQuote) {
       fail("时间线上报价清单排在了四视图之前");
     }
+    // 交付前审核必须**真的跑过**，而不是"没查所以没问题"
+    const audits = timeline.filter((b): b is Extract<Beat, { kind: "audit" }> => b.kind === "audit");
+    if (audits.length === 0) {
+      fail("整条链路上一次交付前审核都没跑");
+    }
+    for (const a of audits) {
+      if (a.checked.length === 0) fail(`${a.on} 的审核一项都没查——「没查」不等于「查过没问题」`);
+      if (!a.ok) fail(`${a.on} 未通过交付前审核：${a.text.replace(/\n/g, " ").slice(0, 120)}`);
+    }
+    // 报价这一步查得最严，必须包含对账与快照复算
+    const quoteAudit = audits.find((a) => a.on === "报价清单");
+    if (quoteAudit) {
+      for (const need of ["QUOTE_RECONCILIATION", "PRICE_SNAPSHOT", "BOM_INCOMPLETE"]) {
+        if (!quoteAudit.checked.includes(need)) {
+          fail(`报价交付前没有跑 ${need} 这项检查`);
+        }
+      }
+    }
+
     // 客户提了能落下去的改动，图就必须真的变
     for (const [i, rev] of k.revisions.entries()) {
       const before = planRounds[i];
@@ -521,6 +563,12 @@ function renderText(results: Json[], set: ScenarioSet): string {
           if (b.text) out.push(indent(b.text, 4));
           out.push("", `     总计（含税运）：${b.ok ? b.total : `被拒：${b.error}`}`, "");
           break;
+        case "audit":
+          out.push(`  ${b.ok ? "✔" : "✖"} 交付前审核（${b.on}）：` +
+            `跑了 ${b.checked.length} 项`);
+          if (b.text) out.push(indent(b.text, 4));
+          out.push("");
+          break;
         case "note":
           out.push(`  ${b.level === "warn" ? "⚠" : "·"} ${b.text}`);
           break;
@@ -611,6 +659,13 @@ function renderHtml(results: Json[], set: ScenarioSet): string {
           <p class="quote">总计（含税运）：${esc(b.ok ? (b.total ?? "—") : "被拒")}</p>
         </div>`;
 
+      case "audit":
+        return `<div class="beat audit ${b.ok ? "pass" : "fail"}">
+          <div class="bt">${b.ok ? "✔" : "✖"} 交付前审核（${esc(b.on)}）` +
+          `<span class="note"> 跑了 ${b.checked.length} 项</span></div>
+          ${b.text ? `<pre class="auditText">${esc(b.text)}</pre>` : ""}
+        </div>`;
+
       case "note":
         return `<p class="${b.level === "warn" ? "warn" : "note"}">` +
           `${b.level === "warn" ? "⚠" : "·"} ${esc(b.text)}</p>`;
@@ -673,6 +728,9 @@ function renderHtml(results: Json[], set: ScenarioSet): string {
   .mix code { font-size:11.5px; color:#9aa4b2; word-break:break-all; }
   .chg { color:#7bd88f; font-size:11.5px; font-weight:400; margin-left:6px; }
   .same { color:#8b94a3; font-size:11.5px; font-weight:400; margin-left:6px; }
+  .beat.audit.pass { border-color:#2f5c3d; }
+  .beat.audit.fail { border-color:#7a3b3b; background:#231a1a; }
+  .auditText { font-size:11.5px; color:#c6cdd6; white-space:pre-wrap; margin:6px 0 0; }
   .warn { color:#d8c37b; font-size:12.5px; }
   table.ql { width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:12px; }
   table.ql th,table.ql td { text-align:left; padding:5px 6px; border-bottom:1px solid #262b33; vertical-align:top; }

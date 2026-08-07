@@ -688,6 +688,39 @@ test("离谱的家电尺寸被拒绝，不静默写进户型", async () => {
   assert.equal(res.status, 400);
 });
 
+test("报价交付前跑完整审核，并把查了哪几项告诉客户", async () => {
+  const { conversationId, layout } = await readyProject(CONSUMER);
+  const res = await req("/api/quotes", {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      companyId: "co_pilot", conversationId,
+      doorStyleId: "ds_shaker_white", selections: layout.selections,
+    }),
+  });
+  assert.equal(res.status, 201, await res.clone().text());
+  const body = await res.json() as {
+    audit: { ok: boolean; checked: string[] }; auditText: string;
+  };
+  assert.equal(body.audit.ok, true);
+  // 报价是客户据以做决定的东西，所以这一步查得最严
+  for (const need of ["QUOTE_RECONCILIATION", "PRICE_SNAPSHOT", "BOM_INCOMPLETE", "SPEC_MISMATCH"]) {
+    assert.ok(body.audit.checked.includes(need), `没跑 ${need}：${body.audit.checked.join()}`);
+  }
+  assert.ok(body.auditText.includes("交付前检查"), body.auditText);
+});
+
+test("四视图与俯视图交付前也各自跑审核", async () => {
+  const { floorPlanId, layout } = await readyProject(CONSUMER);
+  assert.ok((layout as unknown as { audit: { ok: boolean } }).audit.ok, "四视图这一步要带审核");
+
+  const pv = await req(`/api/floorplans/${floorPlanId}/plan-view`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  const pvBody = await pv.json() as { audit: { ok: boolean; checked: string[] } };
+  assert.ok(pvBody.audit.checked.includes("ERGONOMICS"));
+  assert.ok(pvBody.audit.checked.includes("GEOMETRY"));
+});
+
 /** 推进设计阶段。 */
 function advance(conversationId: string, accountId: string, action: string, extra: object = {}) {
   return req(`/api/conversations/${conversationId}/design/advance`, {
