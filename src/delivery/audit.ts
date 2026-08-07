@@ -329,14 +329,20 @@ function geometryProblems(
           });
         }
       }
-      for (let i = 1; i < mine.length; i++) {
-        const prev = mine[i - 1]!;
-        const cur = mine[i]!;
-        if (cur.x < prev.x + prev.width - EPS) {
+      // 两两比。**不能只比相邻的**：叠装让同一个 x 位置上有两个构件，
+      // 排序后相邻的那一对正是合法的上下段，而真正重叠的可能隔着它们。
+      for (let i = 0; i < mine.length; i++) {
+        for (let j = i + 1; j < mine.length; j++) {
+          const a = mine[i]!;
+          const b = mine[j]!;
+          if (b.x >= a.x + a.width - EPS || a.x >= b.x + b.width - EPS) continue;
+          // 横向压上了，还要看**竖直方向**：叠装吊柜的上下两段共用一个 x 区间，
+          // 它们在高度上错开，不是重叠。只比 x 的话，一启用叠装就整片误报。
+          if (!verticallyOverlap(a, b, EPS)) continue;
           out.push({
             code: "GEOMETRY", rule: "SR-G2", severity: "blocking", wallRunId: run.id,
-            message: `${run.label}上有构件重叠（${prev.moduleCode ?? prev.label ?? "构件"} 与 ` +
-              `${cur.moduleCode ?? cur.label ?? "构件"} 在 ${cur.x}" 处叠在一起）`,
+            message: `${run.label}上有构件重叠（${nameOf(a)} 与 ${nameOf(b)} ` +
+              `在 ${Math.max(a.x, b.x)}" 处叠在一起）`,
           });
         }
       }
@@ -393,6 +399,18 @@ function interferenceProblems(
     }
   }
   return out;
+}
+
+/**
+ * 同一层内两个构件在**高度上**有没有重叠。
+ *
+ * 叠装吊柜的上下两段同属 wall 层、共用同一个 x 区间，靠 `stackBase` 错开。
+ * 不比高度的话，启用叠装的那一刻整面墙都会被判成"构件重叠"。
+ */
+function verticallyOverlap(a: Placement, b: Placement, eps: number): boolean {
+  const lo = (p: Placement) => p.stackBase ?? 0;
+  const hi = (p: Placement) => (p.stackBase ?? 0) + p.height;
+  return lo(a) < hi(b) - eps && lo(b) < hi(a) - eps;
 }
 
 /** 两个构件在竖直方向上有没有重叠。高柜同时占地柜层和吊柜层。 */

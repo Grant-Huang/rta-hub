@@ -80,7 +80,9 @@ export const SANITY_RULES: readonly SanityRule[] = [
   },
   {
     id: "SR-G2", title: "同段墙同一层内构件不重叠", severity: "blocking",
-    criterion: "同一 wallRunId、同一 layer 的构件区间两两不相交（容差 0.01\"）。",
+    criterion: "同一 wallRunId、同一 layer 的构件，横向区间与**高度区间**"
+      + "不同时相交（容差 0.01\"）。叠装吊柜的上下两段共用一个横向区间、"
+      + "靠 `stackBase` 在高度上错开，不算重叠。",
     why: "两个柜子占同一段墙面，装的时候必然有一个放不下。",
     enforcedBy: "audit", implementedIn: "delivery/audit.ts geometryProblems",
   },

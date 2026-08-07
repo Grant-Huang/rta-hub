@@ -89,30 +89,57 @@ export interface StackCandidate {
  */
 export function stackCandidates(
   modules: readonly ModuleSpec[],
-  width?: number,
+  widths?: number | readonly number[],
 ): StackCandidate[] {
-  const byHeight = new Map<number, StackCandidate>();
+  // **高度档位是随宽度变的**。试点公司只有 36" 宽的柜子有 12/15/18" 的矮档
+  // （`W3618`），30" 宽的最矮就是 30"。
+  //
+  // 传一组宽度时，先算出**每个宽度各自有哪些高度**，再取交集——这面墙上
+  // 每一列都得能排出这套高度。各宽度各解各的话，36" 那几列拼到 60"、
+  // 24/30" 那几列只到 42"，同一面墙上柜顶高低不齐，比接缝不对齐还难看。
+  // 整面墙统一是软约束里优先级最高的一条（CATALOG_MODEL §3.2）。
+  //
+  // ⚠️ 交集是**按高度**取的，不是"找一个同时有这些宽度的型号"——
+  // 多数商家一个型号只有一个宽度（`W3030` 就是 30"），按型号取交集永远是空的。
+  const need = widths === undefined ? []
+    : typeof widths === "number" ? [widths] : [...new Set(widths)];
+
+  const perWidth = new Map<number, Map<number, StackCandidate>>();
+  const all = new Map<number, StackCandidate>();
+
   for (const m of modules) {
     if (m.type !== "wall") continue;
-    // 按宽度过滤：**高度档位是随宽度变的**。试点公司只有 36" 宽的柜子有
-    // 12/15/18" 的矮档（`W3618`），30" 宽的最矮就是 30"。不按宽度过滤的话，
-    // 求解器会给 30" 宽的位置解出「42 + 18」，然后排布时找不到 30×18 的型号，
-    // 那一段就静默退回单柜——图上一半叠装一半不叠，而没有任何地方报错。
-    if (width !== undefined && !m.widthOptions.includes(width)) continue;
     const caps = capabilitiesFor(m).capabilities;
     if (caps.monolithic) continue;
     const stacking = caps.stacking;
     if (!stacking) continue;
+
     for (const h of m.heightOptions) {
-      const cur = byHeight.get(h);
-      byHeight.set(h, {
-        height: h,
-        asLower: (cur?.asLower ?? false) || stacking.asLower,
-        asUpper: (cur?.asUpper ?? false) || stacking.asUpper,
-      });
+      const merge = (into: Map<number, StackCandidate>) => {
+        const cur = into.get(h);
+        into.set(h, {
+          height: h,
+          asLower: (cur?.asLower ?? false) || stacking.asLower,
+          asUpper: (cur?.asUpper ?? false) || stacking.asUpper,
+        });
+      };
+      merge(all);
+      for (const w of m.widthOptions) {
+        if (need.length > 0 && !need.includes(w)) continue;
+        merge(perWidth.get(w) ?? perWidth.set(w, new Map()).get(w)!);
+      }
     }
   }
-  return [...byHeight.values()].sort((a, b) => b.height - a.height);
+
+  if (need.length === 0) return [...all.values()].sort((a, b) => b.height - a.height);
+
+  // 交集：只有**每个用到的宽度都提供**的高度才算数
+  const out: StackCandidate[] = [];
+  for (const [h, candidate] of all) {
+    const everyWidthHasIt = need.every((w) => perWidth.get(w)?.has(h));
+    if (everyWidthHasIt) out.push(candidate);
+  }
+  return out.sort((a, b) => b.height - a.height);
 }
 
 /**

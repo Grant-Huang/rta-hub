@@ -15,6 +15,7 @@ import { interactionProfile, type TradeInteractionProfile } from "../trade/inter
 import type { AgentContext, AgentReply, CompletionClient, DesignIntent } from "./types.js";
 import { escalationDecision, tierForTurn, type EscalationDecision } from "./model-tiers.js";
 import { ASK_STYLE_RULES } from "./quick-replies.js";
+import { recordSkipped } from "./token-meter.js";
 
 function orchestratorSystem(profile: TradeInteractionProfile): string {
   const lines = [
@@ -91,7 +92,15 @@ export async function orchestratorReply(
   const requirements = mergeRequirements(ctx.requirements, userText);
 
   if (!client) {
-    return { content: fallbackPrompt(requirements, opts.profile, opts.repeatedAsk), requirements };
+    // 降级路径也记一笔：真实 token 是 0，但"本来会调一次、prompt 有多大"是可测的。
+    // 不记的话，场景测试跑一百遍也回答不了「上线之后一个客户多少钱」。
+    const content = fallbackPrompt(requirements, opts.profile, opts.repeatedAsk);
+    recordSkipped({
+      callSite: "orchestratorChat",
+      prompt: orchestratorSystem(opts.profile) + renderForEstimate(ctx.history) + userText,
+      reply: content,
+    });
+    return { content, requirements };
   }
 
   // 日常轮次走轻量模型；只有确定性触发（要出方案、多约束修改…）才上主力。
@@ -109,6 +118,11 @@ export async function orchestratorReply(
     content: content.trim() || fallbackPrompt(requirements, opts.profile, opts.repeatedAsk),
     requirements,
   };
+}
+
+/** 估算用：把历史拍平成会真的发出去的那串文字。 */
+function renderForEstimate(history: readonly { role: string; content: string }[]): string {
+  return history.map((m) => `${m.role}: ${m.content}`).join("\n");
 }
 
 /** 还缺哪些关键字段——同时用于兜底话术与前端进度提示。 */
@@ -213,7 +227,16 @@ export async function companyAgentReply(
   userText: string,
 ): Promise<AgentReply> {
   if (!client) {
-    return { content: deterministicSpecAnswer(companyName, bundle, userText), companyId: bundle.companyId };
+    const content = deterministicSpecAnswer(companyName, bundle, userText);
+    // 公司 Agent 的 prompt 里注入了整份规格清单——它通常是全系统**最大的一个
+    // prompt**，成本分析里不能漏
+    recordSkipped({
+      callSite: "companySpecQa",
+      prompt: buildCompanyAgentSystem(companyName, bundle)
+        + renderForEstimate(ctx.history) + userText,
+      reply: content,
+    });
+    return { content, companyId: bundle.companyId };
   }
   const content = await client.complete({
     system: buildCompanyAgentSystem(companyName, bundle),

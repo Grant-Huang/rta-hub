@@ -423,6 +423,70 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
         { note: "岛台这边多做点抽屉", changes: { storage: "drawers" } },
       ],
     },
+    {
+      id: "F", name: "复式住宅 · 超高层高 + 点名第三家", shape: "L 型",
+      covers: "120\" 层高（吊柜一定要叠装）、@ 点名走公司 Agent（系统里最大的一个 prompt）、"
+        + "第三家试点的分体做法与 39\" 吊柜上限",
+      accountType: "consumer",
+      turns: [
+        "复式的厨房，层高比较高",
+        "L 型，长边十四尺，短边九尺，层高十尺",
+        // @ 点名：既验证确定性路由，也让 token 分析覆盖到公司 Agent 那一路——
+        // 它的 prompt 里注入了整份规格清单，是全系统最大的一个
+        "@白桦橱柜 你们家吊柜最高做到多少？层高十尺的话上面怎么收口",
+        "现代简约，预算两万以内，安大略省",
+      ],
+      ceilingHeight: 120,
+      walls: [
+        {
+          label: "北墙", length: 168,
+          features: [
+            { kind: "window", offset: 72, width: 36 },
+            { kind: "plumbing", offset: 78, width: 24 },
+          ],
+        },
+        { label: "东墙", length: 108, features: [{ kind: "gas", offset: 54, width: 30 }] },
+      ],
+      prefs: {
+        budgetBand: "standard", doorStyleId: d(0), storage: "balanced", assembly: "RTA",
+        tradeoff: "quality",
+      },
+      revisions: [
+        { note: "上面那一截看着空，能做满吗", changes: {} },
+      ],
+    },
+    {
+      id: "G", name: "小户型 · 门洞紧贴墙角", shape: "L 型",
+      covers: "门洞离内墙角很近——墙角让位 27\" 与门洞台面外伸 2-1/2\" 叠在一起，"
+        + "是几何上最紧的一种组合（SR-G4 + SR-G5）",
+      accountType: "consumer",
+      turns: [
+        "老公寓厨房，进门就是灶台",
+        "L 型，长边十二尺，短边七尺半，进门的门洞紧挨着墙角",
+        "北欧风，预算一万以内，BC 省",
+      ],
+      ceilingHeight: 96,
+      walls: [
+        {
+          label: "西墙", length: 144,
+          features: [
+            { kind: "window", offset: 66, width: 30 },
+            { kind: "plumbing", offset: 72, width: 24 },
+          ],
+        },
+        {
+          // 门洞从 30" 起——墙角已经让掉 27"，门洞的台面净空再吃 2-1/2"，
+          // 两者之间只剩 1/2"。这是排布器最容易排出"看着没超墙、实际装不上"的地方
+          label: "南墙", length: 90,
+          features: [{ kind: "door", offset: 30, width: 32 }],
+        },
+      ],
+      prefs: {
+        budgetBand: "economy", doorStyleId: d(1), storage: "doors", assembly: "RTA",
+        tradeoff: "price",
+      },
+      revisions: [],
+    },
   ];
 
   return base.slice(0, Math.max(1, input.count));
