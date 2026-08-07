@@ -96,6 +96,9 @@ const MODULE_DEFS: [string, ModuleSpec["type"], number[], number[], number[], st
   ["W3630", "wall", [36], [30, 36, 42], [12], "204.00"],
   ["W3618", "wall", [36], [12, 15, 18], [12], "132.00"],
   ["CW2430", "corner", [24], [30, 36, 42], [12], "236.00"],
+  // 冰箱上柜：与冰箱齐深（24"），比普通吊柜矮。不做的话冰箱顶上是个积灰空当。
+  // 烤箱高柜用已有的 OC3084（见 PILOT_CAPABILITIES）
+  ["RFW3615", "wall", [33, 36, 39], [12, 15, 18], [24], "268.00"],
   // 高柜（规范：深 24"、高 84/90/96"）
   ["PC1884", "tall", [18], [84, 90, 96], [24], "512.00"],
   ["PC2484", "tall", [24], [84, 90, 96], [24], "596.00"],
@@ -111,6 +114,8 @@ const MODULE_DEFS: [string, ModuleSpec["type"], number[], number[], number[], st
   ["CM8", "crown", [96], [4.25], [0.75], "58.00"],
   ["BEP", "panel", [24], [34.5], [0.25], "76.00"],
   ["WEP", "panel", [12], [30, 36, 42], [0.25], "62.00"],
+  // 冰箱侧通高收口板：冰箱比两边的柜子高，只贴地柜那一截会露出上面半截刨花板边
+  ["REP24", "panel", [24], [84, 90, 96], [0.25], "148.00"],
 ];
 
 /**
@@ -131,11 +136,27 @@ const FACELESS_TYPES: ReadonlySet<ModuleSpec["type"]> = new Set(["leg", "toeKick
  */
 const PILOT_CAPABILITIES: Record<string, ModuleSpec["capabilities"]> = {
   OC3084: { roles: ["applianceHousing"], servesAppliance: "wallOven" },
+  // 配套柜：排布器按 servesAppliance 找它们，不按型号码前缀猜
+  RFW3615: { roles: ["doorStorage"], servesAppliance: "refrigerator" },
+};
+
+/**
+ * 试点公司**显式指定**的脸型。
+ *
+ * `RFW` 这个前缀不在通用命名规则里——而给它编一条规则等于让规则去迁就一家公司的
+ * 命名习惯。公司自己声明脸型是 FR-2 早就提供的路径（`CompanyOverrides`），
+ * 这里用的是同一条路。
+ */
+const PILOT_FACES: Record<string, string> = {
+  RFW3615: "F2_DOUBLE_DOOR",
 };
 
 export const pilotModules: ModuleSpec[] = MODULE_DEFS.map(([code, type, w, h, d]) => {
   const faceless = FACELESS_TYPES.has(type);
-  const match = matchFaceTemplate(code);
+  const declaredFace = PILOT_FACES[code];
+  const match = declaredFace
+    ? { templateId: declaredFace }
+    : matchFaceTemplate(code);
   if (!match && !faceless) {
     // FR-2 的「零静默失败」：**有脸的**型号匹配不到脸型就不允许静默进入规格库
     throw new Error(`型号 ${code} 未能匹配脸型模板，需人工确认后才能发布`);

@@ -123,9 +123,10 @@ export type ModuleRole =
 三个来源，按可信度排序：
 
 1. **商家在规格导入时直接声明**（最可信）。`ModuleSpec.capabilities`。
-2. **从脸型模板反推**（次可信）。`F7_FALSE_FRONT_DOUBLE` 只可能是水槽柜；
-   `F6_DRAWER_STACK` 一定是抽屉柜。这条复用 `matchFaceTemplate` 已经定好的语义，
-   不另起一套规则。
+2. **从脸型模板反推**（次可信）。`F7_FALSE_FRONT_DOUBLE`（假抽面 + 双门）是一个
+   **顶部开放**的箱体，所以它同时是 `sinkBase` 和 `cooktopBase`——水槽和嵌入式
+   灶台要的都是"上面那一格是空的"（M5-6 实测）；`F6_DRAWER_STACK` 一定是抽屉柜。
+   这条复用 `matchFaceTemplate` 已经定好的语义，不另起一套规则。
 3. ~~**从型号码前缀猜**~~ —— **不做**。那正是这一层要消除的东西。
 
 关键规则与 FR-2 的「零静默失败」一致：

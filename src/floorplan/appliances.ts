@@ -53,7 +53,9 @@ export const APPLIANCE_DEFAULTS: Record<ApplianceKind, { width: number; clearanc
   // 33" 是北美最常见的整机宽度（30" 窄款、36" 对开门/法式各占一部分）
   refrigerator: { width: 33, clearanceEachSide: 1 },
   range: { width: 30, clearanceEachSide: 0 },
-  cooktop: { width: 30, clearanceEachSide: 0 },
+  // 嵌入式灶台落在**比它宽的柜子**上：台面开孔要留边，开孔切到柜体侧板就废了。
+  // 所以它占的墙面宽度是"柜子的宽度"，不是"灶的宽度"——30" 的灶要 33" 的柜。
+  cooktop: { width: 30, clearanceEachSide: 1.5 },
   // 单烤箱塔，柜内嵌装，本体两侧无需额外间隙
   wallOven: { width: 30, clearanceEachSide: 0 },
   // 抽油烟机通常与灶台同宽或宽一档

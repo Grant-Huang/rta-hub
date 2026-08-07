@@ -163,7 +163,9 @@ function seamsOf(placements: readonly Placement[]): number[] {
  */
 function scoreSymmetry(run: WallRun, base: readonly Placement[], notes: string[]): number {
   const window = run.features.find((f) => f.kind === "window");
-  const sink = base.find((p) => p.moduleCode?.toUpperCase().includes("SB"));
+  // 排掉配套给家电的：灶下柜可能就是一个水槽柜箱体，拿它当对称参照物是错的
+  const sink = base.find((p) => p.label === "sink")
+    ?? base.find((p) => p.applianceKind === undefined && p.moduleCode?.toUpperCase().includes("SB"));
   const anchor = window
     ? window.offset + window.width / 2
     : sink
