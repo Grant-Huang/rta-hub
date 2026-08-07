@@ -20,6 +20,7 @@ import { generateCompanyToken } from "../tenancy/company-auth.js";
 import type { PricingContext } from "../pricing/engine.js";
 import * as seed from "./seed.js";
 import * as second from "./seed-second.js";
+import * as third from "./seed-third.js";
 
 export interface AppContext {
   repos: Repositories;
@@ -105,6 +106,13 @@ export async function seedInitialData(ctx: AppContext): Promise<void> {
   await repos.companies.upsert({ ...second.secondCompany, accessToken: generateCompanyToken() });
   await repos.specVersions.upsert(second.secondSpecVersion);
   await repos.specBundles.upsert(second.buildSecondCompanyBundle().bundle);
+
+  // 第三家：**规格设计**与前两家不同（分体 pantry、39" 吊柜上限）。
+  // 走的是与第二家完全一样的导入路径——第三家接入没有引入任何新的建立方式，
+  // 这本身就是「设计不同也能接入」这条验收标准的一半。
+  await repos.companies.upsert({ ...third.thirdCompany, accessToken: generateCompanyToken() });
+  await repos.specVersions.upsert(third.thirdSpecVersion);
+  await repos.specBundles.upsert(third.buildThirdCompanyBundle().bundle);
 }
 
 /** 公司是否 active —— 由发布状态与订阅派生，不读独立字段（§6.2）。 */

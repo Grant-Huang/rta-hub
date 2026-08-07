@@ -28,6 +28,7 @@ import {
   checkAisles, type ErgonomicViolation, type TrianglePoint, CLEARANCE,
 } from "./ergonomics.js";
 import { compareCandidates, scoreAesthetics, type AestheticScore } from "./aesthetics.js";
+import { seamsForRun, solveStack, stackCandidates, STACK_SEAM_LOSS } from "./stacking.js";
 import { capabilitiesFor, hasRole } from "../spec/capabilities.js";
 import { planAppliances, type AppliancePlan, type PlacedAppliance } from "./appliance-plan.js";
 import {
@@ -104,6 +105,15 @@ export interface Placement {
    * 「冰箱位 33"」与「冰箱位 33"（推定）」对客户是两句话。
    */
   applianceSpec?: ApplianceSpec;
+  /**
+   * 叠装吊柜里这一段的**底边**，从吊柜基准线（54"）往上量。
+   *
+   * 单柜为 0 或不填。有第二段时它的 `stackBase` 就是第一段的高度——
+   * 正视图靠它把两段画在正确的高度上，并在中间画出那条**横向接缝**：
+   * 客户看到的成品上那是一条实实在在的线，图上没有就是图画错了
+   * （RENDERING.md §8.5）。
+   */
+  stackBase?: number;
   label?: string;
 }
 
@@ -178,9 +188,11 @@ export function pickWallCabinetHeight(ceilingHeight: number | undefined, availab
   const sorted = [...available].sort((a, b) => b - a);
   if (!ceilingHeight) return sorted.find((h) => h === 30) ?? sorted[sorted.length - 1];
   const budget = ceilingHeight - HEIGHTS.wallBaseline;
-  const CROWN_ALLOWANCE = 6;
   return sorted.find((h) => h <= budget - CROWN_ALLOWANCE) ?? sorted.find((h) => h <= budget) ?? sorted[sorted.length - 1];
 }
+
+/** 吊柜顶上给顶线留的高度。叠装求解与单柜选档共用同一个值。 */
+export const CROWN_ALLOWANCE = 6;
 
 interface Segment {
   start: number;
@@ -363,11 +375,16 @@ function pickModule(
   modules: readonly ModuleSpec[],
   types: ModuleType[],
   width: number,
-  preferDrawers = false,
+  preferDrawers: boolean | { height: number } = false,
 ): ModuleSpec | undefined {
+  // 叠装时高度是硬条件：上段要 12"、下段要 36"，随便挑一个"有这个宽度的吊柜"
+  // 会排出一个 36" 的柜子去当 12" 的上段，正视图上直接顶穿天花板。
+  const wantHeight = typeof preferDrawers === "object" ? preferDrawers.height : undefined;
   const matches = modules.filter(
-    (m) => types.includes(m.type) && m.widthOptions.includes(width) && !isDedicatedFitting(m));
+    (m) => types.includes(m.type) && m.widthOptions.includes(width) && !isDedicatedFitting(m)
+      && (wantHeight === undefined || m.heightOptions.includes(wantHeight)));
   if (matches.length === 0) return undefined;
+  if (typeof preferDrawers === "object") return matches[0];
   // 「是不是抽屉柜」问能力，不问型号码——见 spec/capabilities.ts
   const isDrawer = (m: ModuleSpec) => hasRole(m, "drawerStorage") && !hasRole(m, "doorStorage");
   if (preferDrawers) {
@@ -443,6 +460,20 @@ export function generateLayout(
   const wallCandidates = candidatesFor(modules, ["wall"]);
   const wallHeights = [...new Set(modules.filter((m) => m.type === "wall").flatMap((m) => m.heightOptions))];
   const wallHeight = pickWallCabinetHeight(opts.ceilingHeight, wallHeights);
+
+  // ── 叠装吊柜的可用高度（CATALOG_MODEL §3）──
+  //
+  // 「现在的房子都比较高，如果上柜高度达到 51 寸，那么肯定需要拼。」
+  // 可用高度 = 层高 − 吊柜底边 54" − 顶线预留 6"。
+  // 具体解成几段**按宽度分别求**——高度档位是随宽度变的（见 stackCandidates），
+  // 但接缝高度要在整面墙上统一，所以流程是「先各解一遍 → 定缝 → 按缝重解」。
+  const stackAvailable = opts.ceilingHeight !== undefined
+    ? quantize(opts.ceilingHeight - HEIGHTS.wallBaseline - CROWN_ALLOWANCE)
+    : undefined;
+  const solveFor = (width: number, seams?: readonly number[]) =>
+    stackAvailable === undefined ? undefined
+      : solveStack(stackAvailable, stackCandidates(modules, width),
+          seams ? { seams } : {});
 
   // 平面先拼出来：墙角要让多少位是**相邻墙段之间的事**，一段一段单独排布看不见它。
   // 这是「全局视图要把几个墙连起来」这条要求在排布器一侧的落点——不连起来，
@@ -690,27 +721,68 @@ export function generateLayout(
         .sort((a, b) => a.x - b.x)
         .map((p) => p.x + p.width);
 
+      // ── 装箱：先把这面墙每一段排成几个宽度 ──
+      const packedByStart = new Map<number, ReturnType<typeof packSegment>>();
       for (const seg of wallSegments) {
         if (seg.length < Math.min(...wallCandidates.map((x) => x.width))) continue;
-        const packed = packSegment(seg.length, wallCandidates, {
-          preferredSeams: baseSeams.map((abs) => abs - seg.start).filter((rel) => rel > 0 && rel < seg.length),
-        });
+        packedByStart.set(seg.start, packSegment(seg.length, wallCandidates, {
+          preferredSeams: baseSeams
+            .map((abs) => abs - seg.start)
+            .filter((rel) => rel > 0 && rel < seg.length),
+        }));
+      }
+      const widths = [...new Set([...packedByStart.values()].flatMap((p) => p.widths))];
+
+      // ── 叠装：先各解一遍，定下这面墙的缝高，再按缝重解 ──
+      //
+      // 逐柜各解各的话，48" 的这个柜可能解成 30+18、旁边那个解成 36+12——
+      // 两条横缝差 6"，正视图上是一条锯齿线（CATALOG_MODEL §3.2 最后一条）。
+      const firstPass = widths.map((w) => solveFor(w))
+        .filter((x): x is NonNullable<typeof x> => x !== undefined);
+      const runSeams = seamsForRun(firstPass);
+      const stackOf = new Map(widths.map((w) => {
+        // 按统一缝高解不出来就退回自己那一版——**宁可这一列不叠装，
+        // 也不要为了对齐而排一个这家根本没有的型号**
+        const solution = (runSeams.length > 0 ? solveFor(w, runSeams) : undefined)
+          ?? solveFor(w);
+        return [w, solution] as const;
+      }));
+
+      // 解不出贴合的组合要如实说，不能静默把 48" 变成 42"（§3.3）
+      for (const note of new Set(
+        [...stackOf.values()].map((x) => x?.note).filter(Boolean) as string[],
+      )) {
+        warnings.push({ code: "NO_WALL_CABINETS", wallRunId: run.id, message: note });
+      }
+
+      for (const seg of wallSegments) {
+        const packed = packedByStart.get(seg.start);
+        if (!packed) continue;
         let cursor = seg.start;
         for (const w of packed.widths) {
-          const mod = pickModule(modules, ["wall"], w);
-          if (!mod) continue;
-          const h = mod.heightOptions.includes(wallHeight) ? wallHeight : mod.heightOptions[0]!;
-          placements.push({
-            kind: "cabinet", layer: "wall", wallRunId: run.id,
-            x: cursor, width: w, height: h, depth: mod.depthOptions[0] ?? 12,
-            moduleId: mod.id, moduleCode: mod.code, faceTemplateId: mod.faceTemplateId,
-          });
+          // 一个位置可能是叠起来的两段，各自是一个真实型号、各自有一扇门
+          const heights = stackOf.get(w)?.heights ?? [wallHeight];
+          let base = 0;
+          for (const h of heights) {
+            const mod = pickModule(modules, ["wall"], w, { height: h });
+            if (!mod) break;
+            placements.push({
+              kind: "cabinet", layer: "wall", wallRunId: run.id,
+              x: cursor, width: w, height: h, depth: mod.depthOptions[0] ?? 12,
+              moduleId: mod.id, moduleCode: mod.code, faceTemplateId: mod.faceTemplateId,
+              ...(base > 0 ? { stackBase: base } : {}),
+            });
+            base = quantize(base + h + STACK_SEAM_LOSS);
+          }
           cursor = quantize(cursor + w);
         }
         if (packed.leftover > 0) {
+          const tallest = Math.max(
+            ...packed.widths.map((w) => stackOf.get(w)?.filled ?? wallHeight ?? 30));
           placements.push({
             kind: "filler", layer: "wall", wallRunId: run.id,
-            x: cursor, width: packed.leftover, height: wallHeight, depth: 12, label: "填缝条",
+            x: cursor, width: packed.leftover,
+            height: tallest, depth: 12, label: "填缝条",
           });
         }
       }

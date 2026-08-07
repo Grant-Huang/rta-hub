@@ -80,8 +80,9 @@ test("会话列表只回本账号的，且带得出标题——左栏靠它显�
 test("公司目录只列出 active 公司，且不暴露订阅状态", async () => {
   const r = await req("/api/companies");
   const body = await r.json() as { companies: { id: string; name: string }[] };
-  // 两家 active 试点公司；Northern Wood 已发布规格但未订阅，不应出现
-  assert.deepEqual(body.companies.map((c) => c.id).sort(), ["co_lakeside", "co_pilot"]);
+  // 三家 active 试点公司；Northern Wood 已发布规格但未订阅，不应出现
+  assert.deepEqual(body.companies.map((c) => c.id).sort(),
+    ["co_birchline", "co_lakeside", "co_pilot"]);
   assert.ok(!body.companies.some((c) => c.id === "co_northern"));
   const raw = JSON.stringify(body);
   for (const leak of ["personalizationSubscription", "billingPlan", "quoteEmail"]) {

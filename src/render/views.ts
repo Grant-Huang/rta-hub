@@ -127,7 +127,9 @@ export function renderFrontElevation(
 ): string {
   const mine = placements.filter((p) => p.wallRunId === run.id);
   const wallTop = Math.max(
-    ...mine.filter((p) => p.layer === "wall").map((p) => HEIGHTS.wallBaseline + p.height),
+    // 叠装的上段要按它的底边算总高，否则画布顶边会裁掉最上面那一段
+    ...mine.filter((p) => p.layer === "wall")
+      .map((p) => HEIGHTS.wallBaseline + (p.stackBase ?? 0) + p.height),
     HEIGHTS.counterTop,
   );
   const viewHeight = wallTop + 6;
@@ -148,10 +150,26 @@ export function renderFrontElevation(
       const top = p.kind === "cabinet" || p.kind === "filler" ? HEIGHTS.baseBox : HEIGHTS.baseBox;
       drawBox(ctx, p, p.x, yOf(top), p.width, p.height - (p.kind === "cabinet" ? HEIGHTS.toeKick : 0), faceTemplateOf, style, HEIGHTS.toeKick);
     } else if (p.layer === "wall") {
-      drawBox(ctx, p, p.x, yOf(HEIGHTS.wallBaseline + p.height), p.width, p.height, faceTemplateOf, style, 0);
+      // `stackBase` 是这一段的底边（从吊柜基准线往上量）。叠装的上段落在
+      // 下段顶上，两段各自是一个真实型号、各自有一扇门
+      const top = HEIGHTS.wallBaseline + (p.stackBase ?? 0) + p.height;
+      drawBox(ctx, p, p.x, yOf(top), p.width, p.height, faceTemplateOf, style, 0);
     } else {
       drawBox(ctx, p, p.x, yOf(p.height), p.width, p.height, faceTemplateOf, style, HEIGHTS.toeKick);
     }
+  }
+
+  // ── 叠装的横向接缝 ──
+  //
+  // 客户看到的成品上那是一条**实实在在的线**，图上没有就是图画错了
+  // （RENDERING.md §8.5）。同一面墙的横缝高度一致是软约束（CATALOG_MODEL §3.2），
+  // 不一致时这里会画出一条锯齿线——**那正是要让它在图上可验证**。
+  for (const p of mine) {
+    if (p.layer !== "wall" || !p.stackBase) continue;
+    const seam = HEIGHTS.wallBaseline + p.stackBase;
+    ctx.parts.push(kLine(
+      p.x * ctx.s, yOf(seam), (p.x + p.width) * ctx.s, yOf(seam),
+      INK.ground, STROKE.ground));
   }
 
   // 台面
