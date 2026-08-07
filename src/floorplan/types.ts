@@ -36,7 +36,17 @@ export interface WallFeature {
   note?: string;
 }
 
-/** 一段直墙。厨房通常是 1-3 段（一字/L 型/U 型）。 */
+/**
+ * 一列柜子占的一段直线。默认是一段直墙，厨房通常是 1-3 段（一字/L 型/U 型）。
+ *
+ * **岛台也是这个类型**（`kind: "island"`）。岛台在几何上就是"一段直的柜列"，
+ * 只是不靠墙：装箱、物料、报价、审核对它的处理与靠墙的那几段一模一样。
+ * 另开一个平行的 `islands` 数组的话，上面这一串每一处都要多写一遍循环，
+ * 而"忘了给岛台也跑一遍"是不会报错的——它只会在报价单上少一段柜子。
+ *
+ * 真正需要分开处理的只有三处，都显式判 `isIsland`：不生成吊柜层、
+ * 四面都是外露面（收口板）、落位靠围合区而不是墙线。
+ */
 export interface WallRun {
   id: string;
   label: string;
@@ -46,6 +56,19 @@ export interface WallRun {
   startsAtCorner: boolean;
   endsAtCorner: boolean;
   features: WallFeature[];
+  /** 靠墙的一段，还是岛台。缺省是靠墙。 */
+  kind?: "wall" | "island";
+  /**
+   * 进深（英寸）。**只有岛台需要**——靠墙的段按层取标准进深（地柜 24"、吊柜 12"）。
+   *
+   * 单排柜的岛台约 25"（柜体 24" + 背板收口），背靠背两排约 48"。
+   */
+  depth?: number;
+}
+
+/** 这一段是不是岛台。判断只有这一处，别在调用方各自比字符串。 */
+export function isIsland(run: WallRun): boolean {
+  return run.kind === "island";
 }
 
 export interface ParsedGeometry {

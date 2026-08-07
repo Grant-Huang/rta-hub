@@ -35,6 +35,7 @@ import { buildFace, BASE_FACE_HEIGHT, matchFaceTemplate, type FaceTemplateId } f
 import {
   companyAgentReply, mergeRequirements, missingFields, orchestratorReply,
 } from "./agents/orchestrator.js";
+import { quickRepliesFor } from "./agents/quick-replies.js";
 import {
   buildEstimateDraft, buildIllustratedEstimate, estimateCountsFromText, renderEstimateText,
 } from "./estimate/generic.js";
@@ -577,16 +578,61 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     ).maxQuestionsPerTurn,
   });
 
+  // 缺失字段配一组**可点的快捷回答**（`agents/quick-replies.ts`）。
+  //
+  // 「您偏好的厨房风格是什么？」后面跟一串括号里的例子，客户读完还是不知道
+  // 答案该有多长——写一段？回两个字？于是他要么写一大段（关键词表匹配不上，
+  // 下一轮又被问一遍），要么干脆不答。给按钮，或者至少告诉他"回一个词就行"。
+  const missing = missingFields(updated.designRequirements);
+  const quickReplies = mentions.length === 0
+    ? quickRepliesFor(missing, interactionProfile(
+        effectiveAccountType(account, verificationFor(account.id)),
+      ).maxQuestionsPerTurn)
+    : [];
+
   return c.json({
     replies,
     reply: replies[0] ?? null,
     routedTo: routed,
     notices,
     requirements: updated.designRequirements,
-    missingFields: missingFields(updated.designRequirements),
+    missingFields: missing,
+    quickReplies,
     questions,
     questionCompanyId,
   });
+});
+
+/**
+ * 本账号的历史会话列表 —— 左栏用。
+ *
+ * 只回**列表要用的那几个字段**，不回完整会话：一个账号可能有几十段对话，
+ * 每段几十条消息，全量回一次左栏就要拉几百 KB，而它只显示一行标题。
+ *
+ * 标题取客户说的第一句话——「我们家厨房要整个翻新」比「会话 cv_3f2a」
+ * 有用得多，而且不用额外让客户起名字。
+ */
+app.get("/api/conversations", requireAccount, (c) => {
+  const accountId = c.get("account").id;
+  const quotes = appCtx.repos.quotes.all();
+  const list = appCtx.repos.conversations.all()
+    .filter((v) => v.customerAccountId === accountId)
+    .map((v) => {
+      const firstUser = v.messages.find((m) => m.role === "user");
+      const last = v.messages[v.messages.length - 1];
+      const mine = quotes.filter((q) => q.conversationId === v.id);
+      return {
+        id: v.id,
+        title: (firstUser?.content ?? "").slice(0, 40) || "新会话",
+        messageCount: v.messages.length,
+        quoteCount: mine.length,
+        companies: v.perCompanyThreads.map((t) => t.companyId),
+        updatedAt: last?.at ?? v.createdAt,
+        createdAt: v.createdAt,
+      };
+    })
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  return c.json({ conversations: list });
 });
 
 app.get("/api/conversations/:id", requireAccount, (c) => {
@@ -1022,7 +1068,15 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   if (!plan) return c.json({ error: "户型图不存在" }, 404);
   const body = await jsonBody<{
     itemId: string; wallRunId: string; length: number; ceilingHeight: number;
-    addRun: { label: string; length: number };
+    /**
+     * 加一段墙。**默认与上一段相接**——人报自己家厨房时报的是一圈连着的墙。
+     * 岛台传 `kind: "island"`（外加 `depth`），它不接任何墙。
+     */
+    addRun: {
+      label: string; length: number;
+      startsAtCorner?: boolean; endsAtCorner?: boolean;
+      kind?: "wall" | "island"; depth?: number;
+    };
     addFeature: { wallRunId: string; kind: WallFeature["kind"]; offset: number; width: number };
     /**
      * 这个厨房里的家电（FR-3.2）。

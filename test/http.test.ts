@@ -27,6 +27,7 @@ before(async () => {
 });
 
 const CONSUMER = "ca_demo_consumer";
+const TRADE_ACCOUNT = "ca_demo_trade";
 const base = "http://localhost";
 
 function req(pathname: string, init: RequestInit & { accountId?: string } = {}) {
@@ -51,11 +52,37 @@ test("伪造的账号 id 同样被拒", async () => {
   assert.equal(r.status, 401);
 });
 
+test("会话列表只回本账号的，且带得出标题——左栏靠它显示历史", async () => {
+  const created = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await created.json() as { conversation: { id: string } };
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ text: "我们家厨房要整个翻新" }),
+  });
+
+  const mine = await req("/api/conversations", { accountId: CONSUMER });
+  assert.equal(mine.status, 200);
+  const body = await mine.json() as {
+    conversations: { id: string; title: string; messageCount: number }[];
+  };
+  const row = body.conversations.find((v) => v.id === conversation.id);
+  assert.ok(row, "自己刚建的会话没出现在列表里");
+  // 标题取客户说的第一句话——「会话 cv_3f2a」对客户没有任何意义
+  assert.equal(row.title, "我们家厨房要整个翻新");
+  assert.ok(row.messageCount >= 2);
+
+  // 别人的会话不该出现在我的列表里
+  const other = await req("/api/conversations", { accountId: TRADE_ACCOUNT });
+  const otherBody = await other.json() as { conversations: { id: string }[] };
+  assert.equal(otherBody.conversations.some((v) => v.id === conversation.id), false,
+    "会话列表跨账号泄露");
+});
+
 test("公司目录只列出 active 公司，且不暴露订阅状态", async () => {
   const r = await req("/api/companies");
   const body = await r.json() as { companies: { id: string; name: string }[] };
-  // 两家 active 试点公司；Northern Wood 已发布规格但未订阅，不应出现
-  assert.deepEqual(body.companies.map((c) => c.id).sort(), ["co_lakeside", "co_pilot"]);
+  // 三家 active 试点公司；Northern Wood 已发布规格但未订阅，不应出现
+  assert.deepEqual(body.companies.map((c) => c.id).sort(),
+    ["co_birchline", "co_lakeside", "co_pilot"]);
   assert.ok(!body.companies.some((c) => c.id === "co_northern"));
   const raw = JSON.stringify(body);
   for (const leak of ["personalizationSubscription", "billingPlan", "quoteEmail"]) {

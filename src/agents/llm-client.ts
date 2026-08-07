@@ -12,6 +12,14 @@ import type { CompletionClient } from "./types.js";
 import {
   modelFor, resolveModelTiers, type CallSite, type ModelTierConfig,
 } from "./model-tiers.js";
+import { recordUsage } from "./token-meter.js";
+
+/** `LanguageModel` 可能是模型实例，也可能就是一个 id 字符串——两种都要认。 */
+function modelIdOf(model: unknown): string {
+  if (typeof model === "string") return model;
+  const id = (model as { modelId?: unknown } | null)?.modelId;
+  return typeof id === "string" ? id : "unknown";
+}
 
 export function createLlmClient(
   tiers: ModelTierConfig = resolveModelTiers(),
@@ -44,12 +52,19 @@ export function createLlmClient(
 
   return {
     async complete({ system, messages, temperature, callSite }) {
-      const { text } = await generateText({
-        model: modelOf(callSite),
+      const model = modelOf(callSite);
+      const result = await generateText({
+        model,
         ...fold(system, messages),
         temperature: temperature ?? 0.3,
       });
-      return text;
+      recordUsage({
+        ...(callSite ? { callSite } : {}),
+        model: modelIdOf(model),
+        inputTokens: result.usage?.inputTokens ?? 0,
+        outputTokens: result.usage?.outputTokens ?? 0,
+      });
+      return result.text;
     },
 
     async completeJson<T>({ system, messages, schemaHint, temperature, callSite }: {
@@ -67,13 +82,20 @@ export function createLlmClient(
         notes: z.string().optional(),
       });
       try {
-        const { output } = await generateText({
-          model: modelOf(callSite),
+        const model = modelOf(callSite);
+        const result = await generateText({
+          model,
           ...fold(`${system}\n\n请严格按以下 JSON 结构输出：\n${schemaHint}`, messages),
           output: Output.object({ schema: Loose }),
           temperature: temperature ?? 0.2,
         });
-        return output as T | undefined;
+        recordUsage({
+          ...(callSite ? { callSite } : {}),
+          model: modelIdOf(model),
+          inputTokens: result.usage?.inputTokens ?? 0,
+          outputTokens: result.usage?.outputTokens ?? 0,
+        });
+        return result.output as T | undefined;
       } catch {
         return undefined;
       }

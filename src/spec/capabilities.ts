@@ -206,8 +206,15 @@ function inferStacking(
   spec: ModuleSpec,
   roles: ReadonlySet<ModuleRole>,
 ): { asLower: boolean; asUpper: boolean } | undefined {
-  if (spec.type !== "wall") return undefined;
   if (roles.has("trim")) return undefined;
+  // 明显矮于通高的 tall 型号是**分体 pantry 的一段**（CATALOG_MODEL §1.2）：
+  // 第三家的 `BL-PC1842` 是两段 42" 叠成 84"，不是一个通高箱体。
+  // 只认 `type === "wall"` 的话，分体做法的商家一接进来，
+  // 它的 pantry 就既不是连体、又不能叠装——两头不靠。
+  if (spec.type === "tall") {
+    return isMonolithic(spec) ? undefined : { asLower: true, asUpper: true };
+  }
+  if (spec.type !== "wall") return undefined;
   // 吊柜默认可上可下：厂家给的吊柜通常上下同构（都是一个箱体加门）。
   // 这是个乐观默认，所以叠装方案要在解释里说明并可被商家覆盖。
   return { asLower: true, asUpper: true };

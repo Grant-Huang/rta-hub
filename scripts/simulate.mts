@@ -23,6 +23,10 @@ process.env.SMTP_HOST = "";
 process.env.ADMIN_TOKEN = "sim";
 process.env.SITE_PASSWORD_DISABLED = "true";
 
+import {
+  formatTokenSummary, resetTokenMeter, tokenSnapshot, type TokenSnapshot,
+} from "../src/agents/token-meter.js";
+
 const OUT = process.argv[2] ?? "sim-out";
 const COUNT = Number(process.argv[3] ?? 4);
 const ACCOUNTS = { consumer: "ca_demo_consumer", trade: "ca_demo_trade" } as const;
@@ -102,10 +106,16 @@ async function main(): Promise<void> {
   });
   console.log(`\n场景来源：${scenarioSet.source}　${scenarioSet.note}\n`);
 
+  /** 每个场景的模型用量。上线定线索费要靠它——见 agents/token-meter.ts。 */
+  const tokenByScenario: { id: string; name: string; snapshot: TokenSnapshot }[] = [];
+
   for (const k of scenarioSet.scenarios) {
     const acct = ACCOUNTS[k.accountType];
     console.log(`\n${"═".repeat(72)}\n${k.id}. ${k.name}（${k.shape}）` +
       `\n   覆盖：${k.covers}\n${"═".repeat(72)}`);
+    // 每个场景单独计量。**从这里清零**——场景之间的用量不能累加到一起，
+    // 「一个客户烧多少」才是要回答的问题
+    resetTokenMeter();
 
     // 1. 建会话 + 多轮对话
     const { conversation } = await call("/api/conversations", { method: "POST", acct });
@@ -135,7 +145,16 @@ async function main(): Promise<void> {
 
     for (const w of k.walls) {
       await call(`/api/floorplans/${floorPlanId}/resolve`, {
-        method: "POST", acct, body: JSON.stringify({ addRun: { label: w.label, length: w.length } }),
+        method: "POST", acct,
+        // 岛台要带上 kind/depth——不带的话它会被当成一段普通的墙接到上一段后面，
+        // 全局俯视图上就变成"厨房多了一面墙"，而不是中间摆了个岛台
+        body: JSON.stringify({
+          addRun: {
+            label: w.label, length: w.length,
+            ...(w.kind ? { kind: w.kind } : {}),
+            ...(w.depth !== undefined ? { depth: w.depth } : {}),
+          },
+        }),
       });
     }
     await call(`/api/floorplans/${floorPlanId}/resolve`, {
@@ -430,11 +449,18 @@ async function main(): Promise<void> {
       }
     }
 
+    const usage = tokenSnapshot();
+    tokenByScenario.push({ id: k.id, name: k.name, snapshot: usage });
+    console.log(`  ${formatTokenSummary(usage)}`);
+
     results.push({
       kitchen: k, conversation, timeline, questions: lastQuestions,
       planRounds, layout, quote, designPrompt: askDesign.prompt,
+      usage: usage as unknown as Json,
     });
   }
+
+  reportTokens(tokenByScenario);
 
   // ── 产出 ──
   const html = renderHtml(results, scenarioSet);
@@ -461,6 +487,61 @@ async function main(): Promise<void> {
     return;
   }
   console.log(`✔ 冒烟检查通过：${results.length} 个场景全程走通，报价清单与物料清单自洽。`);
+}
+
+/**
+ * Token 消耗汇总。
+ *
+ * 按**调用点**分列而不是只报总量：总量告诉你"贵了"，分调用点才告诉你"贵在哪"。
+ * 如果绝大部分 token 花在总控助手的日常闲聊上，该做的是把那一层压到更便宜的
+ * 模型（`model-tiers.ts` 已经这么分层），而不是笼统地"优化 prompt"。
+ */
+function reportTokens(rows: { id: string; name: string; snapshot: TokenSnapshot }[]): void {
+  if (rows.length === 0) return;
+  const estimated = rows.every((r) => r.snapshot.allEstimated || r.snapshot.calls === 0);
+
+  console.log(`\n${"─".repeat(72)}\nToken 消耗${estimated ? "（估算：未配置模型，走确定性问答）" : ""}`);
+  console.log("─".repeat(72));
+  console.log("场景                                     调用   输入      输出      合计");
+  let calls = 0; let input = 0; let output = 0;
+  for (const r of rows) {
+    const s = r.snapshot;
+    calls += s.calls; input += s.inputTokens; output += s.outputTokens;
+    const label = `${r.id}. ${r.name}`.slice(0, 38).padEnd(38);
+    console.log(`${label} ${String(s.calls).padStart(4)} ${String(s.inputTokens).padStart(8)} ` +
+      `${String(s.outputTokens).padStart(9)} ${String(s.totalTokens).padStart(9)}`);
+  }
+  console.log("─".repeat(72));
+  console.log(`${"合计".padEnd(38)} ${String(calls).padStart(4)} ${String(input).padStart(8)} ` +
+    `${String(output).padStart(9)} ${String(input + output).padStart(9)}`);
+  console.log(`${"每场景均值".padEnd(38)} ${String(Math.round(calls / rows.length)).padStart(4)} ` +
+    `${String(Math.round(input / rows.length)).padStart(8)} ` +
+    `${String(Math.round(output / rows.length)).padStart(9)} ` +
+    `${String(Math.round((input + output) / rows.length)).padStart(9)}`);
+
+  // 按调用点：成本花在哪
+  const bySite = new Map<string, { calls: number; tokens: number }>();
+  for (const r of rows) {
+    for (const [site, v] of Object.entries(r.snapshot.byCallSite)) {
+      const cur = bySite.get(site) ?? { calls: 0, tokens: 0 };
+      cur.calls += v.calls;
+      cur.tokens += v.inputTokens + v.outputTokens;
+      bySite.set(site, cur);
+    }
+  }
+  if (bySite.size > 0) {
+    console.log("\n按调用点：");
+    const total = input + output || 1;
+    for (const [site, v] of [...bySite].sort((a, b) => b[1].tokens - a[1].tokens)) {
+      console.log(`  ${site.padEnd(22)} ${String(v.calls).padStart(4)} 次　` +
+        `${String(v.tokens).padStart(8)} token　${(v.tokens / total * 100).toFixed(1)}%`);
+    }
+  }
+  if (estimated) {
+    console.log("\n⚠ 以上是**估算值**：本次运行没有配置模型，走的是确定性问答路径。");
+    console.log("  估算按 prompt 字符数换算（约 2.5 字符/token，中英混排的折中值），");
+    console.log("  只用于判断量级。配置 OPENAI_API_KEY 后这里会换成 API 返回的真实用量。");
+  }
 }
 
 function fmtMoney(cents: number): string {

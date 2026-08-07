@@ -25,6 +25,7 @@
 import type { ParsedGeometry, WallFeature, WallRun } from "../floorplan/types.js";
 import { quantize } from "../floorplan/types.js";
 import { APPLIANCE_LABEL, reservedWidth, type ApplianceKind, type ApplianceSpec } from "../floorplan/appliances.js";
+import { buildKitchenPlan, usableSpan } from "./plan-model.js";
 
 /**
  * 给水槽**连同它两侧台面**预留的宽度。
@@ -173,6 +174,19 @@ export function planAppliances(
     }
   }
 
+  // **内墙角让出去的那一段也不能压。**
+  //
+  // 那块地方归相邻墙段的柜子（`plan-model.ts` 的 `usableSpan`）。不占掉的话，
+  // 燃气口离墙角近时灶具位会落在让位区里，然后与隔壁那面墙的柜子撞在一起——
+  // 而且是在交付前审核那一步才被拦下，客户看到的是"方案生成失败"，
+  // 没有任何一版能用。让位是几何事实，找位置的时候就要知道。
+  const plan = buildKitchenPlan(geometry);
+  for (const rp of plan.runs) {
+    const span = usableSpan(rp, "base");
+    if (span.start > 0) occupy(rp.run.id, 0, span.start);
+    if (span.end < rp.run.length) occupy(rp.run.id, span.end, rp.run.length - span.end);
+  }
+
   // **上下水那一段要给水槽柜留着。**
   //
   // 不留的话，冰箱会大大方方压在上下水上——然后排布器发现"这段墙没有需要放
@@ -219,7 +233,10 @@ export function planAppliances(
       // 与灶台同中心；夹在墙内
       const run = runs.find((r) => r.id === cooktop.wallRunId)!;
       const center = cooktop.x + cooktop.width / 2;
-      const x = quantize(Math.max(0, Math.min(center - width / 2, run.length - width)));
+      // 夹进**让过墙角之后**的区间：烟机比灶台宽，贴着墙角的灶台会把烟机推进让位区
+      const rp = plan.runs.find((r) => r.run.id === cooktop.wallRunId);
+      const span = rp ? usableSpan(rp, "wall") : { start: 0, end: run.length };
+      const x = quantize(Math.max(span.start, Math.min(center - width / 2, span.end - width)));
       placed.push({
         spec: hood, wallRunId: cooktop.wallRunId, x, width,
         layer: "wall",

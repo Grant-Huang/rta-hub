@@ -18,13 +18,17 @@
  */
 import type { ModuleSpec, ModuleType } from "../domain/types.js";
 import type { ParsedGeometry, WallFeature, WallRun } from "../floorplan/types.js";
-import { quantize } from "../floorplan/types.js";
+import { isIsland, quantize } from "../floorplan/types.js";
+import {
+  buildKitchenPlan, doorSpan, toPlane, usableSpan, type KitchenPlan,
+} from "./plan-model.js";
 import { allocateFillers, packSegment, type PackCandidate } from "./pack.js";
 import {
   checkErgonomics, checkWorkTriangle, hasBlockingViolation,
-  type ErgonomicViolation, type TrianglePoint, CLEARANCE,
+  checkAisles, type ErgonomicViolation, type TrianglePoint, CLEARANCE,
 } from "./ergonomics.js";
 import { compareCandidates, scoreAesthetics, type AestheticScore } from "./aesthetics.js";
+import { solveStack, stackCandidates, STACK_SEAM_LOSS } from "./stacking.js";
 import { capabilitiesFor, hasRole } from "../spec/capabilities.js";
 import { planAppliances, type AppliancePlan, type PlacedAppliance } from "./appliance-plan.js";
 import {
@@ -101,6 +105,15 @@ export interface Placement {
    * 「冰箱位 33"」与「冰箱位 33"（推定）」对客户是两句话。
    */
   applianceSpec?: ApplianceSpec;
+  /**
+   * 叠装吊柜里这一段的**底边**，从吊柜基准线（54"）往上量。
+   *
+   * 单柜为 0 或不填。有第二段时它的 `stackBase` 就是第一段的高度——
+   * 正视图靠它把两段画在正确的高度上，并在中间画出那条**横向接缝**：
+   * 客户看到的成品上那是一条实实在在的线，图上没有就是图画错了
+   * （RENDERING.md §8.5）。
+   */
+  stackBase?: number;
   label?: string;
 }
 
@@ -143,6 +156,14 @@ export interface LayoutOptions {
    * 另一面墙的冰箱不见了。
    */
   appliancePlan?: AppliancePlan;
+  /**
+   * 预先拼好的平面（`buildKitchenPlan`）。
+   *
+   * 与 `appliancePlan` 同一个道理，而且更要命：`regenerateRun` 只把**一段墙**
+   * 交进来，那一段单独看是没有墙角的——不传的话，重排一段墙会让它的柜子
+   * 一直排到墙角，正好压在隔壁那段墙的柜子上。改一面墙，撞坏另一面墙。
+   */
+  plan?: KitchenPlan;
   /** 关闭人体工程硬约束（仅用于调试/对比，正常路径不应关）。 */
   skipErgonomics?: boolean;
   /**
@@ -167,9 +188,11 @@ export function pickWallCabinetHeight(ceilingHeight: number | undefined, availab
   const sorted = [...available].sort((a, b) => b - a);
   if (!ceilingHeight) return sorted.find((h) => h === 30) ?? sorted[sorted.length - 1];
   const budget = ceilingHeight - HEIGHTS.wallBaseline;
-  const CROWN_ALLOWANCE = 6;
   return sorted.find((h) => h <= budget - CROWN_ALLOWANCE) ?? sorted.find((h) => h <= budget) ?? sorted[sorted.length - 1];
 }
+
+/** 吊柜顶上给顶线留的高度。叠装求解与单柜选档共用同一个值。 */
+export const CROWN_ALLOWANCE = 6;
 
 interface Segment {
   start: number;
@@ -194,7 +217,7 @@ interface Segment {
   fillerAtEnd: boolean;
 }
 
-export type ReservedKind = ApplianceKind | "door" | "obstruction";
+export type ReservedKind = ApplianceKind | "door" | "obstruction" | "corner";
 
 export interface ReservedSpan {
   x: number;
@@ -213,8 +236,15 @@ export interface ReservedSpan {
  * **家电落位不在这里决定**——它是全局问题（跨墙段、跨层、互相牵制），
  * 由 `planAppliances` 先算好再传进来（见 appliance-plan.ts 的模块注释）。
  * 这个函数只负责"把已经定好的占位切成可用子段"。
+ *
+ * `usable` 是这一段**让过墙角之后**能放柜子的区间（`plan-model.ts` 的
+ * `usableSpan`）。不传就是整段可用——只有单段墙的户型才是这样。
  */
-export function splitIntoSegments(run: WallRun, placed: readonly PlacedAppliance[] = []): {
+export function splitIntoSegments(
+  run: WallRun,
+  placed: readonly PlacedAppliance[] = [],
+  usable: { start: number; end: number } = { start: 0, end: run.length },
+): {
   segments: Segment[];
   reserved: ReservedSpan[];
   warnings: LayoutWarning[];
@@ -222,10 +252,26 @@ export function splitIntoSegments(run: WallRun, placed: readonly PlacedAppliance
   const warnings: LayoutWarning[] = [];
   const reserved: ReservedSpan[] = [];
 
-  // 门洞与障碍：整段不可用
+  // 墙角让位：相邻那段墙的柜子占着这里，本段从 usable.start 才开始。
+  // 当成一个占位而不是"把段裁短"——图上要看得见这块地方是被让出去的。
+  if (usable.start > 0) {
+    reserved.push({ x: 0, width: usable.start, kind: "corner" });
+  }
+  if (usable.end < run.length) {
+    reserved.push({ x: usable.end, width: run.length - usable.end, kind: "corner" });
+  }
+
+  // 门洞与障碍：整段不可用。
+  //
+  // 门洞要按**台面外伸之后**的宽度让（`doorSpan`）：台面比柜体箱体宽出一圈，
+  // 柜子贴着门洞边站的话，台面会压在门套线上，门开到一半就顶住。
+  // 以前这里只让门洞本身的宽度，图上看着不挤，现场装不上。
   for (const f of run.features) {
-    if (f.kind === "door" || f.kind === "obstruction") {
-      reserved.push({ x: f.offset, width: Math.max(f.width, 1), kind: f.kind });
+    if (f.kind === "door") {
+      const span = doorSpan(f, "base");
+      reserved.push({ x: span.x, width: span.width, kind: "door" });
+    } else if (f.kind === "obstruction") {
+      reserved.push({ x: f.offset, width: Math.max(f.width, 1), kind: "obstruction" });
     }
   }
 
@@ -329,11 +375,16 @@ function pickModule(
   modules: readonly ModuleSpec[],
   types: ModuleType[],
   width: number,
-  preferDrawers = false,
+  preferDrawers: boolean | { height: number } = false,
 ): ModuleSpec | undefined {
+  // 叠装时高度是硬条件：上段要 12"、下段要 36"，随便挑一个"有这个宽度的吊柜"
+  // 会排出一个 36" 的柜子去当 12" 的上段，正视图上直接顶穿天花板。
+  const wantHeight = typeof preferDrawers === "object" ? preferDrawers.height : undefined;
   const matches = modules.filter(
-    (m) => types.includes(m.type) && m.widthOptions.includes(width) && !isDedicatedFitting(m));
+    (m) => types.includes(m.type) && m.widthOptions.includes(width) && !isDedicatedFitting(m)
+      && (wantHeight === undefined || m.heightOptions.includes(wantHeight)));
   if (matches.length === 0) return undefined;
+  if (typeof preferDrawers === "object") return matches[0];
   // 「是不是抽屉柜」问能力，不问型号码——见 spec/capabilities.ts
   const isDrawer = (m: ModuleSpec) => hasRole(m, "drawerStorage") && !hasRole(m, "doorStorage");
   if (preferDrawers) {
@@ -410,14 +461,46 @@ export function generateLayout(
   const wallHeights = [...new Set(modules.filter((m) => m.type === "wall").flatMap((m) => m.heightOptions))];
   const wallHeight = pickWallCabinetHeight(opts.ceilingHeight, wallHeights);
 
+  // ── 叠装吊柜的可用高度（CATALOG_MODEL §3）──
+  //
+  // 「现在的房子都比较高，如果上柜高度达到 51 寸，那么肯定需要拼。」
+  // 可用高度 = 层高 − 吊柜底边 54" − 顶线预留 6"。
+  // 具体解成几段**按宽度分别求**——高度档位是随宽度变的（见 stackCandidates），
+  // 但接缝高度要在整面墙上统一，所以流程是「先各解一遍 → 定缝 → 按缝重解」。
+  const stackAvailable = opts.ceilingHeight !== undefined
+    ? quantize(opts.ceilingHeight - HEIGHTS.wallBaseline - CROWN_ALLOWANCE)
+    : undefined;
+  const solveFor = (widths: readonly number[]) =>
+    stackAvailable === undefined || widths.length === 0 ? undefined
+      : solveStack(stackAvailable, stackCandidates(modules, widths));
+
+  // 平面先拼出来：墙角要让多少位是**相邻墙段之间的事**，一段一段单独排布看不见它。
+  // 这是「全局视图要把几个墙连起来」这条要求在排布器一侧的落点——不连起来，
+  // 两段墙的柜子就会在墙角占同一块地方，而每一段各自都"没超墙"。
+  const plan = opts.plan ?? buildKitchenPlan(geometry);
+  const byRunId = new Map(plan.runs.map((rp) => [rp.run.id, rp]));
+  // 哪一段的哪一头要放转角柜。一段墙可能两头都拥有墙角（L 型中间没有，
+  // 但 U 型的长墙一头是墙角、另一头可能又接一段）
+  const cornerEnds = new Map<string, ("start" | "end")[]>();
+  for (const c of plan.corners) {
+    const ends = cornerEnds.get(c.ownerRunId) ?? [];
+    ends.push(c.ownerEnd);
+    cornerEnds.set(c.ownerRunId, ends);
+  }
+  const cornerCandidates = cornerModulesFor(modules, "base");
+
   for (const run of geometry.wallRuns) {
     if (run.length <= 0) continue;
+    const rp = byRunId.get(run.id);
     const forThisRun = appliancePlan.byRun.get(run.id) ?? [];
-    const { segments, reserved, warnings: segWarnings } = splitIntoSegments(run, forThisRun);
+    const usable = rp ? usableSpan(rp, "base") : { start: 0, end: run.length };
+    const { segments, reserved, warnings: segWarnings } =
+      splitIntoSegments(run, forThisRun, usable);
     warnings.push(...segWarnings);
 
     for (const r of reserved) {
-      if (r.kind === "door" || r.kind === "obstruction") continue;
+      // 墙角让位不画成"家电位"——它是隔壁那段墙的柜子，不是这段墙上的构件
+      if (r.kind === "door" || r.kind === "obstruction" || r.kind === "corner") continue;
       // 嵌入式灶台**下面有柜子**——它是掉进台面的一个洞，不是一段没有柜子的空当。
       // 那个柜子由 planApplianceCabinets 排（它有特殊要求：上层抽屉要避让灶体），
       // 这里跳过，免得同一段墙上既有"灶台位"又有"灶下柜"，两者叠在一起。
@@ -448,6 +531,17 @@ export function generateLayout(
     const highUseAnchors: { start: number; end: number }[] = reserved
       .filter((r) => r.kind === "range")
       .map((r) => ({ start: r.x, end: r.x + r.width }));
+
+    // ── 转角柜 ──
+    //
+    // 拥有墙角的那一段，末尾那块 24"×24" 是从两个方向都够不着的死角。
+    // 目录里本来就有转角柜（BBC/LSB/CW），但通用装箱按 `type` 取候选，
+    // `corner` 不在 `["base"]` 里——于是这些型号进了规格库却**一次也没被排进去过**，
+    // 墙角要么空着要么被两面墙的柜子重复占用。这里把它排上。
+    for (const end of cornerEnds.get(run.id) ?? []) {
+      const pick = reserveCornerCabinet(run, segments, cornerCandidates, end);
+      if (pick) placeReservedCabinet(pick, run, "base", placements, [undefined]);
+    }
 
     // ── 地柜层 ──
     for (const seg of segments) {
@@ -482,7 +576,10 @@ export function generateLayout(
             ? [seg.start + CLEARANCE.sinkLandingSecondary, seg.start + room - CLEARANCE.sinkLandingSecondary]
             // 这面墙本来就摆不下合格的水槽区——不假装能解决，交给检查器如实报出来
             : [seg.start, seg.start + room];
-          const sinkX = quantize(Math.max(lo, Math.min(desiredCenter - sink.w / 2, hi)));
+          const sinkX = snapToFillable(
+            quantize(Math.max(lo, Math.min(desiredCenter - sink.w / 2, hi))),
+            { lo, hi, seg, width: sink.w, candidates: baseCandidates },
+          );
 
           placements.push({
             kind: "cabinet", layer: "base", wallRunId: run.id,
@@ -565,19 +662,34 @@ export function generateLayout(
     // 只按冰箱宽度留空的话，上柜会与旁边的普通吊柜叠在一起。
     // 它要占多宽，就得先算出来再让开。
     const serving = planApplianceCabinets(run, forThisRun, modules, {
-      includeWall: opts.includeWall !== false,
+      includeWall: opts.includeWall !== false, usable,
     });
     warnings.push(...serving.warnings);
     placements.push(...serving.placements);
 
     // ── 吊柜层 ──
-    if (opts.includeWall !== false && wallHeight !== undefined && wallCandidates.length > 0) {
+    //
+    // 岛台没有吊柜层——它头顶上没有墙。以前几何里没有岛台这个概念，
+    // 所以这句判断也不存在；加进来的话，岛台上方会凭空长出一排吊柜。
+    if (
+      !isIsland(run) && opts.includeWall !== false
+      && wallHeight !== undefined && wallCandidates.length > 0
+    ) {
+      const wallUsable = rp ? usableSpan(rp, "wall") : { start: 0, end: run.length };
       // 窗户位置不放吊柜；**吊柜层的家电（抽油烟机）也占位**——
       // 不排除的话会在烟机正上方排一个普通吊柜，两者物理上打架
       const blockers = [
+        // 墙角让位：吊柜比地柜浅，让 12"+3" 就够，不必按地柜的 27" 让
+        ...(wallUsable.start > 0 ? [{ x: 0, width: wallUsable.start }] : []),
+        ...(wallUsable.end < run.length
+          ? [{ x: wallUsable.end, width: run.length - wallUsable.end }] : []),
         ...run.features
-          .filter((f) => f.kind === "window" || f.kind === "door" || f.kind === "obstruction")
+          .filter((f) => f.kind === "window" || f.kind === "obstruction")
           .map((f) => ({ x: f.offset, width: Math.max(f.width, 1) })),
+        // 门洞按门套线让开——吊柜没有台面，但柜体侧板同样不能压在门套上
+        ...run.features
+          .filter((f) => f.kind === "door")
+          .map((f) => doorSpan(f, "wall")),
         ...forThisRun
           .filter((p) => p.layer === "wall")
           .map((p) => ({ x: p.x, width: p.width })),
@@ -597,33 +709,85 @@ export function generateLayout(
       }
       if (c < run.length) wallSegments.push({ start: c, length: quantize(run.length - c) });
 
+
       // 地柜的柜缝位置——吊柜尽量对齐，正视图上上下分隔线成一条线才整齐
       const baseSeams = placements
         .filter((p) => p.wallRunId === run.id && p.layer === "base" && p.kind !== "appliance")
         .sort((a, b) => a.x - b.x)
         .map((p) => p.x + p.width);
 
+      // ── 转角柜先占位 ──
+      //
+      // 顺序很要紧：**先把转角那一块从可用段里划掉，再装箱**。反过来的话，
+      // 通用装箱会把整段填满，转角柜再放上去就压在别人身上。
+      // 但它排成几段（叠装）要等整面墙的高度解出来，所以这里只占位、不落位。
+      const cornerPicks = (cornerEnds.get(run.id) ?? []).flatMap((end) => {
+        const pick = reserveCornerCabinet(
+          run, wallSegments, cornerModulesFor(modules, "wall"), end);
+        return pick ? [pick] : [];
+      });
+
+      // ── 装箱：把这面墙每一段排成几个宽度 ──
+      const packedByStart = new Map<number, ReturnType<typeof packSegment>>();
       for (const seg of wallSegments) {
         if (seg.length < Math.min(...wallCandidates.map((x) => x.width))) continue;
-        const packed = packSegment(seg.length, wallCandidates, {
-          preferredSeams: baseSeams.map((abs) => abs - seg.start).filter((rel) => rel > 0 && rel < seg.length),
-        });
+        packedByStart.set(seg.start, packSegment(seg.length, wallCandidates, {
+          preferredSeams: baseSeams
+            .map((abs) => abs - seg.start)
+            .filter((rel) => rel > 0 && rel < seg.length),
+        }));
+      }
+      const widths = [...new Set([
+        ...[...packedByStart.values()].flatMap((p) => p.widths),
+        // 转角吊柜的宽度也要算进来。它和别的上柜同处一面墙，**柜顶必须齐**——
+        // 不算进来的话，通用列拼到 60"、转角那一列停在 42"，正视图上缺一块，
+        // 而这比接缝不对齐更显眼。
+        ...cornerPicks.map((c) => c.width),
+      ])];
+
+      // ── 叠装：**整面墙解一次**，用这面墙上所有宽度都支持的高度档位 ──
+      //
+      // 逐柜各解各的话，48" 的这个柜解成 30+18、旁边那个解成 36+12，两条横缝
+      // 差 6"，正视图上是一条锯齿线；更糟的情况是某几列拼到 60"、另几列只到
+      // 42"，柜顶高低不齐（CATALOG_MODEL §3.2 最后一条）。所以档位取**交集**，
+      // 一面墙一套解。
+      const runStack = solveFor(widths);
+      if (runStack?.note) {
+        // 顶上留了空当、或者解不出贴合的组合，都要如实说（§3.3）
+        warnings.push({ code: "NO_WALL_CABINETS", wallRunId: run.id, message: runStack.note });
+      }
+
+      // 转角柜落位：与通用列**用同一套叠装高度**
+      for (const pick of cornerPicks) {
+        placeReservedCabinet(pick, run, "wall", placements, runStack?.heights ?? [wallHeight]);
+      }
+
+      for (const seg of wallSegments) {
+        const packed = packedByStart.get(seg.start);
+        if (!packed) continue;
         let cursor = seg.start;
         for (const w of packed.widths) {
-          const mod = pickModule(modules, ["wall"], w);
-          if (!mod) continue;
-          const h = mod.heightOptions.includes(wallHeight) ? wallHeight : mod.heightOptions[0]!;
-          placements.push({
-            kind: "cabinet", layer: "wall", wallRunId: run.id,
-            x: cursor, width: w, height: h, depth: mod.depthOptions[0] ?? 12,
-            moduleId: mod.id, moduleCode: mod.code, faceTemplateId: mod.faceTemplateId,
-          });
+          // 一个位置可能是叠起来的两段，各自是一个真实型号、各自有一扇门
+          const heights = runStack?.heights ?? [wallHeight];
+          let base = 0;
+          for (const h of heights) {
+            const mod = pickModule(modules, ["wall"], w, { height: h });
+            if (!mod) break;
+            placements.push({
+              kind: "cabinet", layer: "wall", wallRunId: run.id,
+              x: cursor, width: w, height: h, depth: mod.depthOptions[0] ?? 12,
+              moduleId: mod.id, moduleCode: mod.code, faceTemplateId: mod.faceTemplateId,
+              ...(base > 0 ? { stackBase: base } : {}),
+            });
+            base = quantize(base + h + STACK_SEAM_LOSS);
+          }
           cursor = quantize(cursor + w);
         }
         if (packed.leftover > 0) {
           placements.push({
             kind: "filler", layer: "wall", wallRunId: run.id,
-            x: cursor, width: packed.leftover, height: wallHeight, depth: 12, label: "填缝条",
+            x: cursor, width: packed.leftover,
+            height: runStack?.filled ?? wallHeight, depth: 12, label: "填缝条",
           });
         }
       }
@@ -642,7 +806,9 @@ export function generateLayout(
         run, placements, hasDishwasher: appliances.some((a) => a.kind === "dishwasher"),
       }));
     }
-    ergonomics.push(...checkWorkTriangle(trianglePoints(geometry, placements)));
+    ergonomics.push(...checkWorkTriangle(trianglePoints(plan, placements)));
+    // 过道净空是**跨墙段**的：岛台与哪一列柜子挨得太近，一段一段单独看不出来
+    ergonomics.push(...checkAisles(plan));
   }
   for (const run of geometry.wallRuns) {
     if (run.length <= 0) continue;
@@ -657,6 +823,137 @@ export function generateLayout(
     aesthetics,
     acceptable: !hasBlockingViolation(ergonomics),
   };
+}
+
+/**
+ * 把水槽柜挪到一个**两侧都填得满**的位置。
+ *
+ * 对准窗中心是软性偏好；两侧各剩 9" 这种填不上的口子是硬伤——现有型号最窄
+ * 12"，填缝条最多吸收 6"，于是 9" 会原样留在那儿变成一条真实的缝，台面断开，
+ * 随后人体工程检查判「水槽左侧台面 0"」。方案被自己的检查器否掉，
+ * 而根因是几十行之外的一次取整。
+ *
+ * 做法：在允许区间里按 1" 步长找**离理想位置最近、且两侧余量都能被吸收**的位置。
+ * 一个都找不到就退回理想位置——不假装解决，让检查器如实报出来。
+ */
+function snapToFillable(
+  ideal: number,
+  ctx: {
+    lo: number; hi: number;
+    seg: { start: number; length: number };
+    width: number;
+    candidates: readonly PackCandidate[];
+  },
+): number {
+  const absorbable = (len: number): boolean => {
+    if (len <= 0.26) return true;
+    return packSegment(len, ctx.candidates).feasible;
+  };
+  const segEnd = ctx.seg.start + ctx.seg.length;
+  if (absorbable(ideal - ctx.seg.start) && absorbable(segEnd - ideal - ctx.width)) return ideal;
+
+  let best: { x: number; away: number } | undefined;
+  for (let x = Math.ceil(ctx.lo); x <= ctx.hi + 1e-6; x += 1) {
+    const pos = quantize(Math.min(x, ctx.hi));
+    if (!absorbable(pos - ctx.seg.start)) continue;
+    if (!absorbable(segEnd - pos - ctx.width)) continue;
+    const away = Math.abs(pos - ideal);
+    if (!best || away < best.away) best = { x: pos, away };
+  }
+  return best?.x ?? ideal;
+}
+
+/**
+ * 某一层的转角柜候选。
+ *
+ * 按**能力**（`cornerAccess`）而不是型号码前缀挑——第二家公司的转角柜叫
+ * `NW-LS33`，按 `BBC`/`LSB` 前缀一个也命不中。层由进深区分：转角吊柜 12"，
+ * 转角地柜 24"。
+ */
+function cornerModulesFor(
+  modules: readonly ModuleSpec[], layer: "base" | "wall",
+): ModuleSpec[] {
+  const maxDepth = layer === "wall" ? 14 : 30;
+  const minDepth = layer === "wall" ? 0 : 15;
+  return modules.filter((m) => {
+    if (!hasRole(m, "cornerAccess")) return false;
+    const d = m.depthOptions[0] ?? 24;
+    return d > minDepth && d <= maxDepth;
+  });
+}
+
+/**
+ * 在拥有墙角的那一段的末尾放一个转角柜，并把对应的子段缩短。
+ *
+ * 挑最宽的那个装得下的：转角柜越宽，够得着的深处越多。挑不到（这家公司没有
+ * 转角柜、或者末尾那段太短）就什么都不做——末尾会由通用装箱填上普通柜体，
+ * 而墙角的死角由 `UNREACHABLE_BLIND_CORNER` 提示客户。**不静默塞一个装不下的**。
+ */
+interface CornerPick {
+  module: ModuleSpec;
+  width: number;
+  /** 沿墙方向的落位起点。 */
+  x: number;
+}
+
+/**
+ * 给转角柜**占位**：从可用段里划掉它那一块，返回选中的型号。
+ *
+ * 占位与落位分开，是因为它排成几段（叠装）要等整面墙的高度解出来，
+ * 而"这一块归转角柜"必须在通用装箱之前就定下来——反过来的话，
+ * 通用装箱会把整段填满，转角柜再放上去就压在别人身上。
+ *
+ * 挑**装得下的里面最窄的那个**：转角柜的深处本来就够不着，宽一寸就多浪费
+ * 一寸储物。挑最宽的话，一面 108" 的墙上光转角柜就吃掉 36"。
+ */
+function reserveCornerCabinet(
+  run: WallRun,
+  segments: { start: number; length: number }[],
+  candidates: readonly ModuleSpec[],
+  end: "start" | "end",
+): CornerPick | undefined {
+  const seg = end === "end"
+    ? segments.find((s) => Math.abs(s.start + s.length - run.length) < 0.26)
+    : segments.find((s) => Math.abs(s.start) < 0.26);
+  if (!seg) return undefined;
+
+  const pick = candidates
+    .flatMap((m) => m.widthOptions.map((w) => ({ m, w })))
+    .filter(({ w }) => w <= seg.length)
+    .sort((a, b) => a.w - b.w)[0];
+  if (!pick) return undefined;
+
+  const x = end === "end" ? quantize(run.length - pick.w) : quantize(seg.start);
+  seg.length = quantize(seg.length - pick.w);
+  if (end === "start") seg.start = quantize(seg.start + pick.w);
+  return { module: pick.m, width: pick.w, x };
+}
+
+/** 把占好位的柜子按给定的高度序列落位（单柜就是一段）。 */
+function placeReservedCabinet(
+  pick: CornerPick,
+  run: WallRun,
+  layer: "base" | "wall",
+  placements: Placement[],
+  heights: readonly (number | undefined)[],
+): void {
+  let stackBase = 0;
+  for (const want of heights) {
+    const h = want !== undefined && pick.module.heightOptions.includes(want)
+      ? want : pick.module.heightOptions[0] ?? HEIGHTS.baseBox;
+    placements.push({
+      kind: "cabinet", layer, wallRunId: run.id,
+      x: pick.x, width: pick.width, height: h,
+      depth: pick.module.depthOptions[0] ?? (layer === "wall" ? 12 : 24),
+      moduleId: pick.module.id, moduleCode: pick.module.code,
+      faceTemplateId: pick.module.faceTemplateId,
+      ...(stackBase > 0 ? { stackBase } : {}),
+      label: "corner",
+    });
+    stackBase = quantize(stackBase + h + STACK_SEAM_LOSS);
+    // 该型号没有这个高度档就只放一段——**不为了对齐而排一个不存在的型号**
+    if (want !== undefined && !pick.module.heightOptions.includes(want)) break;
+  }
 }
 
 /**
@@ -737,33 +1034,30 @@ function fillBaseSegment(
  *
  * 简化模型：墙段首尾相接、依次转 90 度（一字/L/U 型厨房的常见情形）。
  */
-function trianglePoints(geometry: ParsedGeometry, placements: readonly Placement[]): TrianglePoint[] {
+function trianglePoints(
+  plan: KitchenPlan, placements: readonly Placement[],
+): TrianglePoint[] {
   const points: TrianglePoint[] = [];
-  let originX = 0;
-  let originY = 0;
-  let dirX = 1;
-  let dirY = 0;
 
-  for (const run of geometry.wallRuns) {
-    const toPlane = (along: number) => ({
-      x: originX + dirX * along,
-      y: originY + dirY * along,
-    });
-    for (const p of placements.filter((q) => q.wallRunId === run.id && q.layer === "base")) {
+  // 坐标从平面模型出。这里以前自带一份"每段右转 90°"的串联逻辑——它连
+  // `startsAtCorner` 都不看，于是同一个户型在图上是一种拼法、在工作三角里是另一种。
+  // 两份实现算出来的距离不一样，而没有任何一处会报错。
+  for (const rp of plan.runs) {
+    for (const p of placements.filter((q) => q.wallRunId === rp.run.id && q.layer === "base")) {
       const center = p.x + p.width / 2;
       // 先认家电：**灶下柜可能就是一个水槽柜箱体**（假抽面、顶部开放，见
       // capabilities.ts 的 F7）。按 SB 码先判水槽的话，工作三角会出现两个水槽点、
       // 一个灶点都没有——而且不报错。
       if (p.applianceKind === "range" || p.applianceKind === "cooktop") {
-        points.push({ kind: "cooktop", ...toPlane(center) });
+        points.push({ kind: "cooktop", ...toPlane(rp, center) });
       } else if (p.applianceKind === "refrigerator") {
-        points.push({ kind: "refrigerator", ...toPlane(center) });
+        points.push({ kind: "refrigerator", ...toPlane(rp, center) });
+      } else if (p.label === "sink") {
+        // 水槽点以前根本没进过工作三角——三角只有两个顶点，`WORK_TRIANGLE`
+        // 那几条检查因此在多数方案上静默跳过
+        points.push({ kind: "sink", ...toPlane(rp, center) });
       }
     }
-    originX += dirX * run.length;
-    originY += dirY * run.length;
-    // 下一段右转 90 度
-    [dirX, dirY] = [-dirY, dirX];
   }
   return points;
 }
@@ -811,10 +1105,15 @@ function planApplianceCabinets(
   run: WallRun,
   placed: readonly PlacedAppliance[],
   modules: readonly ModuleSpec[],
-  opts: { includeWall: boolean },
+  opts: { includeWall: boolean; usable?: { start: number; end: number } },
 ): { placements: Placement[]; warnings: LayoutWarning[] } {
   const placements: Placement[] = [];
   const warnings: LayoutWarning[] = [];
+  // 配套柜可能比它服务的家电还宽（36" 的柜盖 33" 的冰箱位），家电本身没进
+  // 让位区不代表它的上柜也没进。夹的是**让过墙角之后**的区间，不是整面墙。
+  const usable = opts.usable ?? { start: 0, end: run.length };
+  const clamp = (x: number, width: number) =>
+    quantize(Math.max(usable.start, Math.min(x, usable.end - width)));
 
   for (const p of placed) {
     const over = modules.find(
@@ -841,7 +1140,7 @@ function planApplianceCabinets(
         });
         continue;
       }
-      const x = quantize(Math.max(0, Math.min(p.x + p.width / 2 - width / 2, run.length - width)));
+      const x = clamp(p.x + p.width / 2 - width / 2, width);
       placements.push({
         kind: "cabinet", layer: "wall", wallRunId: run.id,
         x, width,
@@ -912,7 +1211,7 @@ function planApplianceCabinets(
       const width = [...over.widthOptions].sort((a, b) => a - b)
         .find((w) => w >= p.width) ?? over.widthOptions[0];
       if (width === undefined) continue;
-      const x = quantize(Math.max(0, Math.min(p.x + p.width / 2 - width / 2, run.length - width)));
+      const x = clamp(p.x + p.width / 2 - width / 2, width);
       placements.push({
         kind: "cabinet", layer: "tall", wallRunId: run.id,
         x, width,
@@ -955,8 +1254,11 @@ export function regenerateRun(
   // 会让它以为整个厨房只有这一面墙，冰箱就跑过来了
   const appliancePlan = opts.appliancePlan
     ?? planAppliances(geometry, opts.appliances ?? DEFAULT_APPLIANCES);
+  // 平面同理，而且更要命：单独一段墙看不见自己的墙角，重排出来的柜子会一直
+  // 排到墙角，压在隔壁那段墙的柜子上——**改一面墙，撞坏另一面墙**
+  const plan = opts.plan ?? buildKitchenPlan(geometry);
   const regenerated = generateLayout(
-    { ...geometry, wallRuns: [run] }, modules, { ...opts, appliancePlan },
+    { ...geometry, wallRuns: [run] }, modules, { ...opts, appliancePlan, plan },
   );
   const placements = [...untouched, ...regenerated.placements];
   // 硬约束与美观分要按合并后的整体重算——只重排一段墙也可能破坏工作三角
@@ -970,7 +1272,8 @@ export function regenerateRun(
         hasDishwasher: (opts.appliances ?? []).some((a) => a.kind === "dishwasher"),
       }));
     }
-    ergonomics.push(...checkWorkTriangle(trianglePoints(geometry, placements)));
+    ergonomics.push(...checkWorkTriangle(trianglePoints(plan, placements)));
+    ergonomics.push(...checkAisles(plan));
   }
   for (const r of geometry.wallRuns) {
     if (r.length <= 0) continue;

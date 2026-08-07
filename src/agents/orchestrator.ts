@@ -14,6 +14,8 @@ import { stripPriceFields } from "../spec/validation.js";
 import { interactionProfile, type TradeInteractionProfile } from "../trade/interaction.js";
 import type { AgentContext, AgentReply, CompletionClient, DesignIntent } from "./types.js";
 import { escalationDecision, tierForTurn, type EscalationDecision } from "./model-tiers.js";
+import { ASK_STYLE_RULES } from "./quick-replies.js";
+import { recordSkipped } from "./token-meter.js";
 
 function orchestratorSystem(profile: TradeInteractionProfile): string {
   const lines = [
@@ -25,6 +27,8 @@ function orchestratorSystem(profile: TradeInteractionProfile): string {
     "- 你只掌握通用橱柜知识。**不要报出任何具体公司的价格或型号**。",
     "- 客户想问某家公司的具体产品时，提示他用 @公司名 点名，由那家公司的助手来答。",
     "- 需要给价格感觉时，只能说「行业典型区间」，且必须说明这不是任何公司的真实报价。",
+    "",
+    ASK_STYLE_RULES,
   ];
   if (!profile.explainJargon) {
     lines.push(
@@ -88,7 +92,15 @@ export async function orchestratorReply(
   const requirements = mergeRequirements(ctx.requirements, userText);
 
   if (!client) {
-    return { content: fallbackPrompt(requirements, opts.profile, opts.repeatedAsk), requirements };
+    // 降级路径也记一笔：真实 token 是 0，但"本来会调一次、prompt 有多大"是可测的。
+    // 不记的话，场景测试跑一百遍也回答不了「上线之后一个客户多少钱」。
+    const content = fallbackPrompt(requirements, opts.profile, opts.repeatedAsk);
+    recordSkipped({
+      callSite: "orchestratorChat",
+      prompt: orchestratorSystem(opts.profile) + renderForEstimate(ctx.history) + userText,
+      reply: content,
+    });
+    return { content, requirements };
   }
 
   // 日常轮次走轻量模型；只有确定性触发（要出方案、多约束修改…）才上主力。
@@ -108,13 +120,22 @@ export async function orchestratorReply(
   };
 }
 
+/** 估算用：把历史拍平成会真的发出去的那串文字。 */
+function renderForEstimate(history: readonly { role: string; content: string }[]): string {
+  return history.map((m) => `${m.role}: ${m.content}`).join("\n");
+}
+
 /** 还缺哪些关键字段——同时用于兜底话术与前端进度提示。 */
 export function missingFields(requirements: string): string[] {
   const text = requirements.toLowerCase();
   const checks: [string, RegExp][] = [
     ["厨房尺寸", /(\d+\s*(尺|米|m|ft|英尺|feet|inch|寸))|尺寸|面积|平米|平方/],
     ["布局", /布局|l\s*型|u\s*型|一字|岛台|island|galley/],
-    ["风格", /风格|现代|传统|简约|shaker|modern|classic|欧式|美式/],
+    // 关键词表要认得**客户真会说的词**，尤其是快捷回答按钮上印的那几个
+    // （`quick-replies.ts`）。认不出来的后果不是"少收一个字段"，而是客户点了
+    // 按钮、系统下一轮又问同一个问题——比不给按钮更糟。
+    // `test/quick-replies.test.ts` 对每个按钮做了穷举断言。
+    ["风格", /风格|现代|传统|简约|极简|北欧|轻奢|工业风|日式|中式|田园|复古|shaker|modern|classic|nordic|欧式|美式/],
     ["预算", /预算|budget|万|\$|加币|cad/],
     ["所在省份", /\b(on|bc|ab|qc|mb|sk|ns|nb|nl|pe|yt|nt|nu)\b|安大略|不列颠|阿尔伯塔|魁北克|曼尼托巴|萨斯|新斯科舍|多伦多|温哥华|卡尔加里|蒙特利尔|渥太华/],
   ];
@@ -206,7 +227,16 @@ export async function companyAgentReply(
   userText: string,
 ): Promise<AgentReply> {
   if (!client) {
-    return { content: deterministicSpecAnswer(companyName, bundle, userText), companyId: bundle.companyId };
+    const content = deterministicSpecAnswer(companyName, bundle, userText);
+    // 公司 Agent 的 prompt 里注入了整份规格清单——它通常是全系统**最大的一个
+    // prompt**，成本分析里不能漏
+    recordSkipped({
+      callSite: "companySpecQa",
+      prompt: buildCompanyAgentSystem(companyName, bundle)
+        + renderForEstimate(ctx.history) + userText,
+      reply: content,
+    });
+    return { content, companyId: bundle.companyId };
   }
   const content = await client.complete({
     system: buildCompanyAgentSystem(companyName, bundle),
