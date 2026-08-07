@@ -81,6 +81,7 @@ import {
 import { renderPlanViews } from "./render/plan-view.js";
 import { buildBom, bomToSelections } from "./layout/bom.js";
 import { buildQuoteList, renderQuoteListHtml, renderQuoteListText } from "./quote/line-items.js";
+import { compareFinishes, renderFinishComparison } from "./quote/finish-comparison.js";
 import {
   applyPreferencesToSelections, buildApplianceQuestions, buildQuestionSet, drawerBiasFor,
   PreferenceError, resolvePreferences, unappliedPreferences, validatePreferences,
@@ -830,13 +831,42 @@ app.post("/api/quotes", requireAccount, async (c) => {
     ...(bom ? { bomLines: bom.lines } : {}),
   });
 
+  // ── 换花色比价（FR-6.3）──
+  //
+  // 同一套方案换其他门板花色的重算价。**逐行重算**——整条定价链路重跑一遍，
+  // 只换 doorStyleId，折扣运费税一并重算。给总价乘一个系数得出的数没有任何
+  // 一行支持它，而客户会拿它去跟别家比、去签合同。
+  const finishes = compareFinishes({
+    ctx: pricing,
+    // 用**这份报价实际算出来的行**反推选择：与其重新拼一遍 selections，
+    // 不如从结果回读——重新拼的那一份迟早与真实报价对不上，
+    // 而"比价表上的数与客户真选了之后拿到的报价不一致"是最难解释的一种错。
+    selections: result.quote.lineItems.map((l) => ({
+      moduleId: l.moduleId, qty: l.qty, assembly: l.assembly,
+      width: l.width, height: l.height, depth: l.depth,
+      hardwareOptionIds: l.modifiers.filter((m) => m.kind === "hardware").map((m) => m.refId),
+      accessoryOptionIds: l.modifiers.filter((m) => m.kind === "accessory").map((m) => m.refId),
+    })),
+    currentDoorStyleId: doorStyleId,
+    accountType,
+    province: account.province,
+    at: now(),
+  });
+
   const session = appCtx.repos.designSessions.byId(conv.id);
 
   // ── 交付前审核（FR-14）──
   //
   // 报价是客户**据以做决定**的东西：拿去跟别家比、拿去下单。所以这一步查得最严，
   // 而且把快照复算也算进来——一份复算对不上的报价，看起来和对得上的一模一样。
-  const listText = renderQuoteListText(list);
+  // 推定的家电尺寸要**跟着报价一起走**，不能只写在图纸说明里：报价单是客户
+  // 拿去下单的那一份，而"烤箱位按 30" 推定"正是决定柜子装不装得进去的那句话。
+  // 用的是与图纸说明同一句措辞（`provenanceNote`），两处不各写一版。
+  const listText = [
+    renderQuoteListText(list),
+    renderFinishComparison(finishes, format),
+    activePlan?.appliances?.length ? provenanceNote(activePlan.appliances) : undefined,
+  ].filter(Boolean).join("\n\n");
   const audit = auditDeliverable({
     deliverable: "quoteList",
     stage: session?.stage ?? "quoted",
@@ -868,6 +898,7 @@ app.post("/api/quotes", requireAccount, async (c) => {
     quoteList: list,
     quoteListText: listText,
     quoteListHtml: renderQuoteListHtml(list),
+    finishComparison: finishes,
     audit, auditText: renderAuditText(audit),
     // trade 账号被降级定价时如实说明原因，不静默按零售价出单
     ...(account.accountType === "trade" && !gate.allowed

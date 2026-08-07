@@ -194,6 +194,21 @@ export interface ModuleSpec {
   faceTemplateId?: string;
   assemblyOptions: AssemblyOption[];
   /**
+   * 这个型号的价格**随不随门板花色变**（REQUIREMENTS §3.5.5）。缺省 `true`。
+   *
+   * 价格矩阵是 `(型号 × 价格组)`，而价格组来自门板样式——这等于说每个型号的
+   * 价格都随花色变。对绝大多数件是对的：柜体的门板就是花色本身，填缝条、
+   * 收口板、踢脚板、顶线要与门同色，那正是它们存在的理由。
+   *
+   * 但**塑料地脚不是**：它藏在踢脚板后面，没人看得见，就是一个黑色塑料件、
+   * 一个价。给它编一个"高级花色版"的价格是凭空加价。
+   *
+   * 标 `false` 的型号在价格矩阵里**只需要一行**，FR-8 的完整性校验相应放宽
+   * （`spec/finish.ts` 的 `priceEntryFor`）——否则会把"本来就不需要多行"
+   * 误报成价格空洞。
+   */
+  finishDependent?: boolean;
+  /**
    * 商家**直接声明**的能力标签（CATALOG_MODEL.md §2）。
    *
    * 缺省时由 `spec/capabilities.ts` 从 type + 脸型模板推断，推不准的走待确认队列。

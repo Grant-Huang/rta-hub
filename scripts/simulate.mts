@@ -17,7 +17,9 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { generateScenarios, type Scenario, type ScenarioSet } from "./scenarios.mts";
+import {
+  BUILTIN_SCENARIO_COUNT, generateScenarios, type Scenario, type ScenarioSet,
+} from "./scenarios.mts";
 
 process.env.SMTP_HOST = "";
 process.env.ADMIN_TOKEN = "sim";
@@ -28,7 +30,8 @@ import {
 } from "../src/agents/token-meter.js";
 
 const OUT = process.argv[2] ?? "sim-out";
-const COUNT = Number(process.argv[3] ?? 4);
+/** 默认跑**全部**内置场景。少跑几个的报告和跑全了的报告长得一模一样。 */
+const COUNT = Number(process.argv[3] ?? BUILTIN_SCENARIO_COUNT);
 const ACCOUNTS = { consumer: "ca_demo_consumer", trade: "ca_demo_trade" } as const;
 
 // ── 跑一遍 ────────────────────────────────────────────────────────────────
@@ -160,6 +163,23 @@ async function main(): Promise<void> {
     await call(`/api/floorplans/${floorPlanId}/resolve`, {
       method: "POST", acct, body: JSON.stringify({ ceilingHeight: k.ceilingHeight }),
     });
+
+    // 客户声明的家电（FR-3.2）。不声明就走推定值（冰箱 + 灶具），
+    // 那条路径已经被别的场景覆盖了；这里要测的是**声明之后**的行为：
+    // 留空按实际尺寸算、说不确定的如实标成推定、配套柜按能力标签查。
+    if (k.appliances?.length) {
+      await call(`/api/floorplans/${floorPlanId}/resolve`, {
+        method: "POST", acct, body: JSON.stringify({ appliances: k.appliances }),
+      });
+      const known = k.appliances.filter((a) => a.width !== undefined).length;
+      console.log(`  家电：${k.appliances.length} 件（${known} 件给了尺寸，` +
+        `${k.appliances.length - known} 件按常见款推定）`);
+      timeline.push({
+        kind: "note", level: "info",
+        text: `家电已录入：${k.appliances.length} 件，其中 ` +
+          `${k.appliances.length - known} 件尺寸不确定、按常见款推定`,
+      });
+    }
 
     const runs = (await call(`/api/floorplans/${floorPlanId}`, { acct }))
       .floorPlan.parsedGeometry.wallRuns as Json[];

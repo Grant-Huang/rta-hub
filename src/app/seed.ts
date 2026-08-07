@@ -128,6 +128,15 @@ const MODULE_DEFS: [string, ModuleSpec["type"], number[], number[], number[], st
 const FACELESS_TYPES: ReadonlySet<ModuleSpec["type"]> = new Set(["leg", "toeKick", "crown"]);
 
 /**
+ * 价格**不随门板花色变**的类别（REQUIREMENTS §3.5.5）。
+ *
+ * 只有塑料地脚。它藏在踢脚板后面，没人看得见——黑色塑料件，一个价。
+ * 踢脚板与顶线虽然也"没有脸"，但它们**要与门同色**，那正是它们存在的理由，
+ * 所以仍然随花色变。"看不看得见"与"有没有脸"是两件事。
+ */
+const FINISH_INDEPENDENT_TYPES: ReadonlySet<ModuleSpec["type"]> = new Set(["leg"]);
+
+/**
  * 试点公司**直接声明**的能力（CATALOG_MODEL §2.2 的第一档可信度）。
  *
  * 只声明推不出来的那些。`OC3084` 从脸型只能推出"是个家电柜"，推不出配哪种
@@ -171,15 +180,21 @@ export const pilotModules: ModuleSpec[] = MODULE_DEFS.map(([code, type, w, h, d]
     depthOptions: d,
     ...(match ? { faceTemplateId: match.templateId } : {}),
     ...(PILOT_CAPABILITIES[code] ? { capabilities: PILOT_CAPABILITIES[code] } : {}),
+    ...(FINISH_INDEPENDENT_TYPES.has(type) ? { finishDependent: false } : {}),
     assemblyOptions: type === "base" || type === "sinkBase" ? ["RTA", "assembled"] : ["RTA"],
   };
 });
 
 /** Premium 组按 Standard 的 1.62 倍定价（行业里价格组间的典型跨度）。 */
-export const pilotPriceMatrix: PriceMatrixEntry[] = MODULE_DEFS.flatMap(([code, , , , , std]) => {
+export const pilotPriceMatrix: PriceMatrixEntry[] = MODULE_DEFS.flatMap(([code, type, , , , std]) => {
   const id = `m_${code.toLowerCase()}`;
   const stdCents = fromDollars(std);
   const premCents = fromDollars((Number(std) * 1.62).toFixed(2));
+  // 塑料地脚只有一行：它的价格不随花色变，编一个"高级花色版"的价格
+  // 是凭空加价（§3.5.5）。FR-8 的完整性校验对它相应放宽。
+  if (FINISH_INDEPENDENT_TYPES.has(type)) {
+    return [{ ...base, moduleId: id, priceGroupId: "pg_std", listPrice: stdCents }];
+  }
   return [
     {
       ...base, moduleId: id, priceGroupId: "pg_std", listPrice: stdCents,

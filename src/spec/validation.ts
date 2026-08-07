@@ -7,6 +7,7 @@
  *      因为它能通过所有 id 校验并被发送出去。
  *   2. `validateSelections`：6 项硬校验，任一失败即拒绝，**不做「自动修正后继续」**。
  */
+import { priceEntryFor } from "./finish.js";
 import type {
   AccessoryOption, DoorStyle, HardwareOption, ModuleSelection, ModuleSpec,
   PriceMatrixEntry, Province, TaxRule,
@@ -175,13 +176,15 @@ export function validateSelections(
       });
     }
 
-    // 校验 3（下半）：价格矩阵在该 (型号 × 价格组) 上必须有条目
+    // 校验 3（下半）：价格矩阵在该 (型号 × 价格组) 上必须有条目。
+    //
+    // `finishDependent: false` 的型号（塑料地脚）只需要一行——它的价格不随
+    // 花色变，要求逐花色都有价会把"本来就不需要多行"误报成价格空洞（§3.5.5）。
+    // 判断与定价引擎共用 `priceEntryFor`，不在这里再写一遍。
     if (doorStyle) {
-      const entry = ctx.priceMatrix.find(
-        (e) =>
-          e.moduleId === mod.id &&
-          e.priceGroupId === doorStyle.priceGroupId &&
-          e.specVersionId === ctx.specVersionId,
+      const entry = priceEntryFor(
+        mod, doorStyle.priceGroupId,
+        ctx.priceMatrix.filter((e) => e.specVersionId === ctx.specVersionId),
       );
       if (!entry) {
         issues.push({
