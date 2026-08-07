@@ -68,8 +68,11 @@ interface Span {
 function findSink(placements: readonly Placement[]): Placement | undefined {
   const byLabel = placements.find((p) => p.kind === "cabinet" && p.label === "sink");
   if (byLabel) return byLabel;
+  // 按码兜底时要排掉**配套给家电的**那些：灶下柜可能就是一个水槽柜箱体
+  // （假抽面、顶部开放），按码认会把灶当成水槽，然后拿灶的位置去判水槽工作区
   return placements.find(
-    (p) => p.kind === "cabinet" && /^(SB|SK|FSB|APR)|[-_](SB|SK)/i.test(p.moduleCode ?? ""),
+    (p) => p.kind === "cabinet" && p.applianceKind === undefined
+      && /^(SB|SK|FSB|APR)|[-_](SB|SK)/i.test(p.moduleCode ?? ""),
   );
 }
 
@@ -151,7 +154,11 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
   }
 
   // ── 灶具两侧落台区（安全要求）──
-  const cooktop = mine.find((p) => p.kind === "appliance" && p.applianceKind === "range");
+  // 认的是 `applianceKind`，不是 `kind === "appliance"`：嵌入式灶台落在**灶下柜**
+  // 上（kind 是 cabinet），它两侧同样要留热锅落台区。只认 appliance 的话，
+  // 换成嵌入式灶台这条安全检查就静默失效了。
+  const cooktop = mine.find(
+    (p) => p.applianceKind === "range" || p.applianceKind === "cooktop");
   if (cooktop) {
     const landing = landingAround(placements, run.id, run.length, { start: cooktop.x, end: cooktop.x + cooktop.width });
     if (!meetsTwoSided(landing, CLEARANCE.cooktopLandingPrimary, CLEARANCE.cooktopLandingSecondary)) {

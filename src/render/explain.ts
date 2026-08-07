@@ -164,7 +164,9 @@ export function explainDesign(input: ExplainDesignInput): DesignRationale {
   const base = mine.filter((p) => p.layer === "base").sort((a, b) => a.x - b.x);
   const cabinets = base.filter((p) => p.kind === "cabinet");
   const fillers = base.filter((p) => p.kind === "filler");
-  const appliances = base.filter((p) => p.kind === "appliance");
+  // 按 `applianceKind` 认，不按 `kind === "appliance"`：嵌入式灶台是**灶下柜**
+  // 上的一个台面开孔（kind 是 cabinet），只认 appliance 的话解释里会漏掉灶
+  const appliances = base.filter((p) => p.applianceKind !== undefined);
   const wall = mine.filter((p) => p.layer === "wall" && p.kind === "cabinet");
 
   const sections: RationaleSection[] = [
@@ -253,7 +255,8 @@ function whyThisArrangement(
   // 水槽与窗的关系——只在两者都存在时才说
   const window = run.features.find((f) => f.kind === "window");
   const sink = base.find((p) => p.label === "sink")
-    ?? base.find((p) => /^(SB|SK|FSB|APR)|[-_](SB|SK)/i.test(p.moduleCode ?? ""));
+    ?? base.find((p) => p.applianceKind === undefined
+      && /^(SB|SK|FSB|APR)|[-_](SB|SK)/i.test(p.moduleCode ?? ""));
   if (window && sink) {
     const sinkCenter = sink.x + sink.width / 2;
     const winCenter = window.offset + window.width / 2;

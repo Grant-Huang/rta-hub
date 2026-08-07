@@ -284,11 +284,22 @@ function isFunctionalNarrow(m: ModuleSpec): boolean {
   return roles.includes("openDisplay") || roles.includes("applianceHousing");
 }
 
+/**
+ * 配套柜不参与通用装箱。
+ *
+ * 冰箱上柜的 `type` 也是 `wall`，但它是 24" 深、15" 高的一块专用件——
+ * 当成普通吊柜排到别处去，正视图上会突兀地凸出一块，报价单上还会多算几个。
+ * 它只在**它配套的那台家电**上方出现，由 `planApplianceCabinets` 单独排。
+ */
+function isDedicatedFitting(m: ModuleSpec): boolean {
+  return capabilitiesFor(m).capabilities.servesAppliance !== undefined;
+}
+
 /** 从规格库里挑出某类柜体的宽度候选。 */
 function candidatesFor(modules: readonly ModuleSpec[], types: ModuleType[]): PackCandidate[] {
   const out: PackCandidate[] = [];
   for (const m of modules) {
-    if (!types.includes(m.type)) continue;
+    if (!types.includes(m.type) || isDedicatedFitting(m)) continue;
     const functional = isFunctionalNarrow(m);
     for (const w of m.widthOptions) {
       out.push({
@@ -320,7 +331,8 @@ function pickModule(
   width: number,
   preferDrawers = false,
 ): ModuleSpec | undefined {
-  const matches = modules.filter((m) => types.includes(m.type) && m.widthOptions.includes(width));
+  const matches = modules.filter(
+    (m) => types.includes(m.type) && m.widthOptions.includes(width) && !isDedicatedFitting(m));
   if (matches.length === 0) return undefined;
   // 「是不是抽屉柜」问能力，不问型号码——见 spec/capabilities.ts
   const isDrawer = (m: ModuleSpec) => hasRole(m, "drawerStorage") && !hasRole(m, "doorStorage");
@@ -406,6 +418,10 @@ export function generateLayout(
 
     for (const r of reserved) {
       if (r.kind === "door" || r.kind === "obstruction") continue;
+      // 嵌入式灶台**下面有柜子**——它是掉进台面的一个洞，不是一段没有柜子的空当。
+      // 那个柜子由 planApplianceCabinets 排（它有特殊要求：上层抽屉要避让灶体），
+      // 这里跳过，免得同一段墙上既有"灶台位"又有"灶下柜"，两者叠在一起。
+      if (r.kind === "cooktop") continue;
       placements.push({
         kind: "appliance", layer: "base", wallRunId: run.id,
         x: r.x, width: r.width, height: HEIGHTS.baseBox, depth: 24,
@@ -543,13 +559,35 @@ export function generateLayout(
       );
     }
 
+    // ── 家电配套柜 ──
+    //
+    // **先于吊柜装箱算好**：冰箱上柜可能比冰箱位本身宽（36" 的柜盖 35" 的冰箱位），
+    // 只按冰箱宽度留空的话，上柜会与旁边的普通吊柜叠在一起。
+    // 它要占多宽，就得先算出来再让开。
+    const serving = planApplianceCabinets(run, forThisRun, modules, {
+      includeWall: opts.includeWall !== false,
+    });
+    warnings.push(...serving.warnings);
+    placements.push(...serving.placements);
+
     // ── 吊柜层 ──
     if (opts.includeWall !== false && wallHeight !== undefined && wallCandidates.length > 0) {
-      // 窗户位置不放吊柜
-      const blockers = run.features
-        .filter((f) => f.kind === "window" || f.kind === "door" || f.kind === "obstruction")
-        .map((f) => ({ x: f.offset, width: Math.max(f.width, 1) }))
-        .sort((a, b) => a.x - b.x);
+      // 窗户位置不放吊柜；**吊柜层的家电（抽油烟机）也占位**——
+      // 不排除的话会在烟机正上方排一个普通吊柜，两者物理上打架
+      const blockers = [
+        ...run.features
+          .filter((f) => f.kind === "window" || f.kind === "door" || f.kind === "obstruction")
+          .map((f) => ({ x: f.offset, width: Math.max(f.width, 1) })),
+        ...forThisRun
+          .filter((p) => p.layer === "wall")
+          .map((p) => ({ x: p.x, width: p.width })),
+        // 配套柜（冰箱上柜等）已经占好的位置——按**它实际的宽度**让开，
+        // 而不是按家电本身的宽度。只挡吊柜层的那些：灶下柜在地柜层，
+        // 它上方本来就该有吊柜（或烟机）。
+        ...serving.placements
+          .filter((p) => p.layer !== "base")
+          .map((p) => ({ x: p.x, width: p.width })),
+      ].sort((a, b) => a.x - b.x);
 
       const wallSegments: { start: number; length: number }[] = [];
       let c = 0;
@@ -713,9 +751,10 @@ function trianglePoints(geometry: ParsedGeometry, placements: readonly Placement
     });
     for (const p of placements.filter((q) => q.wallRunId === run.id && q.layer === "base")) {
       const center = p.x + p.width / 2;
-      if (p.label === "sink" || p.moduleCode?.toUpperCase().includes("SB")) {
-        points.push({ kind: "sink", ...toPlane(center) });
-      } else if (p.applianceKind === "range") {
+      // 先认家电：**灶下柜可能就是一个水槽柜箱体**（假抽面、顶部开放，见
+      // capabilities.ts 的 F7）。按 SB 码先判水槽的话，工作三角会出现两个水槽点、
+      // 一个灶点都没有——而且不报错。
+      if (p.applianceKind === "range" || p.applianceKind === "cooktop") {
         points.push({ kind: "cooktop", ...toPlane(center) });
       } else if (p.applianceKind === "refrigerator") {
         points.push({ kind: "refrigerator", ...toPlane(center) });
@@ -743,6 +782,154 @@ function countModules(placements: readonly Placement[]) {
     });
   }
   return [...map.values()].sort((a, b) => a.moduleCode.localeCompare(b.moduleCode));
+}
+
+/**
+ * 家电配套柜 —— 家电不只是一段"不可用"的空白（APPLIANCES.md §3）。
+ *
+ * 真实厨房里家电周围有专门的柜子：
+ *
+ *   - **冰箱上柜**：比普通吊柜深（与冰箱齐平）、矮。不做的话冰箱顶上是一个
+ *     积灰的空当，客户看得见。
+ *   - **冰箱两侧收口板**：通高、与柜体同深。不贴的话露出白色刨花板边。
+ *   - **烟机上柜**：烟机占了吊柜层，它上方那一小截仍可做柜。
+ *   - **烤箱高柜**：中间开洞的通高柜，烤箱嵌进去。
+ *   - **灶下柜**：嵌入式灶台是掉进台面的一个洞，**下面有柜子**——而且不能是
+ *     普通抽屉柜，最上面那个抽屉会顶到灶体。
+ *
+ * ## 按能力查，不按型号码猜
+ *
+ * 找的是「`servesAppliance === "refrigerator"` 的吊柜型号」，不是
+ * `code.startsWith("RFW")`——与 M5-2 同一条原则（`spec/capabilities.ts`）。
+ *
+ * ## 没有对应型号时**报出来**，不静默跳过
+ *
+ * 冰箱顶上留一个空当是客户会**看见**的真实结果。这家做不了，就让客户知道，
+ * 由他决定是接受还是换一家。与 BOM 缺辅料时的处理一致（`bom.ts` 的 `missing`）。
+ */
+function planApplianceCabinets(
+  run: WallRun,
+  placed: readonly PlacedAppliance[],
+  modules: readonly ModuleSpec[],
+  opts: { includeWall: boolean },
+): { placements: Placement[]; warnings: LayoutWarning[] } {
+  const placements: Placement[] = [];
+  const warnings: LayoutWarning[] = [];
+
+  for (const p of placed) {
+    const over = modules.find(
+      (m) => capabilitiesFor(m).capabilities.servesAppliance === p.spec.kind);
+
+    if (p.spec.kind === "refrigerator") {
+      // 只出地柜层时不排冰箱上柜（它在吊柜层），但下面的灶下柜仍要排
+      if (!opts.includeWall) continue;
+      if (!over) {
+        warnings.push({
+          code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
+          message: `这家公司没有冰箱上柜型号，${run.label}的冰箱顶部会留一个空当`,
+        });
+        continue;
+      }
+      // 宽度取该型号能覆盖冰箱位的最小档位——比冰箱窄会露出缝
+      const width = [...over.widthOptions].sort((a, b) => a - b)
+        .find((w) => w >= p.width);
+      if (width === undefined) {
+        warnings.push({
+          code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
+          message: `冰箱位 ${p.width}" 比这家最宽的冰箱上柜（` +
+            `${Math.max(...over.widthOptions)}"）还宽，顶部盖不满`,
+        });
+        continue;
+      }
+      const x = quantize(Math.max(0, Math.min(p.x + p.width / 2 - width / 2, run.length - width)));
+      placements.push({
+        kind: "cabinet", layer: "wall", wallRunId: run.id,
+        x, width,
+        height: over.heightOptions[0] ?? 15,
+        // 冰箱上柜与冰箱齐深，不是普通吊柜的 12"
+        depth: over.depthOptions[0] ?? 24,
+        moduleId: over.id, moduleCode: over.code,
+        ...(over.faceTemplateId ? { faceTemplateId: over.faceTemplateId } : {}),
+        label: "冰箱上柜",
+      });
+      continue;
+    }
+
+    if (p.spec.kind === "cooktop") {
+      // 灶下柜：**普通三抽柜装不了**——最上面那个抽屉会顶到灶体。
+      // 优先用商家声明的灶下柜；没有就退到同宽的门板柜，并说明这是替代方案。
+      const fits = (m: ModuleSpec) =>
+        (m.type === "base" || m.type === "sinkBase") && m.widthOptions.some((w) => w <= p.width);
+      const exact = modules.find((m) => fits(m) && hasRole(m, "cooktopBase"));
+      // 退而求其次：没有抽屉的门板柜。装得上，只是少一格抽屉储物
+      const doorBase = modules.find(
+        (m) => fits(m) && hasRole(m, "doorStorage") && !hasRole(m, "drawerStorage"));
+      const mod = exact ?? doorBase;
+      if (!mod) {
+        warnings.push({
+          code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
+          message: `这家公司没有宽度 ≤${p.width}" 的灶下柜（也没有同宽的门板柜）——` +
+            `嵌入式灶台下面必须有柜子，普通抽屉柜的上层抽屉会顶到灶体`,
+        });
+        continue;
+      }
+      // 取能放进这个空当的最宽一档；剩下的差额由填缝条补（下面一并排出）
+      const width = [...mod.widthOptions].filter((w) => w <= p.width)
+        .sort((a, b) => b - a)[0]!;
+      placements.push({
+        kind: "cabinet", layer: "base", wallRunId: run.id,
+        x: p.x, width,
+        height: mod.heightOptions[0] ?? HEIGHTS.baseBox,
+        depth: mod.depthOptions[0] ?? 24,
+        moduleId: mod.id, moduleCode: mod.code,
+        ...(mod.faceTemplateId ? { faceTemplateId: mod.faceTemplateId } : {}),
+        applianceKind: "cooktop",
+        applianceSpec: p.spec,
+        label: `灶下柜（台面开孔 ${formatWidth(p.spec.width)}）`,
+      });
+      if (width < p.width) {
+        placements.push({
+          kind: "filler", layer: "base", wallRunId: run.id,
+          x: quantize(p.x + width), width: quantize(p.width - width),
+          height: HEIGHTS.baseBox, depth: 24, label: "填缝条",
+        });
+      }
+      if (!exact) {
+        warnings.push({
+          code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
+          message: `这家公司没有专门的灶下柜型号，${run.label}的灶台下面用 ${mod.code} ` +
+            `（门板柜）代替——能装，但抽屉储物会少一格`,
+        });
+      }
+      continue;
+    }
+
+    if (p.spec.kind === "wallOven" && over) {
+      if (!opts.includeWall) continue; // 通高柜要占到吊柜层
+      // 烤箱高柜：通高，占地柜层到吊柜层的整段
+      const width = [...over.widthOptions].sort((a, b) => a - b)
+        .find((w) => w >= p.width) ?? over.widthOptions[0];
+      if (width === undefined) continue;
+      const x = quantize(Math.max(0, Math.min(p.x + p.width / 2 - width / 2, run.length - width)));
+      placements.push({
+        kind: "cabinet", layer: "tall", wallRunId: run.id,
+        x, width,
+        height: over.heightOptions[0] ?? 84,
+        depth: over.depthOptions[0] ?? 24,
+        moduleId: over.id, moduleCode: over.code,
+        ...(over.faceTemplateId ? { faceTemplateId: over.faceTemplateId } : {}),
+        label: "烤箱高柜",
+      });
+      continue;
+    }
+    if (p.spec.kind === "wallOven" && !over) {
+      warnings.push({
+        code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
+        message: "这家公司没有烤箱高柜型号，独立烤箱没有地方嵌装",
+      });
+    }
+  }
+  return { placements, warnings };
 }
 
 /**

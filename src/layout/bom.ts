@@ -33,6 +33,11 @@ import type { GeneratedLayout, Placement } from "./generate.js";
 const SIX_LEG_WIDTH = 30;
 /** 一根踢脚板/扣板的标称长度（英寸）。 */
 const TOE_KICK_STOCK = 96;
+/** 冰箱侧收口板要盖住的高度——整段冰箱空当，不是地柜的 34.5"。 */
+const FRIDGE_PANEL_HEIGHT = 84;
+/** 地柜/吊柜收口板的目标高度。 */
+const BASE_PANEL_HEIGHT = 34.5;
+const WALL_PANEL_HEIGHT = 30;
 
 export interface BomLine {
   moduleId: string;
@@ -154,19 +159,68 @@ export function buildBom(input: BomInput): BomResult {
   const exposed = countExposedEnds(input.layout.placements, input.wallRuns);
   for (const [layer, count] of Object.entries(exposed) as ["base" | "wall", number][]) {
     if (count === 0) continue;
-    const spec = pickPanel(input.modules, layer);
+    const target = layer === "wall" ? WALL_PANEL_HEIGHT : BASE_PANEL_HEIGHT;
+    const spec = pickPanel(input.modules, target);
     if (!spec) { missing.push(`${layer === "wall" ? "吊柜" : "地柜"}收口板`); continue; }
     lines.push({
       moduleId: spec.id, moduleCode: spec.code, qty: count,
       width: spec.widthOptions[0] ?? 24,
-      height: spec.heightOptions[0] ?? 34.5,
+      height: heightAtLeast(spec, target) ?? spec.heightOptions[0] ?? target,
       depth: spec.depthOptions[0] ?? 0.25,
       category: "panel",
       reason: `${count} 个外露侧面需要与门板同色的收口板`,
     });
   }
 
+  // ── 冰箱两侧的通高收口板 ──
+  const fridgeSides = countFridgeSides(input.layout.placements, input.wallRuns);
+  if (fridgeSides > 0) {
+    const spec = pickPanel(input.modules, FRIDGE_PANEL_HEIGHT);
+    if (spec) {
+      lines.push({
+        moduleId: spec.id, moduleCode: spec.code, qty: fridgeSides,
+        // 与冰箱齐深，不是地柜收口板的 0.25" 贴面尺寸——宽度取够深的那一档
+        width: spec.widthOptions[0] ?? 24,
+        height: heightAtLeast(spec, FRIDGE_PANEL_HEIGHT) ?? spec.heightOptions[0] ?? FRIDGE_PANEL_HEIGHT,
+        depth: spec.depthOptions[0] ?? 0.25,
+        category: "panel",
+        reason: `冰箱空当有 ${fridgeSides} 侧不靠墙，要贴通高收口板` +
+          `（冰箱比两边的柜子高，只贴地柜那一截会露出上面半截刨花板边）`,
+      });
+    } else {
+      missing.push(`冰箱侧通高收口板（需要高度 ≥${FRIDGE_PANEL_HEIGHT}"）`);
+    }
+  }
+
   return { lines, missing };
+}
+
+/**
+ * 冰箱空当有几侧不靠墙。
+ *
+ * 冰箱是**通高**的，两边的地柜只有 34.5"。所以冰箱那一侧露出来的不是柜体侧板，
+ * 而是从地面到冰箱顶的一整条缝——常规的地柜收口板只盖得住下面 34.5"，
+ * 上面半截仍然是白色刨花板边。这一条单独算，用的是通高板。
+ *
+ * 贴着内墙角的那一侧不用贴：那侧对着的是墙，看不见。
+ */
+function countFridgeSides(
+  placements: readonly Placement[],
+  runs: readonly WallRun[],
+): number {
+  const EPS = 0.01;
+  let sides = 0;
+  for (const run of runs) {
+    const fridges = placements.filter(
+      (p) => p.wallRunId === run.id && p.layer === "base"
+        && p.applianceKind === "refrigerator");
+    for (const f of fridges) {
+      // 左侧：贴着墙段起点且那是内墙角 → 对着墙，不用贴
+      if (!(f.x <= EPS && run.startsAtCorner)) sides++;
+      if (!(f.x + f.width >= run.length - EPS && run.endsAtCorner)) sides++;
+    }
+  }
+  return sides;
 }
 
 /**
@@ -215,11 +269,26 @@ function pickToeKick(modules: readonly ModuleSpec[], system: ToeKickSystem): Mod
   return system === "plasticLegs" ? byThickness[0] : byThickness[byThickness.length - 1];
 }
 
-function pickPanel(modules: readonly ModuleSpec[], layer: string): ModuleSpec | undefined {
-  const panels = modules.filter((m) => m.type === "panel");
-  return layer === "wall"
-    ? panels.find((m) => (m.heightOptions[0] ?? 0) < 34) ?? panels[0]
-    : panels.find((m) => (m.heightOptions[0] ?? 0) >= 34) ?? panels[0];
+/**
+ * 按**要盖住的高度**选收口板，而不是按"地柜/吊柜"两分。
+ *
+ * 收口板现场裁切，所以够高的都能用，短了的一定不能用——于是规则是
+ * 「取够高的里面最矮的那一档」。原来按 `layer` 分两档，加进冰箱侧的通高板
+ * （84"）之后就分不出来了：84" 的板也满足"高度 ≥34"，谁排在型号表前面谁被选中，
+ * 顺序一变就悄悄换了型号。
+ *
+ * 一档都不够高时返回 `undefined`——让调用方记进 `missing`，而不是发一块短板
+ * 让客户装到一半才发现盖不住。
+ */
+function pickPanel(modules: readonly ModuleSpec[], targetHeight: number): ModuleSpec | undefined {
+  return modules
+    .filter((m) => m.type === "panel" && heightAtLeast(m, targetHeight) !== undefined)
+    .sort((a, b) => heightAtLeast(a, targetHeight)! - heightAtLeast(b, targetHeight)!)[0];
+}
+
+/** 这个型号里够到目标高度的最矮档位。都不够高就是 `undefined`。 */
+function heightAtLeast(spec: ModuleSpec, target: number): number | undefined {
+  return [...spec.heightOptions].sort((a, b) => a - b).find((h) => h >= target - 0.01);
 }
 
 function groupBy<T, K>(items: readonly T[], key: (t: T) => K): Map<K, T[]> {

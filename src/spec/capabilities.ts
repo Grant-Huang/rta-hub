@@ -102,7 +102,10 @@ const ROLES_BY_FACE: Record<FaceTemplateId, ModuleRole[]> = {
   F4_DRAWER_OVER_DOUBLE: ["doorStorage", "drawerStorage"],
   F5_TWO_DRAWERS_OVER_DOUBLE: ["doorStorage", "drawerStorage"],
   F6_DRAWER_STACK: ["drawerStorage"],
-  F7_FALSE_FRONT_DOUBLE: ["sinkBase", "doorStorage"],
+  // 假抽面 + 双门 = 顶部开放的箱体。这正是**嵌入式灶台**要的构造：灶体从台面
+  // 沉下来时不会撞到抽屉。同一个箱体既能当水槽柜也能当灶下柜，不是巧合——
+  // 两者需要的都是"上面那一格是空的"。
+  F7_FALSE_FRONT_DOUBLE: ["sinkBase", "cooktopBase", "doorStorage"],
   F8_APRON_SINK: ["sinkBase", "doorStorage"],
   F9_DIAGONAL_CORNER: ["cornerAccess", "doorStorage"],
   F10_BLIND_CORNER: ["cornerAccess", "doorStorage"],
