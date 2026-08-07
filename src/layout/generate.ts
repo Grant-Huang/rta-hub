@@ -850,6 +850,8 @@ function planApplianceCabinets(
         depth: over.depthOptions[0] ?? 24,
         moduleId: over.id, moduleCode: over.code,
         ...(over.faceTemplateId ? { faceTemplateId: over.faceTemplateId } : {}),
+        // 带上它配的是哪台家电——渲染层据此归类上色（kernel/palette.ts）
+        applianceKind: "refrigerator",
         label: "冰箱上柜",
       });
       continue;
@@ -918,6 +920,7 @@ function planApplianceCabinets(
         depth: over.depthOptions[0] ?? 24,
         moduleId: over.id, moduleCode: over.code,
         ...(over.faceTemplateId ? { faceTemplateId: over.faceTemplateId } : {}),
+        applianceKind: "wallOven",
         label: "烤箱高柜",
       });
       continue;
