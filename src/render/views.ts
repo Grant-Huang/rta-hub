@@ -6,11 +6,24 @@
  * 与脸型文法同一条原则（RENDERING.md 4.1/4.2）：
  *   **一律计算绝对英寸坐标后再乘以固定的 px/inch，绝不用 transform="scale()"**。
  *   缩放会把门缝、面框、标注线宽这些绝对量一起放大。
+ *
+ * 颜色、线宽、字号、尺寸标注、转义都来自 `kernel/`（RENDERING.md §8）——
+ * 这个文件与 `plan-view.ts` 共用同一套绘图约定，客户并排看两组图时
+ * 同一个东西是同一个样子。
  */
 import { HEIGHTS, type Placement } from "../layout/generate.js";
 import type { WallRun } from "../floorplan/types.js";
 import { layoutFace, toSvg as faceToSvg, type RenderStyle } from "./face-grammar.js";
 import { buildFace, matchFaceTemplate, type FaceTemplateId } from "./templates.js";
+import { PALETTE, INK, TYPE, STROKE, elementKindOf, featureKindOf } from "./kernel/palette.js";
+import {
+  dimension as kDimension, esc, formatInches as kFormatInches, line as kLine,
+  r as kRound, rect as kRect, styleAttrs, swingArc, text as kText,
+} from "./kernel/primitives.js";
+import { annotationFor, fitsText } from "./kernel/annotate.js";
+
+/** 英寸格式化——内核那一份的再导出，调用方不必知道它搬了家。 */
+export const formatInches = kFormatInches;
 
 export interface ViewStyle extends RenderStyle {
   pxPerInch: number;
@@ -25,7 +38,8 @@ export const DEFAULT_VIEW_STYLE: ViewStyle = {
   showDimensions: true,
 };
 
-const PAD = 44; // 给标注留的边距（px）
+/** 给标注留的边距（px）。与全局俯视图同值——并排看时两张图才对得齐。 */
+const PAD = 48;
 
 interface Ctx {
   s: number;           // px per inch
@@ -33,15 +47,29 @@ interface Ctx {
   style: ViewStyle;
 }
 
-function open(widthIn: number, heightIn: number, style: ViewStyle, title: string): Ctx {
+/**
+ * 左边距要另算。
+ *
+ * 「台面 36"」这类竖向尺寸标注写在图的左侧，文字往左伸出去——按四边等距留边，
+ * 它会被画布裁掉半截。裁掉的恰恰是尺寸，而尺寸是这张图的主要内容。
+ */
+const PAD_LEFT_WITH_DIMENSION = 68;
+
+function open(
+  widthIn: number, heightIn: number, style: ViewStyle, title: string,
+  opts: { padLeft?: number; padBottom?: number } = {},
+): Ctx {
   const s = style.pxPerInch;
-  const w = widthIn * s + PAD * 2;
-  const h = heightIn * s + PAD * 2;
+  const padLeft = opts.padLeft ?? PAD;
+  const padBottom = opts.padBottom ?? PAD;
+  const w = widthIn * s + padLeft + PAD;
+  const h = heightIn * s + PAD + padBottom;
   const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${r(w)} ${r(h)}" width="${r(w)}" height="${r(h)}">`,
-    `<title>${esc(title)}</title>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${r(w)} ${r(h)}" width="${r(w)}" ` +
+    `height="${r(h)}" role="img" aria-label="${escAttr(title)}">`,
+    `<title>${escAttr(title)}</title>`,
     `<rect width="${r(w)}" height="${r(h)}" fill="#ffffff"/>`,
-    `<g transform="translate(${PAD},${PAD})">`,
+    `<g transform="translate(${padLeft},${PAD})">`,
   ];
   return { s, parts, style };
 }
@@ -51,17 +79,17 @@ function close(ctx: Ctx): string {
   return ctx.parts.join("");
 }
 
-function r(n: number): number { return Math.round(n * 100) / 100; }
+const r = kRound;
 
-/**
- * XML **文本节点**转义。只处理 `&`、`<`、`>`——文本里的引号无需转义，
- * 而尺寸标注里到处是英寸符号（`36"`），转成 `&quot;` 只会让输出难读。
- */
-function esc(str: string): string {
-  return str.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]!);
+function escAttr(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 }
 
-/** 尺寸标注：带箭头端点的水平/垂直标注线。线宽固定，不随比例变化。 */
+/**
+ * 尺寸标注 —— 画法归内核，这里只把英寸坐标换算成 px 并让开一个偏移。
+ *
+ * `offset` 是标注线离被标注对象的距离（px）：水平标注往下让，垂直标注往右让。
+ */
 function dimension(
   ctx: Ctx,
   a: { x: number; y: number },
@@ -70,43 +98,14 @@ function dimension(
   offset = 0,
 ): void {
   const { s } = ctx;
-  const horizontal = a.y === b.y;
-  const x1 = a.x * s, y1 = a.y * s + (horizontal ? offset : 0);
-  const x2 = b.x * s, y2 = b.y * s + (horizontal ? offset : 0);
-  const ox = horizontal ? 0 : offset;
-
-  ctx.parts.push(
-    `<line x1="${r(x1 + ox)}" y1="${r(y1)}" x2="${r(x2 + ox)}" y2="${r(y2)}" stroke="#666" stroke-width="0.75"/>`,
-    tick(x1 + ox, y1, horizontal), tick(x2 + ox, y2, horizontal),
-  );
-  const mx = (x1 + x2) / 2 + ox;
-  const my = (y1 + y2) / 2;
-  ctx.parts.push(
-    horizontal
-      ? `<text x="${r(mx)}" y="${r(my - 3)}" font-size="9" fill="#444" text-anchor="middle" font-family="sans-serif">${esc(label)}</text>`
-      : `<text x="${r(mx - 4)}" y="${r(my)}" font-size="9" fill="#444" text-anchor="end" dominant-baseline="middle" font-family="sans-serif">${esc(label)}</text>`,
-  );
-}
-
-function tick(x: number, y: number, horizontal: boolean): string {
-  return horizontal
-    ? `<line x1="${r(x)}" y1="${r(y - 3)}" x2="${r(x)}" y2="${r(y + 3)}" stroke="#666" stroke-width="0.75"/>`
-    : `<line x1="${r(x - 3)}" y1="${r(y)}" x2="${r(x + 3)}" y2="${r(y)}" stroke="#666" stroke-width="0.75"/>`;
-}
-
-/** 把英寸格式化成行业写法：34.5 → 34-1/2"。 */
-export function formatInches(value: number): string {
-  const whole = Math.floor(value);
-  const frac = value - whole;
-  if (frac < 1e-6) return `${whole}"`;
-  const denominators = [2, 4, 8, 16];
-  for (const d of denominators) {
-    const n = Math.round(frac * d);
-    if (Math.abs(frac - n / d) < 1e-6) {
-      return n === d ? `${whole + 1}"` : `${whole}-${n}/${d}"`;
-    }
-  }
-  return `${r(value)}"`;
+  const horizontal = Math.abs(a.y - b.y) < 1e-9;
+  const dy = horizontal ? offset : 0;
+  const dx = horizontal ? 0 : offset;
+  ctx.parts.push(kDimension(
+    { x: a.x * s + dx, y: a.y * s + dy },
+    { x: b.x * s + dx, y: b.y * s + dy },
+    label,
+  ));
 }
 
 // ── 正视图 ────────────────────────────────────────────────────────────────
@@ -132,12 +131,15 @@ export function renderFrontElevation(
     HEIGHTS.counterTop,
   );
   const viewHeight = wallTop + 6;
-  const ctx = open(run.length, viewHeight, style, `${run.label} 正视图`);
+  const ctx = open(run.length, viewHeight, style, `${run.label} 正视图`, {
+    // 左侧要放「台面 36"」，底下要放两行柜体标注 + 一条总长尺寸线
+    padLeft: style.showDimensions ? PAD_LEFT_WITH_DIMENSION : PAD,
+    padBottom: PAD + 24,
+  });
 
   // 地面与墙体轮廓
-  ctx.parts.push(
-    `<line x1="0" y1="${r(viewHeight * ctx.s)}" x2="${r(run.length * ctx.s)}" y2="${r(viewHeight * ctx.s)}" stroke="#333" stroke-width="1.5"/>`,
-  );
+  ctx.parts.push(kLine(0, viewHeight * ctx.s, run.length * ctx.s, viewHeight * ctx.s,
+    INK.ground, STROKE.ground));
 
   const yOf = (topInches: number) => (viewHeight - topInches) * ctx.s;
 
@@ -154,12 +156,12 @@ export function renderFrontElevation(
 
   // 台面
   const counterY = yOf(HEIGHTS.counterTop);
-  ctx.parts.push(
-    `<rect x="0" y="${r(counterY)}" width="${r(run.length * ctx.s)}" height="${r(HEIGHTS.counterThickness * ctx.s)}" fill="#3b3b3b"/>`,
-  );
+  ctx.parts.push(kRect(0, counterY, run.length * ctx.s, HEIGHTS.counterThickness * ctx.s,
+    PALETTE.counter));
 
   if (style.showDimensions) {
-    dimension(ctx, { x: 0, y: viewHeight }, { x: run.length, y: viewHeight }, formatInches(run.length), 26);
+    // 总长尺寸线让到柜体标注下面——压在标注上等于两行字叠着，谁也读不出来
+    dimension(ctx, { x: 0, y: viewHeight }, { x: run.length, y: viewHeight }, formatInches(run.length), 46);
     dimension(ctx, { x: 0, y: viewHeight }, { x: 0, y: viewHeight - HEIGHTS.counterTop }, `台面 ${formatInches(HEIGHTS.counterTop)}`, -14);
     const wallCab = mine.find((p) => p.layer === "wall");
     if (wallCab) {
@@ -184,19 +186,27 @@ function drawBox(
 ): void {
   const { s } = ctx;
   const x = xIn * s;
+  const kind = elementKindOf(p);
 
   if (p.kind === "appliance") {
-    ctx.parts.push(
-      `<rect x="${r(x)}" y="${r(yPx)}" width="${r(wIn * s)}" height="${r(hIn * s)}" fill="#f0f0f0" stroke="#999" stroke-width="1" stroke-dasharray="5 3"/>`,
-      `<text x="${r(x + (wIn * s) / 2)}" y="${r(yPx + (hIn * s) / 2)}" font-size="9" fill="#777" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif">${esc(p.label ?? "家电位")}</text>`,
-    );
+    const ann = annotationFor(p);
+    ctx.parts.push(kRect(x, yPx, wIn * s, hIn * s, PALETTE.appliance));
+    if (ann) {
+      const cx = x + (wIn * s) / 2;
+      const cy = yPx + (hIn * s) / 2;
+      const two = ann.secondary !== undefined && fitsText(wIn, 2);
+      ctx.parts.push(kText(cx, two ? cy - 6 : cy, ann.primary,
+        { size: TYPE.label, fill: INK.code, middle: true }));
+      if (two) {
+        ctx.parts.push(kText(cx, cy + 7, ann.secondary!,
+          { size: TYPE.code, fill: INK.code, middle: true }));
+      }
+    }
     return;
   }
 
   if (p.kind === "filler") {
-    ctx.parts.push(
-      `<rect x="${r(x)}" y="${r(yPx)}" width="${r(wIn * s)}" height="${r(hIn * s)}" fill="#e6e0d4" stroke="#333" stroke-width="1"/>`,
-    );
+    ctx.parts.push(kRect(x, yPx, wIn * s, hIn * s, PALETTE.filler));
     return;
   }
 
@@ -212,24 +222,34 @@ function drawBox(
     const body = inner.slice(inner.indexOf("<g "), inner.lastIndexOf("</g>") + 4)
       .replace(/^<g transform="translate\([^)]*\)"/, `<g transform="translate(${r(x)},${r(yPx)})"`);
     ctx.parts.push(body);
+    // 水槽柜与配套柜在脸型之外再叠一层淡色，与全局俯视图用的是同一个颜色——
+    // 客户在两张图上找同一个柜子时，认的就是这个颜色
+    if (kind === "sinkBase" || kind === "applianceCabinet") {
+      ctx.parts.push(
+        `<rect x="${r(x)}" y="${r(yPx)}" width="${r(wIn * s)}" height="${r(hIn * s)}" ` +
+        `fill="${PALETTE[kind].fill}" fill-opacity="0.45" stroke="none"/>`);
+    }
   } else {
-    ctx.parts.push(
-      `<rect x="${r(x)}" y="${r(yPx)}" width="${r(wIn * s)}" height="${r(hIn * s)}" fill="#f5f1e8" stroke="#333" stroke-width="1"/>`,
-    );
+    ctx.parts.push(kRect(x, yPx, wIn * s, hIn * s, PALETTE[kind]));
   }
 
   // 踢脚线
   if (toeKick > 0) {
     const kickY = yPx + hIn * s;
-    ctx.parts.push(
-      `<rect x="${r(x + 3 * s)}" y="${r(kickY)}" width="${r((wIn - 3) * s)}" height="${r(toeKick * s)}" fill="#d9d3c6" stroke="#333" stroke-width="0.75"/>`,
-    );
+    ctx.parts.push(kRect(x + 3 * s, kickY, (wIn - 3) * s, toeKick * s, PALETTE.toeKick));
   }
 
-  if (p.moduleCode) {
-    ctx.parts.push(
-      `<text x="${r(x + (wIn * s) / 2)}" y="${r(yPx + hIn * s + toeKick * s + 11)}" font-size="8" fill="#555" text-anchor="middle" font-family="sans-serif">${esc(p.moduleCode)}</text>`,
-    );
+  // 标注：水槽写"水槽"、配套柜写它配的是哪台家电，普通柜体写型号码。
+  // 以前一律只写 moduleCode——客户在图上找不到水槽在哪。
+  const ann = annotationFor(p);
+  if (ann) {
+    const baseY = yPx + hIn * s + toeKick * s + 11;
+    ctx.parts.push(kText(x + (wIn * s) / 2, baseY, ann.primary,
+      { size: TYPE.code, fill: INK.code }));
+    if (ann.secondary && fitsText(wIn, 2)) {
+      ctx.parts.push(kText(x + (wIn * s) / 2, baseY + 10, ann.secondary,
+        { size: TYPE.code, fill: INK.code }));
+    }
   }
 }
 
@@ -255,27 +275,39 @@ export function renderTopView(
   const { s } = ctx;
 
   // 墙线
-  ctx.parts.push(`<line x1="0" y1="0" x2="${r(run.length * s)}" y2="0" stroke="#333" stroke-width="2.5"/>`);
+  ctx.parts.push(kLine(0, 0, run.length * s, 0, PALETTE.wall.stroke, STROKE.wall));
+
+  // 墙上的特征——全局俯视图一直画着，单墙俯视图以前没有。
+  // 客户在两张图上看同一面墙，一张标了窗一张没标，就会怀疑哪张是错的。
+  for (const f of run.features) {
+    const kind = featureKindOf(f);
+    ctx.parts.push(kLine(f.offset * s, 0, (f.offset + Math.max(f.width, 2)) * s, 0,
+      PALETTE[kind].stroke, PALETTE[kind].strokeWidth));
+  }
 
   for (const p of mine) {
     const x = p.x * s;
     const w = p.width * s;
     const d = p.depth * s;
-    const fill = p.kind === "appliance" ? "#f0f0f0" : p.kind === "filler" ? "#e6e0d4" : "#f5f1e8";
-    const dash = p.kind === "appliance" ? ' stroke-dasharray="5 3"' : "";
-    ctx.parts.push(`<rect x="${r(x)}" y="0" width="${r(w)}" height="${r(d)}" fill="${fill}" stroke="#333" stroke-width="1"${dash}/>`);
+    const kind = elementKindOf(p);
+    ctx.parts.push(kRect(x, 0, w, d, PALETTE[kind]));
 
-    // 开门弧线示意（只对柜体画）
+    // 开门弧线示意（只对柜体画）。铰链在柜子左下角，门朝室内开——
+    // 与全局俯视图用的是同一个图元，弧线的样子必然一致
     if (p.kind === "cabinet" && p.width >= 9) {
       const radius = Math.min(w, d) * 0.85;
-      ctx.parts.push(
-        `<path d="M ${r(x + 1)} ${r(d)} A ${r(radius)} ${r(radius)} 0 0 0 ${r(x + 1 + radius)} ${r(d + radius)}" fill="none" stroke="#aaa" stroke-width="0.75" stroke-dasharray="3 2"/>`,
-      );
+      ctx.parts.push(swingArc({ x, y: d }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, radius));
     }
-    if (p.moduleCode) {
-      ctx.parts.push(
-        `<text x="${r(x + w / 2)}" y="${r(d / 2)}" font-size="8" fill="#555" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif">${esc(p.moduleCode)}</text>`,
-      );
+
+    const ann = annotationFor(p);
+    if (ann && fitsText(p.width, 1)) {
+      const two = ann.secondary !== undefined && fitsText(p.width, 2);
+      ctx.parts.push(kText(x + w / 2, d / 2 - (two ? 5 : 0), ann.primary,
+        { size: TYPE.code, fill: INK.code, middle: true }));
+      if (two) {
+        ctx.parts.push(kText(x + w / 2, d / 2 + 6, ann.secondary!,
+          { size: TYPE.code, fill: INK.code, middle: true }));
+      }
     }
   }
 
@@ -318,27 +350,25 @@ export function renderSideView(
 
   // 地面与墙
   ctx.parts.push(
-    `<line x1="0" y1="${r(H * s)}" x2="${r((spec.depth + 6) * s)}" y2="${r(H * s)}" stroke="#333" stroke-width="1.5"/>`,
-    `<line x1="0" y1="0" x2="0" y2="${r(H * s)}" stroke="#333" stroke-width="2.5"/>`,
+    kLine(0, H * s, (spec.depth + 6) * s, H * s, INK.ground, STROKE.ground),
+    kLine(0, 0, 0, H * s, PALETTE.wall.stroke, STROKE.wall),
   );
 
   if (section === "base" || section === "tall") {
     const boxTop = section === "base" ? HEIGHTS.baseBox : tallH;
     // 踢脚线内缩 3"（规范文档：4-1/2"H × 3"D）
     ctx.parts.push(
-      `<rect x="0" y="${r(yOf(boxTop))}" width="${r(spec.depth * s)}" height="${r((boxTop - HEIGHTS.toeKick) * s)}" fill="#f5f1e8" stroke="#333" stroke-width="1"/>`,
-      `<rect x="0" y="${r(yOf(HEIGHTS.toeKick))}" width="${r((spec.depth - 3) * s)}" height="${r(HEIGHTS.toeKick * s)}" fill="#d9d3c6" stroke="#333" stroke-width="1"/>`,
+      kRect(0, yOf(boxTop), spec.depth * s, (boxTop - HEIGHTS.toeKick) * s, PALETTE.cabinet),
+      kRect(0, yOf(HEIGHTS.toeKick), (spec.depth - 3) * s, HEIGHTS.toeKick * s, PALETTE.toeKick),
     );
     if (section === "base") {
       // 台面外延 1"（规范文档第二节）
-      ctx.parts.push(
-        `<rect x="0" y="${r(yOf(HEIGHTS.counterTop))}" width="${r((spec.depth + 1) * s)}" height="${r(HEIGHTS.counterThickness * s)}" fill="#3b3b3b"/>`,
-      );
+      ctx.parts.push(kRect(0, yOf(HEIGHTS.counterTop), (spec.depth + 1) * s,
+        HEIGHTS.counterThickness * s, PALETTE.counter));
     }
   } else {
-    ctx.parts.push(
-      `<rect x="0" y="${r(yOf(HEIGHTS.wallBaseline + wallH))}" width="${r(spec.depth * s)}" height="${r(wallH * s)}" fill="#f5f1e8" stroke="#333" stroke-width="1"/>`,
-    );
+    ctx.parts.push(kRect(0, yOf(HEIGHTS.wallBaseline + wallH), spec.depth * s,
+      wallH * s, PALETTE.cabinet));
   }
 
   if (style.showDimensions) {
