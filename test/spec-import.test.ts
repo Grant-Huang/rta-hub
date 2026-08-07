@@ -108,16 +108,53 @@ test("脸型由命名规则自动判定并计数", () => {
   assert.equal(r.bundle.modules.find((m) => m.code === "SB36")!.faceTemplateId, "F7_FALSE_FRONT_DOUBLE");
 });
 
-test("零静默失败：认不出的脸型进待确认队列，不猜", () => {
+test("零静默失败：认不出的脸型进待确认队列，不猜——但型号本身照样收下", () => {
   const r = importSpecTemplates("sv1", "co_1", {
     ...good,
     modules: "code,type,widths,heights,depths\nACME999,base,30,34.5,24\n",
     priceMatrix: "moduleCode,priceGroup,listPrice\nACME999,A,100.00\n",
   });
-  assert.equal(r.bundle.modules.length, 0, "认不出脸型的型号不应进入规格");
+
+  // 不猜：脸型留空，而不是塞一个占位值。空是"还不知道"，占位值是"我们猜了一个"，
+  // 而占位值会一路画到正视图上，谁也看不出那是猜的
+  assert.equal(r.bundle.modules.length, 1, "型号的尺寸是商家给的真实数据，不该被扔掉");
+  assert.equal(r.bundle.modules[0]!.faceTemplateId, undefined);
+  assert.deepEqual(r.bundle.modules[0]!.widthOptions, [30]);
+
   const issue = r.unresolved.find((u) => u.field === "faceTemplate");
   assert.ok(issue);
   assert.match(issue.reason, /未能按命名规则判定脸型/);
+});
+
+test("认不出脸型**不会**连累价格行报「型号未在型号表中定义」", () => {
+  // 这是把整行丢掉时的代价：商家明明定义了 ACME999，价格矩阵里每一行却都说
+  // 「未在型号表中定义」。一家命名规律与我们对不上的商家（这是常态）会看到
+  // 几十条互相矛盾的提示，根本找不到真正要改的那一件事。
+  const r = importSpecTemplates("sv1", "co_1", {
+    ...good,
+    modules: "code,type,widths,heights,depths\nACME999,base,30,34.5,24\n",
+    priceMatrix: "moduleCode,priceGroup,listPrice\nACME999,A,100.00\nACME999,B,150.00\n",
+  });
+  const bogus = r.unresolved.filter((u) => /未在型号表中定义/.test(u.reason));
+  assert.deepEqual(bogus, [], `冒出了 ${bogus.length} 条假问题`);
+  assert.equal(r.unresolved.length, 1, "真正的问题只有一条：这个柜子正面长什么样");
+  assert.equal(r.bundle.priceMatrix.length, 2, "价格行照样进来了");
+});
+
+test("认不出脸型仍然拦住发布——拦的是队列，不是丢掉那一行", () => {
+  const r = importSpecTemplates("sv1", "co_1", {
+    ...good,
+    modules: "code,type,widths,heights,depths\nACME999,base,30,34.5,24\n",
+    priceMatrix: "moduleCode,priceGroup,listPrice\nACME999,A,100.00\n",
+  });
+  const { session } = startSession("co_1", "2026-03-01T00:00:00.000Z");
+  const ingested = ingestTemplates(session, {
+    ...good,
+    modules: "code,type,widths,heights,depths\nACME999,base,30,34.5,24\n",
+    priceMatrix: "moduleCode,priceGroup,listPrice\nACME999,A,100.00\n",
+  }, "2026-03-01T00:00:00.000Z");
+  assert.ok(ingested.session.unresolved.length > 0);
+  assert.throws(() => assertPublishable(ingested.session, r.bundle), /待确认/);
 });
 
 test("公司覆盖表可救回自有命名体系", () => {
@@ -204,14 +241,79 @@ test("待确认项未清空不允许发布", () => {
   );
 });
 
+const oneUnknown = {
+  ...good,
+  modules: "code,type,widths,heights,depths\nACME999,base,30,34.5,24\n",
+  priceMatrix: "moduleCode,priceGroup,listPrice\nACME999,A,100.00\n",
+};
+
+function ingestOne() {
+  const { session } = startSession("co_1", AT);
+  return ingestTemplates(session, oneUnknown, AT);
+}
+
 test("回答追问会计入人工修正次数", () => {
+  const r = ingestOne();
+  const q = r.session.questions.find((x) => /正视图/.test(x.prompt))!;
+  const after = answerQuestion(r.session, r.bundle, q.id, { faceTemplateId: "F2_DOUBLE_DOOR" }, AT);
+  assert.equal(after.session.manualCorrections, 1);
+});
+
+test("回答**必须带值并真的落到规格上**——只把警报关掉等于没答", () => {
+  // 这是零静默失败的反面：一个看起来被处理过、实际什么也没改的待确认项，
+  // 比不提示更糟——因为没有人会再回头看它
+  const r = ingestOne();
+  const q = r.session.questions.find((x) => /正视图/.test(x.prompt))!;
+  const after = answerQuestion(r.session, r.bundle, q.id, { faceTemplateId: "F2_DOUBLE_DOOR" }, AT);
+
+  assert.equal(after.bundle.modules[0]!.faceTemplateId, "F2_DOUBLE_DOOR",
+    "答案没有落到规格上——那个柜子会带着一张空脸走到正视图上");
+  assert.equal(after.session.unresolved.some((u) => u.field === "faceTemplate"), false,
+    "答完了那一条还留在队列里");
+});
+
+test("不给值就不算答完", () => {
+  const r = ingestOne();
+  const q = r.session.questions.find((x) => /正视图/.test(x.prompt))!;
+  assert.throws(() => answerQuestion(r.session, r.bundle, q.id, {}, AT),
+    (e: unknown) => e instanceof OnboardingError && e.code === "ANSWER_MISSING_VALUE");
+});
+
+test("答不上来的题不给「算你答过了」的出口，明说要改表重导", () => {
   const { session } = startSession("co_1", AT);
   const r = ingestTemplates(session, {
     ...good,
-    modules: "code,type,widths,heights,depths\nACME999,base,30,34.5,24\n",
+    priceMatrix: "moduleCode,priceGroup,listPrice\nB30,A,面议\n",
   }, AT);
-  const after = answerQuestion(r.session, r.session.questions[0]!.id, AT);
-  assert.equal(after.manualCorrections, 1);
+  const q = r.session.questions.find((x) => /标价|listPrice/.test(x.prompt));
+  assert.ok(q, "价格解析不出来那一条应该有追问");
+  assert.throws(() => answerQuestion(r.session, r.bundle, q.id, { faceTemplateId: "F1_SINGLE_DOOR" }, AT),
+    (e: unknown) => e instanceof OnboardingError && e.code === "NOT_ANSWERABLE_INLINE");
+});
+
+test("答掉一条之后，剩下追问的索引要重新对齐", () => {
+  // 不重算的话，下一个答案会落到另一个型号身上——那种错不会报错，
+  // 只会让某个柜子悄悄换了脸
+  const { session } = startSession("co_1", AT);
+  const r = ingestTemplates(session, {
+    ...good,
+    modules: "code,type,widths,heights,depths\nACME111,base,30,34.5,24\nACME222,wall,30,30,12\n",
+    priceMatrix: "moduleCode,priceGroup,listPrice\nACME111,A,100.00\nACME222,A,90.00\n",
+  }, AT);
+
+  const faceQs = r.session.questions.filter((x) => /正视图/.test(x.prompt));
+  assert.equal(faceQs.length, 2);
+  const first = answerQuestion(r.session, r.bundle, faceQs[0]!.id, { faceTemplateId: "F2_DOUBLE_DOOR" }, AT);
+
+  // 第二条现在必须仍然指向 ACME222，而不是被错位到别的型号上
+  const second = first.session.questions.find((x) => x.id === faceQs[1]!.id)!;
+  const item = first.session.unresolved[second.unresolvedIndex]!;
+  assert.equal(item.raw, "ACME222", `索引错位了，第二条指向 ${item.raw}`);
+
+  const done = answerQuestion(first.session, first.bundle, second.id, { faceTemplateId: "F1_SINGLE_DOOR" }, AT);
+  const byCode = new Map(done.bundle.modules.map((m) => [m.code, m.faceTemplateId]));
+  assert.equal(byCode.get("ACME111"), "F2_DOUBLE_DOOR");
+  assert.equal(byCode.get("ACME222"), "F1_SINGLE_DOOR");
 });
 
 test("没有价格的型号不允许发布", () => {
