@@ -88,6 +88,8 @@ export interface SharedPreferences {
 /** 绑定到某家公司规格库的偏好——实体 id 只在该公司下有意义。 */
 export interface CompanyPreferences {
   doorStyleId?: string;
+  /** 箱体板材。与门板花色是**两个独立的维度**，见 `BoxMaterialOption`。 */
+  boxMaterialId?: string;
   hardwareOptionIds?: string[];
   accessoryOptionIds?: string[];
 }
@@ -246,8 +248,51 @@ export interface DoorStyle {
   name: string;
   /** 每种门板属于且仅属于一个价格组。 */
   priceGroupId: string;
+  /** 门板本身的材质（实木/ MDF 烤漆 / 三聚氰胺…）。**与箱体材质无关。** */
   material?: string;
   color?: string;
+}
+
+/**
+ * 箱体板材 —— 柜体那个"盒子"用什么板做的。
+ *
+ * ## 为什么它不能塞进门板花色里
+ *
+ * 客户问的是两件不同的事：「柜门长什么样」和「柜子本身用什么板」。
+ * 同一款 Shaker White 门板，配颗粒板箱体和配全夹板箱体是**两个价**，
+ * 而且差得不少（行业里全夹板升级通常在 15%~30%）。
+ *
+ * 价格矩阵是 `(型号 × 价格组)`，价格组来自门板——这条链路里没有箱体的位置。
+ * 硬把箱体塞进去，意味着价格组数量翻三倍（每种花色 × 三种板材），
+ * 而商家给的价目表根本不是那么组织的：他们给一张门板价目表，
+ * 外加一句「全夹板 +20%」。所以这里**照商家给的样子建模**：
+ * 箱体是一个作用在标价上的修饰项，与五金、配件同一口径。
+ *
+ * ## 哪些件不加价
+ *
+ * 填缝条、收口板、踢脚板、顶线、塑料地脚**没有箱体**——它们是一块板或一个
+ * 塑料件，谈不上"用什么板做盒子"。给它们乘上全夹板的加价是凭空加价，
+ * 和当初给塑料地脚编"高级花色版价格"是同一类错。判定在 `spec/carcass.ts`。
+ */
+export type BoxMaterialCode = "particleBoard" | "plywood" | "solidWood";
+
+export interface BoxMaterialOption {
+  id: string;
+  specVersionId: string;
+  companyId: string;
+  /** 归一化的板材类别。排序与文案按它走，不按商家自己的叫法。 */
+  code: BoxMaterialCode;
+  /** 商家自己的叫法，如「全夹板箱体」「Baltic Birch Plywood Box」。 */
+  name: string;
+  /**
+   * 相对**标价**的加价。基数与五金/配件一致（都是标价，不叠乘），
+   * 所以修饰项之间可交换、报价可复算。
+   */
+  priceModifier: Modifier;
+  /** 商家的基础档。客户没选时按它算，并在报价上写明按的是哪一档。 */
+  isDefault?: boolean;
+  /** 一句话说明，如「18mm 环保级颗粒板，封边 PVC」。 */
+  note?: string;
 }
 
 /**
@@ -369,7 +414,7 @@ export interface DesignLayout {
 }
 
 export interface QuoteLineModifier {
-  kind: "hardware" | "accessory" | "assembly";
+  kind: "hardware" | "accessory" | "assembly" | "boxMaterial";
   refId: string;
   name: string;
   amount: Money;
@@ -416,6 +461,14 @@ export interface Quote {
   accountTypeAtQuote: AccountType;
   doorStyleId: string;
   priceGroupId: string;
+  /**
+   * 这份报价按的是哪一档箱体板材。
+   *
+   * 是快照字段：商家事后调整加价比例，已发出的报价不能跟着变。
+   * 客户没选时记的是商家的默认档——**"没选"和"选了基础档"在报价上没有区别，
+   * 但在解释上有**，所以文字里会写明"按基础档算的"。
+   */
+  boxMaterialId?: string;
   currency: Currency;
   province: Province;
   taxRuleSnapshot: TaxRule;

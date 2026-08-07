@@ -23,6 +23,7 @@ import type {
 } from "../domain/types.js";
 import type { SpecBundle } from "../spec/bundle.js";
 import { hasRole } from "../spec/capabilities.js";
+import { sortBoxMaterials } from "../spec/carcass.js";
 import {
   APPLIANCE_LABEL, COMMON_WIDTHS, type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
@@ -30,6 +31,8 @@ import {
 export type PreferenceKey =
   | "budgetBand"
   | "doorStyle"
+  /** 箱体用什么板。与门板花色是两个独立的维度。 */
+  | "boxMaterial"
   | "assembly"
   | "storage"
   | "hardware"
@@ -197,6 +200,39 @@ export function doorStyleQuestion(bundle: SpecBundle): PreferenceQuestion | unde
     multiSelect: false,
     options,
     skippable: false,
+  };
+}
+
+/**
+ * 箱体板材那一题。
+ *
+ * 单独问，不并进门板那一题——客户问的是两件事：「柜门长什么样」和
+ * 「柜子本身用什么板」。并成一题会逼出"Shaker White + 全夹板"这种
+ * 组合选项，选项数变成花色数 × 板材数，而客户其实只想分别答一次。
+ *
+ * `why` 里要说清**差在哪**，不是只说贵多少：客户不知道夹板箱体值不值
+ * 那 18%，除非有人告诉他水槽柜下面那一格最能看出区别。
+ */
+export function boxMaterialQuestion(bundle: SpecBundle): PreferenceQuestion | undefined {
+  const materials = sortBoxMaterials(bundle.boxMaterialOptions ?? []);
+  // 只有一档就不问——问一个没得选的问题只是浪费客户一轮
+  if (materials.length < 2) return undefined;
+
+  const baseline = materials.find((m) => m.isDefault) ?? materials[0];
+  return {
+    key: "boxMaterial",
+    prompt: "柜体（箱体）想用什么板？",
+    why: "这一项和门板样式是**两回事**：门板决定看得见的样子，箱体决定柜子本身用什么板做。"
+      + "价格也分开算——同一款门配不同箱体是两个价。水槽柜下面最能看出差别。",
+    multiSelect: false,
+    options: materials.map((m) => option({
+      id: m.id,
+      label: m.name,
+      ...(m.note ? { detail: m.note } : {}),
+      priceImpact: impactOfModifier(m.priceModifier),
+      ...(baseline && m.id === baseline.id ? { recommended: true } : {}),
+    })),
+    skippable: true,
   };
 }
 
@@ -578,6 +614,7 @@ export function buildQuestionSet(input: QuestionSetInput): PreferenceQuestion[] 
   const all: (PreferenceQuestion | undefined)[] = [
     input.budget ? budgetQuestion(input.budget) : undefined,
     bundle ? doorStyleQuestion(bundle) : undefined,
+    bundle ? boxMaterialQuestion(bundle) : undefined,
     bundle ? storageQuestion(bundle) : undefined,
     bundle ? assemblyQuestion(bundle) : undefined,
     bundle
@@ -600,6 +637,7 @@ function isAnswered(key: PreferenceKey, prefs: CustomerPreferences): boolean {
   switch (key) {
     case "budgetBand": return prefs.budgetBand !== undefined;
     case "doorStyle": return prefs.doorStyleId !== undefined;
+    case "boxMaterial": return prefs.boxMaterialId !== undefined;
     case "assembly": return prefs.assembly !== undefined;
     case "storage": return prefs.storage !== undefined;
     case "hardware": return prefs.hardwareOptionIds !== undefined;
@@ -661,6 +699,12 @@ export function validatePreferences(
       throw new PreferenceError(`门板样式 ${raw.doorStyleId} 不在该公司的规格库中`);
     }
     company.doorStyleId = raw.doorStyleId;
+  }
+  if (raw.boxMaterialId !== undefined) {
+    if (!bundle?.boxMaterialOptions?.some((m) => m.id === raw.boxMaterialId)) {
+      throw new PreferenceError(`箱体板材 ${raw.boxMaterialId} 不在该公司的规格库中`);
+    }
+    company.boxMaterialId = raw.boxMaterialId;
   }
   if (raw.hardwareOptionIds !== undefined) {
     company.hardwareOptionIds = checkIds(raw.hardwareOptionIds, bundle?.hardwareOptions ?? [], "五金");

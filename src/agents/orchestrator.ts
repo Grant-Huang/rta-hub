@@ -16,6 +16,7 @@ import type { AgentContext, AgentReply, CompletionClient, DesignIntent } from ".
 import { escalationDecision, tierForTurn, type EscalationDecision } from "./model-tiers.js";
 import { ASK_STYLE_RULES } from "./quick-replies.js";
 import { recordSkipped } from "./token-meter.js";
+import { asksAboutRta, renderRtaComparison } from "../quote/rta-disclosure.js";
 
 function orchestratorSystem(profile: TradeInteractionProfile): string {
   const lines = [
@@ -24,6 +25,9 @@ function orchestratorSystem(profile: TradeInteractionProfile): string {
     "厨房尺寸与布局、风格、材质倾向、预算范围、期望工期、所在省份（省份必填，用于计算税费）。",
     "",
     "边界：",
+    "- 这个平台卖的是 **RTA 板式待组装橱柜**，不是全定制。",
+    "  尺寸只有厂家的固定档、板件平装发货需要组装、不含上门安装。",
+    "  客户把它当成定制来理解时**要当场纠正**——等到货到了再解释就是投诉了。",
     "- 你只掌握通用橱柜知识。**不要报出任何具体公司的价格或型号**。",
     "- 客户想问某家公司的具体产品时，提示他用 @公司名 点名，由那家公司的助手来答。",
     "- 需要给价格感觉时，只能说「行业典型区间」，且必须说明这不是任何公司的真实报价。",
@@ -90,6 +94,18 @@ export async function orchestratorReply(
   opts: OrchestratorOptions,
 ): Promise<AgentReply> {
   const requirements = mergeRequirements(ctx.requirements, userText);
+
+  // 「RTA 和定制有什么区别」不交给模型答。
+  //
+  // 这是**产品边界**问题，答错的代价是客户按定制的预期下单、到货才发现是
+  // 一箱板件。模型答这道题的典型失手是把差异说轻（"主要是需要自己组装"），
+  // 而恰恰是被说轻的那几条——尺寸只有固定档、不含上门安装——事后最容易
+  // 变成投诉。措辞固定在 `quote/rta-disclosure.ts`，与报价单末尾那段同源。
+  if (asksAboutRta(userText)) {
+    const content = renderRtaComparison();
+    if (!client) recordSkipped({ callSite: "orchestratorChat", prompt: userText, reply: content });
+    return { content, requirements };
+  }
 
   if (!client) {
     // 降级路径也记一笔：真实 token 是 0，但"本来会调一次、prompt 有多大"是可测的。

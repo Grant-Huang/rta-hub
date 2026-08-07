@@ -66,6 +66,7 @@ export type AuditCode =
   | "DOOR_CLEARANCE"        // 门洞旁没留出台面外伸的距离
   | "PLAN_NOTE"             // 平面连不起来却没有如实标注
   | "UNDISCLOSED_ASSUMPTION"// 推定值没有在交付物里披露
+  | "UNDISCLOSED_PRODUCT_SCOPE" // 报价单没写明这份价对应的是什么产品
   | "STAGE"                 // 这个阶段不该出这份东西
   | "UNAPPLIED_PREFERENCE"  // 客户的选择没能全部落实
   | "AESTHETICS";           // 美观分偏低
@@ -125,6 +126,12 @@ export interface AuditInput {
    * `provenance: "assumed"` 存在数据里，但客户读到的是文字。
    */
   customerFacingText?: string;
+  /**
+   * 该商家提供了几档箱体板材。
+   *
+   * 只有一档时报价单不必写明——没有可比的另一档，写了只是噪音。
+   */
+  boxMaterialCount?: number;
   /** 客户选了却没能落实的偏好（`unappliedPreferences` 的产出）。 */
   unappliedPreferences?: readonly string[];
   /** 快照复算结论（由调用方跑，因为它需要 PricingContext）。 */
@@ -282,6 +289,31 @@ export function auditDeliverable(input: AuditInput): AuditReport {
         code: "UNDISCLOSED_ASSUMPTION", rule: "SR-D1", severity: "blocking",
         message: `${label}的尺寸是按常见款推定的（${a.width}"），` +
           `但交给你的说明里没有写清这一点——按图订柜可能装不进去`,
+      });
+    }
+  }
+
+  // ── 报价单要写明这份价对应的是什么产品 ──
+  //
+  // 客户拿这张单子去跟另一家比。那一家可能报的是全定制、或者是颗粒板箱体——
+  // 不写清楚，两个数看起来就是同一件东西的两个价，而它们相差可能过半。
+  // 与 SR-D1 同一条原则：**查的是文字，不是数据字段**。
+  if (input.deliverable === "quoteList") {
+    ran("UNDISCLOSED_PRODUCT_SCOPE", "SR-D4");
+    const text = input.customerFacingText ?? "";
+    if (!/RTA/.test(text) || !/组装/.test(text)) {
+      add({
+        code: "UNDISCLOSED_PRODUCT_SCOPE", rule: "SR-D4", severity: "blocking",
+        message: "报价单上没写明这是 RTA（板件平装、需要组装、不含上门安装）——" +
+          "客户会拿它去跟全定制的报价直接比，而那两个数不可比",
+      });
+    }
+    // 商家只有一档时不必写：没有可比的另一档，写了也只是噪音
+    if (input.boxMaterialCount !== undefined && input.boxMaterialCount > 1
+        && !/箱体/.test(text)) {
+      add({
+        code: "UNDISCLOSED_PRODUCT_SCOPE", rule: "SR-D4", severity: "blocking",
+        message: "该商家有多档箱体板材，但报价单上没写明这份价按的是哪一档",
       });
     }
   }
@@ -581,7 +613,8 @@ export function codeLabel(code: AuditCode): string {
     QUOTE_RECONCILIATION: "报价逐行对账", SPEC_MISMATCH: "型号与尺寸同源",
     PRICE_SNAPSHOT: "价格快照复算", GEOMETRY: "几何自洽", INTERFERENCE: "跨墙段干涉",
     DOOR_CLEARANCE: "门洞台面净空", PLAN_NOTE: "平面拼接标注",
-    UNDISCLOSED_ASSUMPTION: "推定值披露", STAGE: "阶段匹配",
+    UNDISCLOSED_ASSUMPTION: "推定值披露",
+    UNDISCLOSED_PRODUCT_SCOPE: "产品边界披露", STAGE: "阶段匹配",
     UNAPPLIED_PREFERENCE: "偏好落实", AESTHETICS: "排布评分",
   }[code];
 }

@@ -100,6 +100,14 @@ export const secondCompanyTemplates: ImportSources = {
     "NW-F03,filler,3,34-1/2,3/4,RTA",
   ].join("\n"),
 
+  // 这一家只做两档箱体，而且叫法与第一家完全不同——归一化靠 `code`，
+  // 不靠名字（`spec/carcass.ts`）
+  boxMaterials: [
+    "code,name,upcharge,default,note",
+    "particleBoard,Standard Furniture Board,0%,yes,5/8\" 板材，标价按这一档",
+    "plywood,Northwood All-Ply,22%,,整箱 1/2\" 夹板",
+  ].join("\n"),
+
   priceMatrix: [
     "moduleCode,priceGroup,listPrice,assembledUpcharge",
     "NW-B09,STD,128.00,12%", "NW-B09,DSG,224.00,12%",

@@ -9,7 +9,7 @@
  */
 import { priceEntryFor } from "./finish.js";
 import type {
-  AccessoryOption, DoorStyle, HardwareOption, ModuleSelection, ModuleSpec,
+  AccessoryOption, BoxMaterialOption, DoorStyle, HardwareOption, ModuleSelection, ModuleSpec,
   PriceMatrixEntry, Province, TaxRule,
 } from "../domain/types.js";
 
@@ -75,6 +75,7 @@ export type ValidationCode =
   | "MODULE_NOT_IN_PUBLISHED_SPEC"
   | "DIMENSION_NOT_IN_OPTIONS"
   | "DOOR_STYLE_NOT_IN_SPEC"
+  | "BOX_MATERIAL_NOT_IN_SPEC"
   | "PRICE_MATRIX_HOLE"
   | "OPTION_NOT_IN_SPEC"
   | "OPTION_NOT_APPLICABLE"
@@ -96,6 +97,8 @@ export interface ValidationContext {
   priceMatrix: readonly PriceMatrixEntry[];
   hardwareOptions: readonly HardwareOption[];
   accessoryOptions: readonly AccessoryOption[];
+  /** 箱体板材档位。老规格版本没有这一维，缺省当作空。 */
+  boxMaterialOptions?: readonly BoxMaterialOption[];
   taxRules: readonly TaxRule[];
 }
 
@@ -121,8 +124,24 @@ export function validateSelections(
   doorStyleId: string,
   province: Province,
   at: string,
+  boxMaterialId?: string,
 ): ValidationResult {
   const issues: ValidationIssue[] = [];
+
+  // 箱体板材：客户明确选了一档，那一档就必须属于这家公司的这一版规格。
+  // 与门板同样的口径——放行一个不存在的 id，定价那边会当场抛，
+  // 而客户看到的只是一句"报价校验未通过"。
+  if (boxMaterialId !== undefined) {
+    const box = (ctx.boxMaterialOptions ?? []).find(
+      (o) => o.id === boxMaterialId
+        && o.specVersionId === ctx.specVersionId && o.companyId === ctx.companyId);
+    if (!box) {
+      issues.push({
+        code: "BOX_MATERIAL_NOT_IN_SPEC",
+        message: `箱体板材 ${boxMaterialId} 不属于该公司当前发布的规格版本`,
+      });
+    }
+  }
 
   if (selections.length === 0) {
     issues.push({ code: "EMPTY_SELECTION", message: "报价至少需要一个型号" });

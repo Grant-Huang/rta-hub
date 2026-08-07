@@ -43,7 +43,8 @@ import { buildQuoteEmail, deIdentifySignal, resolveSenderIdentity, sendEmail } f
 import { buildHtmlQuoteEmail } from "./email/html-quote.js";
 import { buildComparison, renderComparisonHtml, renderComparisonText } from "./quote/comparison.js";
 import {
-  addFeature, addWallRun, createFloorPlan, pendingQuestions, resolveCeilingHeight, resolveItem,
+  addFeature, addWallRun, createFloorPlanWithOutcome, extractionNote,
+  pendingQuestions, resolveCeilingHeight, resolveItem,
   resolveWallLength,
 } from "./floorplan/parse.js";
 import { isLayoutReady, type WallFeature } from "./floorplan/types.js";
@@ -82,6 +83,8 @@ import { renderPlanViews } from "./render/plan-view.js";
 import { buildBom, bomToSelections } from "./layout/bom.js";
 import { buildQuoteList, renderQuoteListHtml, renderQuoteListText } from "./quote/line-items.js";
 import { compareFinishes, renderFinishComparison } from "./quote/finish-comparison.js";
+import { RTA_INTRO, RTA_QUOTE_NOTE } from "./quote/rta-disclosure.js";
+import { BOX_MATERIAL_LABEL_EN } from "./spec/carcass.js";
 import {
   applyPreferencesToSelections, buildApplianceQuestions, buildQuestionSet, drawerBiasFor,
   PreferenceError, resolvePreferences, unappliedPreferences, validatePreferences,
@@ -770,15 +773,18 @@ app.post("/api/quotes", requireAccount, async (c) => {
   const account = c.get("account");
   const body = await jsonBody<{
     companyId: string; conversationId: string; doorStyleId: string;
-    selections: unknown; designLayoutId: string;
+    boxMaterialId: string; selections: unknown; designLayoutId: string;
   }>(c);
 
   const company = body.companyId ? appCtx.repos.companies.byId(body.companyId) : undefined;
   if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
   const conv = ownedConversation(c, body.conversationId ?? "");
   if (!conv) return c.json({ error: "会话不存在" }, 404);
-  // 客户在选择题里选过门板就直接用，不必再传一遍
-  const doorStyleId = body.doorStyleId || prefsFor(conv, company.id).doorStyleId;
+  // 客户在选择题里选过门板/箱体就直接用，不必再传一遍
+  const prefs = prefsFor(conv, company.id);
+  const doorStyleId = body.doorStyleId || prefs.doorStyleId;
+  // 箱体板材没选就传空——定价那边按商家的默认档算，并把用的是哪一档记进快照
+  const boxMaterialId = body.boxMaterialId || prefs.boxMaterialId;
   if (!doorStyleId) return c.json({ error: "必须选择门板样式（决定价格组）" }, 400);
 
   const pricing = pricingContextFor(appCtx, company.id);
@@ -812,6 +818,7 @@ app.post("/api/quotes", requireAccount, async (c) => {
     accountType,
     province: account.province,
     doorStyleId,
+    ...(boxMaterialId ? { boxMaterialId } : {}),
     at: now(),
   });
 
@@ -828,6 +835,7 @@ app.post("/api/quotes", requireAccount, async (c) => {
     quote: result.quote,
     modules: pricing.modules,
     doorStyles: pricing.doorStyles,
+    ...(pricing.boxMaterialOptions ? { boxMaterials: pricing.boxMaterialOptions } : {}),
     ...(bom ? { bomLines: bom.lines } : {}),
   });
 
@@ -848,6 +856,9 @@ app.post("/api/quotes", requireAccount, async (c) => {
       accessoryOptionIds: l.modifiers.filter((m) => m.kind === "accessory").map((m) => m.refId),
     })),
     currentDoorStyleId: doorStyleId,
+    // 比价必须按**这份报价实际用的箱体档**重算。按默认档算出来的差价，
+    // 客户真去换花色时拿不到——那正是这个模块最忌讳的那种不一致。
+    ...(result.quote.boxMaterialId ? { boxMaterialId: result.quote.boxMaterialId } : {}),
     accountType,
     province: account.province,
     at: now(),
@@ -862,10 +873,15 @@ app.post("/api/quotes", requireAccount, async (c) => {
   // 推定的家电尺寸要**跟着报价一起走**，不能只写在图纸说明里：报价单是客户
   // 拿去下单的那一份，而"烤箱位按 30" 推定"正是决定柜子装不装得进去的那句话。
   // 用的是与图纸说明同一句措辞（`provenanceNote`），两处不各写一版。
+  // `RTA_QUOTE_NOTE` 是签字之前的最后一次提醒：这份价对的是**板件平装、
+  // 需要组装、不含安装**的 RTA，不是全定制。客户会拿这张单子去跟定制的
+  // 报价比——那两个数不可比，而不可比这件事必须写在单子上，不能只在开场
+  // 说过一次。
   const listText = [
     renderQuoteListText(list),
     renderFinishComparison(finishes, format),
     activePlan?.appliances?.length ? provenanceNote(activePlan.appliances) : undefined,
+    RTA_QUOTE_NOTE,
   ].filter(Boolean).join("\n\n");
   const audit = auditDeliverable({
     deliverable: "quoteList",
@@ -879,6 +895,9 @@ app.post("/api/quotes", requireAccount, async (c) => {
     ...(activePlan?.appliances?.length ? { appliances: activePlan.appliances } : {}),
     snapshot: verifySnapshot(result.quote, pricing, now()),
     customerFacingText: listText,
+    // 有多档才要求写明按的是哪一档；只有一档时没有可比的另一档，写了只是噪音
+    ...(pricing.boxMaterialOptions
+      ? { boxMaterialCount: pricing.boxMaterialOptions.length } : {}),
   });
   if (!audit.ok) {
     // 拦下来，并**说清楚拦的是什么**——「报价校验未通过」对客户毫无用处
@@ -1065,7 +1084,7 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
   if (!conv) return c.json({ error: "会话不存在" }, 404);
   const body = await jsonBody<{ fileName: string; mimeType: string; sizeBytes: number; image: string }>(c);
 
-  const plan = await createFloorPlan(
+  const { plan, extraction } = await createFloorPlanWithOutcome(
     {
       conversationId: conv.id,
       file: {
@@ -1084,6 +1103,9 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     ready: isLayoutReady(plan),
     // 完整性优先：拿不准的地方逐条追问，不静默跳过（FR-3）
     questions: pendingQuestions(plan),
+    // 视觉抽取走没走、为什么没读出东西——四种情况看起来一样，要做的事完全不同
+    extraction,
+    ...(extractionNote(extraction) ? { extractionNote: extractionNote(extraction) } : {}),
   }, 201);
 });
 
@@ -1721,6 +1743,9 @@ app.get("/api/me/profile", requireAccount, (c) => {
     /** 定价实际按哪种账号走——与 accountType 可能不同，如实告知。 */
     effectiveAccountType: effective,
     interaction: interactionProfile(effective),
+    // 界面开场白里那一段"这里卖的是 RTA"。措辞从服务端来，与助手在对话里说的、
+    // 与报价单末尾写的是**同一份**——三处各写一版，迟早有一处说得比另两处松。
+    rtaIntro: RTA_INTRO,
     tradePricing: gate,
     verification: verification
       ? { status: verification.status, submittedAt: verification.submittedAt,
@@ -1985,6 +2010,7 @@ function renderQuotePdf(
   const sender = resolveSenderIdentity();
   const style = renderStyleFor(appCtx, q.companyId);
   const doorStyle = bundle?.doorStyles.find((d) => d.id === q.doorStyleId);
+  const boxMaterial = bundle?.boxMaterialOptions?.find((m) => m.id === q.boxMaterialId);
 
   return buildQuotePdf({
     quote: q,
@@ -1993,6 +2019,9 @@ function renderQuotePdf(
     customerEmail: account.email,
     province: q.province,
     doorStyleName: doorStyle?.name ?? q.doorStyleId,
+    // PDF 是英文文档、用的是只覆盖 Latin-1 的 base-14 字体：印商家的中文名
+    // 会变成一串 `?`。印归一化类别的英文名——商家叫法各异，`code` 是同一个。
+    ...(boxMaterial ? { boxMaterialName: BOX_MATERIAL_LABEL_EN[boxMaterial.code] } : {}),
     runs: plan.parsedGeometry.wallRuns.map((run) => ({
       run,
       placements: layout.placements.filter((p) => p.wallRunId === run.id),

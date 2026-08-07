@@ -41,7 +41,7 @@ export type SanityRuleId =
   // 报价
   | "SR-Q1" | "SR-Q2"
   // 披露与阶段
-  | "SR-D1" | "SR-D2" | "SR-D3"
+  | "SR-D1" | "SR-D2" | "SR-D3" | "SR-D4"
   // 图纸
   | "SR-V1" | "SR-V2" | "SR-V3" | "SR-V4";
 
@@ -229,6 +229,15 @@ export const SANITY_RULES: readonly SanityRule[] = [
     criterion: "交付物种类必须在当前 DesignStage 允许的清单里。",
     why: "客户还没看过全局排布就拿到报价单，等于跳过了他确认的那一步。",
     enforcedBy: "audit", implementedIn: "delivery/audit.ts STAGE",
+  },
+  {
+    id: "SR-D4", title: "报价单要写明这份价对应的是什么产品", severity: "blocking",
+    criterion: "报价清单文字里必须写明：(1) 这是 RTA（板件平装、需要组装、不含安装）；"
+      + "(2) 按的是哪一档箱体板材（商家给了多于一档时）。",
+    why: "客户拿这张单子去跟另一家比。那一家可能报的是全定制、或者是颗粒板箱体——"
+      + "不写清楚，两个数看起来就是同一件东西的两个价，而它们相差可能过半。"
+      + "这不是「客户没问」的问题：他不知道有这两个维度存在，所以问不出来。",
+    enforcedBy: "audit", implementedIn: "delivery/audit.ts UNDISCLOSED_PRODUCT_SCOPE",
   },
 
   // ── 图纸 ─────────────────────────────────────────────────────────────

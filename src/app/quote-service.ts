@@ -29,6 +29,8 @@ export interface QuoteDraftInput {
   accountType: AccountType;
   province: Province;
   doorStyleId: string;
+  /** 箱体板材。不给就按商家的默认档，报价快照里记的也是那一档。 */
+  boxMaterialId?: string;
   /** 报价有效期（天）。 */
   validForDays?: number;
   at: string;
@@ -78,9 +80,10 @@ export function createQuoteDraft(
       priceMatrix: ctx.priceMatrix,
       hardwareOptions: ctx.hardwareOptions,
       accessoryOptions: ctx.accessoryOptions,
+      ...(ctx.boxMaterialOptions ? { boxMaterialOptions: ctx.boxMaterialOptions } : {}),
       taxRules: ctx.taxRules,
     },
-    selections, input.doorStyleId, input.province, input.at,
+    selections, input.doorStyleId, input.province, input.at, input.boxMaterialId,
   );
 
   if (!validation.ok) {
@@ -96,6 +99,7 @@ export function createQuoteDraft(
   // 步骤 2：定价（纯代码，与 LLM 无关）
   const bd = computePrice(ctx, {
     selections, doorStyleId: input.doorStyleId,
+    ...(input.boxMaterialId ? { boxMaterialId: input.boxMaterialId } : {}),
     accountType: input.accountType, province: input.province, at: input.at,
   });
 
@@ -116,6 +120,9 @@ export function createQuoteDraft(
     accountTypeAtQuote: input.accountType,
     doorStyleId: input.doorStyleId,
     priceGroupId: bd.priceGroupId,
+    // 记的是**实际用的那一档**，不是客户传进来的那个字段：客户没选时
+    // 两者不同，而报价单要说清按的是哪一档
+    ...(bd.boxMaterial ? { boxMaterialId: bd.boxMaterial.id } : {}),
     currency: "CAD",
     province: input.province,
     taxRuleSnapshot: taxRule,

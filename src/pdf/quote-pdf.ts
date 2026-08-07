@@ -47,6 +47,11 @@ export interface QuotePdfInput {
   customerEmail: string;
   province: string;
   doorStyleName: string;
+  /**
+   * 箱体板材名。PDF 是客户拿去下单、拿去比价的那一份，
+   * 「同一款门配什么箱体」必须写在抬头上——不写，两家的价看起来就是可比的。
+   */
+  boxMaterialName?: string;
   /** 每段墙的几何与摆放，用于画立面图。 */
   runs: { run: WallRun; placements: readonly Placement[] }[];
   senderName: string;
@@ -101,6 +106,8 @@ function buildSummaryPage(input: QuotePdfInput): PdfPage {
     ["From", `${input.customerName} <${input.customerEmail}>`],
     ["Province", input.province],
     ["Door style", input.doorStyleName],
+    ...(input.boxMaterialName
+      ? [["Box material", input.boxMaterialName] as [string, string]] : []),
   ];
   const dates: [string, string][] = [
     ["Issued", q.createdAt.slice(0, 10)],

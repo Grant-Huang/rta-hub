@@ -203,31 +203,89 @@ export interface CreateFloorPlanInput {
  * 没有视觉模型时（`extractor` 为 undefined）返回一个**空几何 + 手动录入提示**，
  * 而不是编一个户型出来——这与 FR-2 的零静默失败是同一条原则。
  */
+/**
+ * 这次上传，视觉抽取到底走没走、结果如何。
+ *
+ * **必须报出来。** 三种"没读出东西"看起来一模一样，但要做的事完全不同：
+ * 没配模型（去配）、没收到图（前端没传，是 bug）、模型报错（去看端点）。
+ * 都退化成一句"请手动录入尺寸"，配错了的人永远不知道自己配错了——
+ * 这正是这一轮测试里「视觉模型尚未测试」卡住的地方。
+ */
+export type ExtractionOutcome =
+  | { status: "ok" }
+  | { status: "notConfigured" }
+  | { status: "noImage" }
+  | { status: "failed"; reason: string }
+  | { status: "emptyResult" };
+
+export interface CreateFloorPlanResult {
+  plan: FloorPlan;
+  extraction: ExtractionOutcome;
+}
+
 export async function createFloorPlan(
   input: CreateFloorPlanInput,
   image: string | undefined,
   extractor: VisionExtractor | undefined,
 ): Promise<FloorPlan> {
+  return (await createFloorPlanWithOutcome(input, image, extractor)).plan;
+}
+
+export async function createFloorPlanWithOutcome(
+  input: CreateFloorPlanInput,
+  image: string | undefined,
+  extractor: VisionExtractor | undefined,
+): Promise<CreateFloorPlanResult> {
   let raw: RawExtraction | undefined;
+  let extraction: ExtractionOutcome =
+    !extractor ? { status: "notConfigured" }
+      : !image ? { status: "noImage" }
+        : { status: "emptyResult" };
+
   if (extractor && image) {
     try {
       raw = await extractor.extract({ image, mimeType: input.file.mimeType });
-    } catch {
+      extraction = raw ? { status: "ok" } : { status: "emptyResult" };
+    } catch (err) {
+      // 抽取失败不该让上传失败——手动录入这条路一直是通的（FR-3 的降级设计）。
+      // 但**失败的原因要说出来**，否则配错端点的人只会看到"请手动录入"。
       raw = undefined;
+      extraction = { status: "failed", reason: err instanceof Error ? err.message : String(err) };
     }
   }
 
   const { geometry, unresolved } = normalizeExtraction(raw);
   return {
-    id: newId("fp"),
-    conversationId: input.conversationId,
-    sourceFile: input.file,
-    parsedGeometry: geometry,
-    parseConfidence: geometry.confidence,
-    unresolvedItems: unresolved,
-    createdAt: input.at,
-    updatedAt: input.at,
+    plan: {
+      id: newId("fp"),
+      conversationId: input.conversationId,
+      sourceFile: input.file,
+      parsedGeometry: geometry,
+      parseConfidence: geometry.confidence,
+      unresolvedItems: unresolved,
+      createdAt: input.at,
+      updatedAt: input.at,
+    },
+    extraction,
   };
+}
+
+/** 把抽取结果翻成一句给客户看的话。 */
+export function extractionNote(outcome: ExtractionOutcome): string | undefined {
+  switch (outcome.status) {
+    case "ok": return undefined;
+    case "notConfigured":
+      return "没有配置视觉模型，这张图我读不了——下面一段墙一段墙地填尺寸就行。";
+    case "noImage":
+      return "只收到了文件信息、没收到图片内容，所以没能识别。" +
+        "（这多半是上传环节的问题，可以先手动录入尺寸继续。）";
+    case "emptyResult":
+      return "视觉模型没能从这张图里读出可用的尺寸——图纸太模糊或标注不清时会这样。" +
+        "下面手动填一下就行，手填的数比猜的准。";
+    case "failed":
+      return `视觉识别没跑成功（${outcome.reason}）。先手动录入尺寸继续，` +
+        "这条路一直是通的；识别的问题请检查视觉模型端点配置。";
+  }
 }
 
 /** 手动录入/修正一段墙的长度，同时消解对应的待确认项。 */

@@ -6,8 +6,8 @@
  */
 import { fromDollars } from "../domain/money.js";
 import type {
-  AccessoryOption, CabinetCompany, CustomerAccount, DiscountRule, DoorStyle,
-  GenericCatalog, HardwareOption, ModuleSpec, PriceGroup, PriceMatrixEntry,
+  AccessoryOption, BoxMaterialOption, CabinetCompany, CustomerAccount, DiscountRule,
+  DoorStyle, GenericCatalog, HardwareOption, ModuleSpec, PriceGroup, PriceMatrixEntry,
   ProductSpecVersion, ShippingRule,
 } from "../domain/types.js";
 import { matchFaceTemplate } from "../render/templates.js";
@@ -230,6 +230,36 @@ export const pilotAccessories: AccessoryOption[] = [
     ...base, id: "ac_lazy_susan", name: "360° 转盘",
     priceModifier: { kind: "flat", value: fromDollars("95.00") },
     appliesToModuleIds: ["m_lsb33"],
+  },
+];
+
+/**
+ * 箱体板材 —— 三档，与门板花色**互不相干**。
+ *
+ * 这三档是加拿大 RTA 市场上真实存在的分法：
+ *   - 颗粒板（particle board / furniture board）：基础档，绝大多数标价针对它；
+ *   - 全夹板（all-plywood box）：最常见的升级项，行业里普遍报 +15%~+25%；
+ *   - 实木箱体：小众，多数商家不做；这一家做，用来验证三档都跑得通。
+ *
+ * 加价是**百分比**而不是每柜定额：夹板贵在板材面积上，一个 36" 的柜子
+ * 比 12" 的多用三倍板，按柜收同样的钱对两边都不对。
+ */
+export const pilotBoxMaterials: BoxMaterialOption[] = [
+  {
+    ...base, id: "bm_particle", code: "particleBoard", name: "颗粒板箱体",
+    priceModifier: { kind: "percent", value: 0 },
+    isDefault: true,
+    note: "5/8\" 环保级颗粒板，PVC 封边。标价默认按这一档。",
+  },
+  {
+    ...base, id: "bm_plywood", code: "plywood", name: "全夹板箱体",
+    priceModifier: { kind: "percent", value: 18 },
+    note: "1/2\" 夹板箱体 + 3/4\" 夹板层板。更抗潮、螺丝咬合更牢，水槽柜下方尤其明显。",
+  },
+  {
+    ...base, id: "bm_solid", code: "solidWood", name: "实木箱体",
+    priceModifier: { kind: "percent", value: 42 },
+    note: "箱体侧板为实木拼板。重量与价格都明显上去，多数厨房用不到这一档。",
   },
 ];
 

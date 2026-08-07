@@ -15,8 +15,10 @@
  */
 import { fromDollars, type Money } from "../domain/money.js";
 import type {
-  DoorStyle, ModuleSpec, ModuleType, PriceGroup, PriceMatrixEntry,
+  BoxMaterialCode, DoorStyle, ModuleSpec, ModuleType, Modifier,
+  PriceGroup, PriceMatrixEntry,
 } from "../domain/types.js";
+import { sortBoxMaterials } from "./carcass.js";
 import { parseCsvRows, parseNumberList, type CsvRow } from "./csv.js";
 import { matchWithOverrides, type CompanyOverrides } from "../render/templates.js";
 import { emptyBundle, type SpecBundle } from "./bundle.js";
@@ -26,6 +28,14 @@ export interface ImportSources {
   priceGroups: string;
   doorStyles: string;
   priceMatrix: string;
+  /**
+   * 箱体板材档位（可选表）。
+   *
+   * **可选，但必须能从这个口子进来**：接不进来，真实商家就没有任何办法声明
+   * 「我家的柜体可以升级全夹板」——而那是 RTA 市场上最常见的一个升级项。
+   * 不给这张表的商家照旧只有一档，报价与从前逐分一致。
+   */
+  boxMaterials?: string;
 }
 
 /** 待确认项 —— 必须由人处理后才能发布。 */
@@ -136,6 +146,51 @@ export function importSpecTemplates(
     bundle.doorStyles.push(ds);
   });
 
+  // ── 箱体板材 ────────────────────────────────────────────────────────────
+  //
+  // 与门板是两个独立的维度：门板决定价格组，箱体是作用在标价上的修饰项。
+  // 商家给的价目表本来就是这么组织的——一张门板价目表 + 一句「全夹板 +20%」。
+  const bmRows = parseCsvRows(sources.boxMaterials ?? "");
+  bmRows.forEach((row, i) => {
+    const rowNumber = i + 2;
+    const name = pick(row, "name", "boxMaterial", "material");
+    const codeRaw = pick(row, "code", "kind", "type");
+    const code = BOX_MATERIAL_CODES.find((c) => c.toLowerCase() === codeRaw.toLowerCase().replace(/[\s_-]/g, ""));
+    if (!name) {
+      unresolved.push({ sheet: "boxMaterials", rowNumber, field: "name", reason: "缺少板材名称" });
+      return;
+    }
+    if (!code) {
+      // **不猜**。猜错的后果是排序反了、英文 PDF 上印错类别，
+      // 而这两处客户都会拿去跟别家比。
+      unresolved.push({
+        sheet: "boxMaterials", rowNumber, field: "code",
+        reason: codeRaw
+          ? `无法识别的板材类别 "${codeRaw}"（应为 particleBoard / plywood / solidWood）`
+          : "缺少板材类别", raw: codeRaw,
+      });
+      return;
+    }
+    const upcharge = parseModifier(pick(row, "upcharge", "priceModifier", "premium"));
+    if (!upcharge) {
+      unresolved.push({
+        sheet: "boxMaterials", rowNumber, field: "upcharge",
+        reason: "加价无法解析（写成 18% 或 120.00）", raw: pick(row, "upcharge"),
+      });
+      return;
+    }
+    bundle.boxMaterialOptions.push({
+      ...base, id: `bm_${slug(name)}`, code, name, priceModifier: upcharge,
+      ...(truthy(pick(row, "default", "isDefault")) ? { isDefault: true } : {}),
+      ...(pick(row, "note") ? { note: pick(row, "note") } : {}),
+    });
+  });
+  // 一档都没标默认时，最便宜的那一档当默认——标价本来就是针对它给的
+  if (bundle.boxMaterialOptions.length > 0
+      && !bundle.boxMaterialOptions.some((m) => m.isDefault)) {
+    sortBoxMaterials(bundle.boxMaterialOptions)[0]!.isDefault = true;
+  }
+
   // ── 型号 ────────────────────────────────────────────────────────────────
   const modRows = parseCsvRows(sources.modules);
   const modByCode = new Map<string, ModuleSpec>();
@@ -245,29 +300,13 @@ export function importSpecTemplates(
     }
 
     const upchargeRaw = pick(row, "assembledUpcharge", "assemblyUpcharge");
-    let assembledUpcharge: PriceMatrixEntry["assembledUpcharge"];
-    if (upchargeRaw) {
-      if (upchargeRaw.endsWith("%")) {
-        const pct = Number(upchargeRaw.slice(0, -1));
-        if (!Number.isFinite(pct)) {
-          unresolved.push({
-            sheet: "priceMatrix", rowNumber, field: "assembledUpcharge",
-            reason: `无法解析组装加价 "${upchargeRaw}"`, raw: upchargeRaw,
-          });
-          return;
-        }
-        assembledUpcharge = { kind: "percent", value: pct };
-      } else {
-        const flat = parseMoney(upchargeRaw);
-        if (flat === undefined) {
-          unresolved.push({
-            sheet: "priceMatrix", rowNumber, field: "assembledUpcharge",
-            reason: `无法解析组装加价 "${upchargeRaw}"`, raw: upchargeRaw,
-          });
-          return;
-        }
-        assembledUpcharge = { kind: "flat", value: flat };
-      }
+    const assembledUpcharge: PriceMatrixEntry["assembledUpcharge"] = parseModifier(upchargeRaw);
+    if (upchargeRaw && !assembledUpcharge) {
+      unresolved.push({
+        sheet: "priceMatrix", rowNumber, field: "assembledUpcharge",
+        reason: `无法解析组装加价 "${upchargeRaw}"`, raw: upchargeRaw,
+      });
+      return;
     }
 
     bundle.priceMatrix.push({
@@ -292,6 +331,29 @@ export function importSpecTemplates(
   };
 }
 
+const BOX_MATERIAL_CODES: BoxMaterialCode[] = ["particleBoard", "plywood", "solidWood"];
+
+/**
+ * 「18%」或「120.00」→ 修饰项。
+ *
+ * 组装加价与箱体加价用的是**同一种写法**，所以也共用同一个解析器——
+ * 两处各写一遍，迟早出现"这张表接受 18%，那张表不接受"。
+ */
+function parseModifier(raw: string): Modifier | undefined {
+  if (!raw) return undefined;
+  if (raw.endsWith("%")) {
+    const pct = Number(raw.slice(0, -1));
+    return Number.isFinite(pct) ? { kind: "percent", value: pct } : undefined;
+  }
+  const flat = parseMoney(raw);
+  return flat === undefined ? undefined : { kind: "flat", value: flat };
+}
+
+/** CSV 里的"是"。空白视为否。 */
+function truthy(raw: string): boolean {
+  return /^(y|yes|true|1|是|默认)$/i.test(raw.trim());
+}
+
 function slug(s: string): string {
   return s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 }
@@ -303,5 +365,8 @@ export function blankTemplates(): ImportSources {
     doorStyles: "name,priceGroup,material,color\nShaker White,A,Maple,White\nMaple Glaze,B,Maple,Antique Glaze\n",
     modules: "code,type,widths,heights,depths,assembly,faceTemplate\nB30,base,30,34-1/2,24,RTA|assembled,\nW3030,wall,30,30|36|42,12,RTA,\n",
     priceMatrix: "moduleCode,priceGroup,listPrice,tradePrice,assembledUpcharge\nB30,A,245.50,,15%\nB30,B,398.75,,15%\n",
+    boxMaterials: "code,name,upcharge,default,note\n" +
+      "particleBoard,Particle board box,0%,yes,标价默认按这一档\n" +
+      "plywood,All-plywood box,18%,,1/2\" 夹板箱体\n",
   };
 }
