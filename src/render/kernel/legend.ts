@@ -12,10 +12,25 @@ import { esc, r, styleAttrs } from "./primitives.js";
 /** 图例条目的顺序：柜体类在前，家电与墙面特征在后。图上找东西的顺序。 */
 const ORDER: ElementKind[] = [
   "cabinet", "sinkBase", "applianceCabinet", "filler", "panel", "toeKick",
-  "counter", "appliance",
+  "counter", "counterEdge", "appliance",
   "featureWindow", "featurePlumbing", "featureGas", "featureElectrical",
   "featureDoor", "featureObstruction", "wall",
 ];
+
+/**
+ * 按 `ORDER` 排序，**没列在 ORDER 里的排到最后而不是丢掉**。
+ *
+ * 以前这里是 `ORDER.filter(...)`：`ORDER` 漏了哪个种类，那个种类就从图例里
+ * 静默消失——图上画着一个客户不认识的颜色，而没有任何地方报错。新增
+ * `counterEdge` 时正好踩到，这是加一个枚举值就会重犯的错。
+ */
+function ordered(kinds: readonly ElementKind[]): ElementKind[] {
+  const rank = (k: ElementKind) => {
+    const i = ORDER.indexOf(k);
+    return i < 0 ? ORDER.length : i;
+  };
+  return [...new Set(kinds)].sort((a, b) => rank(a) - rank(b));
+}
 
 const SWATCH = 11;
 const ROW = 16;
@@ -38,7 +53,7 @@ export function renderLegend(
   y: number,
   columns = 1,
 ): LegendBox {
-  const shown = ORDER.filter((k) => kinds.includes(k));
+  const shown = ordered(kinds);
   if (shown.length === 0) return { svg: "", width: 0, height: 0 };
 
   const rows = Math.ceil(shown.length / columns);

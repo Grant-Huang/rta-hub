@@ -23,6 +23,10 @@ export interface ScenarioWall {
   label: string;
   length: number;
   features: { kind: "window" | "plumbing" | "gas" | "electrical" | "door"; offset: number; width: number }[];
+  /** 岛台。不接任何墙，四周都是过道——过道净空由排布器判。 */
+  kind?: "wall" | "island";
+  /** 岛台进深（英寸）。单排柜约 25"。 */
+  depth?: number;
 }
 
 export interface Scenario {
@@ -299,7 +303,7 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
     },
     {
       id: "B", name: "独立屋 · L 型 · 高层高", shape: "L 型",
-      covers: "两段墙、108 英寸层高（吊柜档位不同）、多轮改排布、口语化的风格描述",
+      covers: "两段墙、内墙角让位、108 英寸层高（吊柜档位不同）、多轮改排布、口语化的风格描述",
       accountType: "consumer",
       turns: [
         "我们家厨房要整个翻新",
@@ -316,7 +320,10 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
             { kind: "plumbing", offset: 72, width: 24 },
           ],
         },
-        { label: "东墙", length: 102, features: [{ kind: "gas", offset: 30, width: 30 }] },
+        // 燃气位 54"：内墙角那一头有 27" 归北墙的柜子（相邻段进深 + 转角填缝条），
+        // 燃气再往墙角靠的话，灶具左侧就留不出放热锅的落台区——这不是凑数字，
+        // 是把「墙角要让位」这件事算进了户型本身
+        { label: "东墙", length: 102, features: [{ kind: "gas", offset: 54, width: 30 }] },
       ],
       prefs: {
         budgetBand: "standard", doorStyleId: d(1), storage: "drawers", assembly: "RTA",
@@ -332,11 +339,11 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
     },
     {
       id: "C", name: "建商项目 · U 型 · 组装好发货", shape: "U 型",
-      covers: "三段墙、trade 账号（未核实→按零售价）、assembled（吊柜不提供）、premium 档",
+      covers: "三段墙、两个内墙角（转角柜 + 让位）、trade 账号（未核实→按零售价）、assembled（吊柜不提供）、premium 档",
       accountType: "trade",
       turns: [
         "装修公司，手上一个改造项目",
-        "U 型，三面墙 11 尺、9 尺、11 尺",
+        "U 型，三面墙都是 11 尺",
         "业主要深色门板，五金要好的",
         "柜子要组装好送过来，工期紧",
       ],
@@ -344,10 +351,14 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
       walls: [
         { label: "西墙", length: 132, features: [{ kind: "electrical", offset: 0, width: 36 }] },
         {
-          label: "北墙", length: 108,
+          // U 型的三面墙一样长。中间这面两头各有一个内墙角，各让 27" 出去，
+          // 剩 78" 才够摆「水槽 + 两侧工作台面」（36 + 24 + 18）。
+          // 原来这里写的是 108"，让位算进去后只剩 54"——排出来的方案会被
+          // 系统自己的 NKBA 检查判为不合格，那是户型本身的问题，不是排布的问题。
+          label: "北墙", length: 132,
           features: [
-            { kind: "window", offset: 36, width: 36 },
-            { kind: "plumbing", offset: 42, width: 24 },
+            { kind: "window", offset: 48, width: 36 },
+            { kind: "plumbing", offset: 54, width: 24 },
           ],
         },
         { label: "东墙", length: 132, features: [] },
@@ -379,6 +390,37 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
         { note: "门板换个样式看看", changes: { doorStyleId: d(1) } },
         { note: "锅碗瓢盆多，抽屉柜能不能多排一些", changes: { storage: "drawers" } },
         { note: "这个位置我总觉得怪怪的", changes: {} },
+      ],
+    },
+    {
+      id: "E", name: "开放式厨房 · L 型 + 岛台", shape: "L 型 + 岛台",
+      covers: "岛台：不靠墙的一列柜子、四周过道净空（NKBA 42\"）、岛台不生成吊柜层",
+      accountType: "consumer",
+      turns: [
+        "开放式厨房，中间想加个岛台",
+        "L 型，长边十四尺，短边十尺，岛台想做七尺",
+        "岛台那边平时也当早餐台用",
+      ],
+      ceilingHeight: 96,
+      walls: [
+        {
+          label: "北墙", length: 168,
+          features: [
+            { kind: "window", offset: 72, width: 36 },
+            { kind: "plumbing", offset: 78, width: 24 },
+          ],
+        },
+        { label: "西墙", length: 120, features: [{ kind: "gas", offset: 60, width: 30 }] },
+        // 岛台：84" 长、25" 深（单排柜 + 背板收口）。它和两面墙之间的过道
+        // 要 ≥42"，摆不下的话排布器会阻断——这正是「把墙连起来才看得见」的那类问题
+        { label: "岛台", length: 84, depth: 25, kind: "island", features: [] },
+      ],
+      prefs: {
+        budgetBand: "standard", doorStyleId: d(0), storage: "balanced", assembly: "RTA",
+        tradeoff: "lookAndFeel",
+      },
+      revisions: [
+        { note: "岛台这边多做点抽屉", changes: { storage: "drawers" } },
       ],
     },
   ];

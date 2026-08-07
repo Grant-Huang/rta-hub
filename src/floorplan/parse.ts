@@ -268,23 +268,55 @@ export function resolveItem(plan: FloorPlan, itemId: string, at: string): FloorP
   };
 }
 
-/** 手动添加一段墙（完全没识别出来时的兜底路径）。 */
+/**
+ * 手动添加一段墙（完全没识别出来时的兜底路径）。
+ *
+ * **默认与上一段相接。** 人一段一段报自己家厨房的墙时，报的是一圈连着的墙：
+ * 「U 型，三面墙 11 尺、9 尺、11 尺」说的是一个 U，不是三面各自独立的墙。
+ *
+ * 这个默认值以前是 `false`，后果一直摆在客户眼前：手工录入的 U 型厨房，
+ * 三段墙在全局俯视图上被画成三条各自独立的横条、底下附一句「示意排列」——
+ * 也就是客户说的「把南墙、北墙、东墙分开写」。而且不止是画得难看：墙角不成立，
+ * 转角处的干涉、转角柜、让位就全都无从算起。
+ *
+ * 从图里识别出来的那条路径（`parseFloorPlan`）本来就是按"首尾相接"推的，
+ * 两条路径的默认值不一致，是同一件事有两份判断的又一例。
+ * 真的不相接（岛台、隔断另一侧的备餐台）就显式传 `false`。
+ */
 export function addWallRun(
   plan: FloorPlan,
-  input: { label: string; length: number; startsAtCorner?: boolean; endsAtCorner?: boolean },
+  input: {
+    label: string; length: number;
+    startsAtCorner?: boolean; endsAtCorner?: boolean;
+    kind?: WallRun["kind"]; depth?: number;
+  },
   at: string,
 ): FloorPlan {
+  const existing = plan.parsedGeometry.wallRuns;
+  // 接的是**上一段墙**，不是上一条记录：岛台夹在中间时，它前后的两面墙
+  // 仍然是相接的。按"最后一条记录"找的话，岛台会把墙链切成两半，
+  // 平面退回「示意排列」——正是这一轮要修掉的那个症状。
+  const prev = [...existing].reverse().find((r) => r.kind !== "island");
+  const island = input.kind === "island";
   const run: WallRun = {
     id: newId("wr"),
     label: input.label,
     length: quantize(input.length),
-    startsAtCorner: input.startsAtCorner ?? false,
+    // 岛台不接任何墙——它四面都是过道
+    startsAtCorner: input.startsAtCorner ?? (!island && prev !== undefined),
     endsAtCorner: input.endsAtCorner ?? false,
     features: [],
+    ...(island ? { kind: "island" as const } : {}),
+    ...(input.depth !== undefined ? { depth: quantize(input.depth) } : {}),
   };
+  // 上一段的"末端是墙角"要同步打上，否则相接只成立一半，平面依然拼不起来
+  const joins = run.startsAtCorner && prev !== undefined && prev.kind !== "island";
+  const wallRuns = existing.map((r) =>
+    joins && r.id === prev.id ? { ...r, endsAtCorner: true } : r);
+
   return {
     ...plan,
-    parsedGeometry: { ...plan.parsedGeometry, wallRuns: [...plan.parsedGeometry.wallRuns, run] },
+    parsedGeometry: { ...plan.parsedGeometry, wallRuns: [...wallRuns, run] },
     unresolvedItems: plan.unresolvedItems.map((u) =>
       u.field === "wallRuns" ? { ...u, resolved: true } : u),
     updatedAt: at,

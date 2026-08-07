@@ -135,7 +135,16 @@ async function main(): Promise<void> {
 
     for (const w of k.walls) {
       await call(`/api/floorplans/${floorPlanId}/resolve`, {
-        method: "POST", acct, body: JSON.stringify({ addRun: { label: w.label, length: w.length } }),
+        method: "POST", acct,
+        // 岛台要带上 kind/depth——不带的话它会被当成一段普通的墙接到上一段后面，
+        // 全局俯视图上就变成"厨房多了一面墙"，而不是中间摆了个岛台
+        body: JSON.stringify({
+          addRun: {
+            label: w.label, length: w.length,
+            ...(w.kind ? { kind: w.kind } : {}),
+            ...(w.depth !== undefined ? { depth: w.depth } : {}),
+          },
+        }),
       });
     }
     await call(`/api/floorplans/${floorPlanId}/resolve`, {

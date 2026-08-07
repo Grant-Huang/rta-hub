@@ -11,6 +11,10 @@
  */
 import type { Placement } from "./generate.js";
 import type { WallRun } from "../floorplan/types.js";
+import {
+  AISLE, COUNTERTOP, depthOf, gapBetween, hasContinuousCounter, toPlane,
+  type KitchenPlan, type PlacedRun, type Rect,
+} from "./plan-model.js";
 
 /** NKBA 净空要求（英寸）。 */
 export const CLEARANCE = {
@@ -44,7 +48,9 @@ export type ErgonomicCode =
   | "DISHWASHER_STANDING"
   | "NO_CONTINUOUS_PREP"
   | "WORK_TRIANGLE"
-  | "UNREACHABLE_BLIND_CORNER";
+  | "UNREACHABLE_BLIND_CORNER"
+  /** 岛台/半岛与对面柜列之间的过道太窄。 */
+  | "AISLE_TOO_NARROW";
 
 export interface ErgonomicViolation {
   code: ErgonomicCode;
@@ -76,7 +82,14 @@ function findSink(placements: readonly Placement[]): Placement | undefined {
   );
 }
 
-/** 某个位置左右两侧连续台面的长度。台面 = 地柜层上不是家电、不是门洞的连续区段。 */
+/**
+ * 某个位置左右两侧连续台面的长度。
+ *
+ * 台面 = 地柜层上**上方有连续台面**的那些构件连成的区段（`hasContinuousCounter`）。
+ * 以前这里是「不是 appliance 的都算台面」，于是洗碗机把台面断成两截，
+ * 水槽紧邻洗碗机那一侧的落台区恒为 0——而 NKBA 恰恰要求洗碗机紧邻水槽。
+ * 排布器照着规范排，检查器照着自己的口径判，两边永远对不上。
+ */
 function landingAround(
   placements: readonly Placement[],
   runId: string,
@@ -84,7 +97,7 @@ function landingAround(
   span: Span,
 ): { left: number; right: number } {
   const counterSpans = placements
-    .filter((p) => p.wallRunId === runId && p.layer === "base" && p.kind !== "appliance")
+    .filter((p) => p.wallRunId === runId && p.layer === "base" && hasContinuousCounter(p))
     .map((p) => ({ start: p.x, end: p.x + p.width }))
     .sort((a, b) => a.start - b.start);
 
@@ -230,7 +243,7 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
 
 function longestContinuousCounter(placements: readonly Placement[]): number {
   const spans = placements
-    .filter((p) => p.layer === "base" && p.kind !== "appliance")
+    .filter((p) => p.layer === "base" && hasContinuousCounter(p))
     .map((p) => ({ start: p.x, end: p.x + p.width }))
     .sort((a, b) => a.start - b.start);
 
@@ -298,6 +311,79 @@ export function checkWorkTriangle(points: readonly TrianglePoint[]): ErgonomicVi
     });
   }
   return violations;
+}
+
+// ── 过道净空（跨墙段）──────────────────────────────────────────────────
+//
+// 这一组检查**只有把各段墙连起来看才做得了**：过道是两列柜子之间的距离，
+// 而那两列柜子分别属于不同的墙段。一段一段单独看，每一段都合格。
+// 客户说的「只有把它们连起来的时候，才会发现开关门的问题、干涉的问题」，
+// 指的就是这一类。
+
+/**
+ * 岛台与四周柜列之间的过道。
+ *
+ * 量的是**台面外沿之间**的距离，不是柜体箱体之间的——台面比箱体前伸 1-1/2"，
+ * 两边各伸一次就是 3"，正好卡在 42" 与 39" 的分界上。按箱体量会算出一条
+ * 实际上并不存在的合格过道。
+ */
+export function checkAisles(plan: KitchenPlan): ErgonomicViolation[] {
+  const violations: ErgonomicViolation[] = [];
+  const islands = plan.runs.filter((r) => r.island);
+  if (islands.length === 0) return violations;
+
+  for (const island of islands) {
+    const a = counterFootprint(island);
+    for (const other of plan.runs) {
+      if (other === island) continue;
+      const b = counterFootprint(other);
+      const gap = gapBetween(a, b);
+      // 完全错开的两列之间没有"过道"可言——间距要在**正对着**的时候才有意义
+      if (!facesEachOther(a, b)) continue;
+
+      if (gap < AISLE.walkway) {
+        violations.push({
+          code: "AISLE_TOO_NARROW", severity: "blocking", wallRunId: island.run.id,
+          message: `${island.run.label}与${other.run.label}之间的过道只有 ${round(gap)}"，` +
+            `人过不去（至少要 ${AISLE.walkway}"）。把岛台改窄或去掉一排柜子才放得下。`,
+        });
+      } else if (gap < AISLE.work) {
+        violations.push({
+          code: "AISLE_TOO_NARROW", severity: "advisory", wallRunId: island.run.id,
+          message: `${island.run.label}与${other.run.label}之间的过道 ${round(gap)}"，` +
+            `低于建议的 ${AISLE.work}"——弯腰开下面的柜门时会顶到对面。`,
+        });
+      }
+    }
+  }
+  return violations;
+}
+
+/** 台面外沿围出来的矩形——过道量的是它，不是柜体箱体。 */
+function counterFootprint(rp: PlacedRun): Rect {
+  const depth = depthOf(rp, "base") + COUNTERTOP.frontOverhang;
+  const a = toPlane(rp, 0, -(rp.island ? COUNTERTOP.frontOverhang : 0));
+  const b = toPlane(rp, rp.run.length, depth);
+  return {
+    minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x),
+    minY: Math.min(a.y, b.y), maxY: Math.max(a.y, b.y),
+  };
+}
+
+/**
+ * 两块台面之间是不是真有一条过道。
+ *
+ * 要求**恰好一个轴向有重叠投影**：另一个轴向必须错开，那个缝就是过道。
+ * 两轴都重叠说明它们本身叠在一起（那是干涉，由 `audit.ts` 的 `INTERFERENCE`
+ * 报，报成"0 寸过道"只会误导）；两轴都不重叠则是斜对角，中间不成其为过道。
+ *
+ * 判据与 `plan-view.ts` 画过道尺寸的 `aisleSegment` 一致——**图上画得出尺寸线的
+ * 地方才判过道**，否则会出现"检查说过道不够、图上却找不到那条过道"。
+ */
+function facesEachOther(a: Rect, b: Rect): boolean {
+  const overlapX = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
+  const overlapY = Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY);
+  return (overlapX > 0) !== (overlapY > 0);
 }
 
 function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {

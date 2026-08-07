@@ -38,6 +38,7 @@ import type { ApplianceSpec } from "../floorplan/appliances.js";
 import { APPLIANCE_LABEL, assumedOnes } from "../floorplan/appliances.js";
 import { format } from "../domain/money.js";
 import { hasBlockingViolation } from "../layout/ergonomics.js";
+import { buildKitchenPlan, depthOf, footprint, overlaps } from "../layout/plan-model.js";
 import type { DesignStage } from "../design/stages.js";
 import { allowedArtifacts } from "../design/stages.js";
 
@@ -56,7 +57,8 @@ export type AuditCode =
   | "QUOTE_RECONCILIATION"  // 逐行合计与小计对不上
   | "SPEC_MISMATCH"         // 选择里出现规格库外的型号或尺寸
   | "PRICE_SNAPSHOT"        // 报价快照复算不一致
-  | "GEOMETRY"              // 柜体超墙 / 重叠
+  | "GEOMETRY"              // 柜体超墙 / 同一段墙内重叠
+  | "INTERFERENCE"          // 跨墙段干涉：两段墙的柜子占同一块地方
   | "UNDISCLOSED_ASSUMPTION"// 推定值没有在交付物里披露
   | "STAGE"                 // 这个阶段不该出这份东西
   | "UNAPPLIED_PREFERENCE"  // 客户的选择没能全部落实
@@ -144,6 +146,14 @@ export function auditDeliverable(input: AuditInput): AuditReport {
     if (input.wallRuns) {
       ran("GEOMETRY");
       for (const g of geometryProblems(input.layout.placements, input.wallRuns)) add(g);
+
+      // ── 跨墙段干涉 ──
+      //
+      // 上面那一项**只在单段墙内**查重叠，而墙角与岛台的干涉正好落在它的盲区里：
+      // 两个柜子分别属于两段墙，各自都"没超墙"，合起来却占着同一块地方。
+      // 客户说的「只有把它们连起来的时候，才会发现干涉的问题」就是这一条。
+      ran("INTERFERENCE");
+      for (const g of interferenceProblems(input.layout.placements, input.wallRuns)) add(g);
     }
 
     // ── 美观：不拦，但低到一定程度要让客户知道 ──
@@ -277,6 +287,65 @@ function geometryProblems(
 }
 
 /**
+ * 跨墙段干涉 —— 把每个构件放到**世界坐标**里，两两比足迹。
+ *
+ * 判定靠 `plan-model.ts` 拼出来的那张连通平面：它同时决定图上怎么画、
+ * 排布时墙角让多少位。三处读同一份平面，图上没干涉就是真的没干涉。
+ *
+ * 只比**竖直方向真的重叠**的那些：地柜与吊柜错开，平面投影重叠是正常的。
+ * 但**高柜横跨两层**——它从地面通到吊柜高度，与地柜、吊柜都会撞。
+ * 按 `layer` 字符串相等来判的话，高柜与隔壁墙的干涉会被静默放过。
+ */
+function interferenceProblems(
+  placements: readonly Placement[],
+  runs: readonly WallRun[],
+): AuditFinding[] {
+  const out: AuditFinding[] = [];
+  const plan = buildKitchenPlan({ wallRuns: [...runs], confidence: 1 });
+  const byRunId = new Map(plan.runs.map((rp) => [rp.run.id, rp]));
+
+  const boxes = placements
+    .filter((p) => p.kind !== "gap")
+    .map((p) => {
+      const rp = byRunId.get(p.wallRunId);
+      if (!rp) return undefined;
+      const depth = p.depth || depthOf(rp, p.layer);
+      return { p, rp, box: footprint(rp, p.x, p.width, depth) };
+    })
+    .filter((b): b is NonNullable<typeof b> => b !== undefined);
+
+  const seen = new Set<string>();
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i]!;
+      const b = boxes[j]!;
+      if (a.p.wallRunId === b.p.wallRunId) continue; // 同段墙由 GEOMETRY 管
+      if (!sameBand(a.p.layer, b.p.layer)) continue;
+      if (!overlaps(a.box, b.box)) continue;
+      // 同一对墙段只报一次——墙角撞上了，那一整排都会撞，报十条没有更多信息
+      const key = [a.p.wallRunId, b.p.wallRunId].sort().join("|") + a.p.layer;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        code: "INTERFERENCE", severity: "blocking", wallRunId: a.p.wallRunId,
+        message: `${a.rp.run.label}的${nameOf(a.p)}与${b.rp.run.label}的${nameOf(b.p)}` +
+          `占了同一块地方——这两段在墙角处需要让位或改用转角柜`,
+      });
+    }
+  }
+  return out;
+}
+
+/** 两个构件在竖直方向上有没有重叠。高柜同时占地柜层和吊柜层。 */
+function sameBand(a: Placement["layer"], b: Placement["layer"]): boolean {
+  return a === b || a === "tall" || b === "tall";
+}
+
+function nameOf(p: Placement): string {
+  return p.moduleCode ?? p.label ?? (p.kind === "appliance" ? "家电位" : "构件");
+}
+
+/**
  * 清单里的型号与尺寸必须在该公司的规格库里真实存在。
  *
  * FR-4 与 FR-8 都写了这条，但**写在两个模块里各自执行**。这里在出口再核一次：
@@ -357,7 +426,7 @@ export function codeLabel(code: AuditCode): string {
   return {
     ERGONOMICS: "人体工程与安全", BOM_INCOMPLETE: "物料完整性",
     QUOTE_RECONCILIATION: "报价逐行对账", SPEC_MISMATCH: "型号与尺寸同源",
-    PRICE_SNAPSHOT: "价格快照复算", GEOMETRY: "几何自洽",
+    PRICE_SNAPSHOT: "价格快照复算", GEOMETRY: "几何自洽", INTERFERENCE: "跨墙段干涉",
     UNDISCLOSED_ASSUMPTION: "推定值披露", STAGE: "阶段匹配",
     UNAPPLIED_PREFERENCE: "偏好落实", AESTHETICS: "排布评分",
   }[code];

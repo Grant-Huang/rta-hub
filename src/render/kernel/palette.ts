@@ -26,7 +26,8 @@ export type ElementKind =
   | "filler"            // 填缝条
   | "panel"             // 收口板
   | "appliance"         // 家电位（不是我们供的货）
-  | "counter"           // 台面
+  | "counter"           // 台面（正视图/侧视图里的那一条实心）
+  | "counterEdge"       // 台面外沿（俯视图里的那圈轮廓）
   | "toeKick"           // 踢脚
   | "wall"              // 墙线
   | "featureWindow"
@@ -56,6 +57,9 @@ export const PALETTE: Record<ElementKind, ElementStyle> = {
   // 家电位：灰 + 虚线。虚线表示"这个位置留给你的家电，不在报价里"
   appliance: { fill: "#f0f0f0", stroke: "#999999", strokeWidth: 1, dash: "5 3", legend: "家电位（自备）" },
   counter: { fill: "#3b3b3b", stroke: "#3b3b3b", strokeWidth: 0, legend: "台面" },
+  // 俯视图里台面只画一圈外沿：填色会把下面的柜体和水槽盆全盖住。
+  // 它比柜体轮廓大出一圈——门洞旁"为什么要让开一点"就在这一圈上看得见。
+  counterEdge: { fill: "none", stroke: "#3b3b3b", strokeWidth: 1.1, legend: "台面外沿" },
   toeKick: { fill: "#d9d3c6", stroke: "#333333", strokeWidth: 0.75, legend: "踢脚" },
   wall: { fill: "none", stroke: "#333333", strokeWidth: 2.5, legend: "墙体" },
   featureWindow: { fill: "none", stroke: "#4d9ad7", strokeWidth: 6, legend: "窗" },

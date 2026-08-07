@@ -1022,7 +1022,15 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   if (!plan) return c.json({ error: "户型图不存在" }, 404);
   const body = await jsonBody<{
     itemId: string; wallRunId: string; length: number; ceilingHeight: number;
-    addRun: { label: string; length: number };
+    /**
+     * 加一段墙。**默认与上一段相接**——人报自己家厨房时报的是一圈连着的墙。
+     * 岛台传 `kind: "island"`（外加 `depth`），它不接任何墙。
+     */
+    addRun: {
+      label: string; length: number;
+      startsAtCorner?: boolean; endsAtCorner?: boolean;
+      kind?: "wall" | "island"; depth?: number;
+    };
     addFeature: { wallRunId: string; kind: WallFeature["kind"]; offset: number; width: number };
     /**
      * 这个厨房里的家电（FR-3.2）。
