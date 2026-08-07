@@ -17,11 +17,13 @@ import { Hono } from "hono";
 import type { Context, Next } from "hono";
 
 import { fromDollars, format } from "./domain/money.js";
-import type { ChatMessage, Conversation, CustomerAccount, Quote } from "./domain/types.js";
+import type {
+  CabinetCompany, ChatMessage, Conversation, CustomerAccount, Quote,
+} from "./domain/types.js";
 import type { FloorPlan } from "./floorplan/types.js";
 import type { GeneratedLayout } from "./layout/generate.js";
 import { TenantScope } from "./tenancy/scoped-repo.js";
-import { authorizeCompany } from "./tenancy/company-auth.js";
+import { authorizeCompany, generateCompanyToken } from "./tenancy/company-auth.js";
 import {
   aggregateSignals, buildMentionSignal, clientFacingMessage, parseMentions, routeByText,
 } from "./routing/mention.js";
@@ -83,8 +85,15 @@ import { renderPlanViews } from "./render/plan-view.js";
 import { buildBom, bomToSelections } from "./layout/bom.js";
 import { buildQuoteList, renderQuoteListHtml, renderQuoteListText } from "./quote/line-items.js";
 import { compareFinishes, renderFinishComparison } from "./quote/finish-comparison.js";
+import {
+  answerQuestion, ingestTemplates, OnboardingError, publish,
+  startSession, type OnboardingSession, type QuestionAnswer,
+} from "./spec/onboarding.js";
+import { blankTemplates, type ImportSources } from "./spec/import.js";
+import type { CompanyOverrides } from "./render/templates.js";
 import { RTA_INTRO, RTA_QUOTE_NOTE } from "./quote/rta-disclosure.js";
 import { BOX_MATERIAL_LABEL_EN } from "./spec/carcass.js";
+import { bomReadiness } from "./layout/bom.js";
 import {
   applyPreferencesToSelections, buildApplianceQuestions, buildQuestionSet, drawerBiasFor,
   PreferenceError, resolvePreferences, unappliedPreferences, validatePreferences,
@@ -1040,6 +1049,12 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
   return c.json({
     quote: outcome.quote,
     dryRun: sendResult.dryRun,
+    // **发失败要说清为什么。** 原来只把状态改成 failed 就返回了，理由只留在审计
+    // 事件里——客户点了发送，界面上什么也没说；运营要翻审计流水才知道是
+    // CASL 校验没过还是 SMTP 连不上。两者要做的事完全不同。
+    ...(sendResult.delivered ? {} : {
+      sendError: "error" in sendResult ? sendResult.error : "未知错误",
+    }),
     billingSuppressed: outcome.billingSuppressed,
     billingEventId: outcome.billingEvent?.id,
     attachedPdf: Boolean(pdf),
@@ -1594,6 +1609,228 @@ app.get("/unsubscribe", async (c) => {
   }
 });
 
+// ── 公司侧：规格录入与发布（FR-2 / SCENARIOS 场景 A）──────────────────────
+//
+// 这一整套状态机在 `spec/onboarding.ts` 里早就写好了，但**一直没有出口**：
+// 只有种子文件在进程内调它。也就是说，一家真实商家没有任何办法把自己的价目表
+// 录进来——供给侧这一半从外面看是不存在的。下面是那个出口。
+//
+// 鉴权走 `requireCompany`：先证明你是这家公司，再按你的身份操作。规格是一家
+// 商家最核心的资产，拿 URL 里的 companyId 当身份等于没有隔离。
+
+/** 空白模板。商家照着填，比让他猜我们要什么格式强。 */
+app.get("/api/company/:companyId/spec/templates", requireCompany, (c) =>
+  c.json({
+    templates: blankTemplates(),
+    note: "每张表第一行是表头、第二行起是示例，照着替换即可。" +
+      "boxMaterials 是可选表——只做一种箱体板材的商家可以整张不给。",
+  }));
+
+/** 开一段录入会话，同时产生一个 draft 版本。已有未发布的草稿就接着那一段。 */
+app.post("/api/company/:companyId/spec/sessions", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const versions = appCtx.repos.specVersions.all().filter((v) => v.companyId === companyId);
+
+  // 已经有一段没发布的会话就接着用。每次点"开始录入"都开一段新草稿的话，
+  // 商家会攒下一堆半截会话，而且分不清哪一段是他昨天填到一半的那个。
+  const existing = appCtx.repos.onboardingSessions.all()
+    .find((s) => s.companyId === companyId && s.status !== "published");
+  if (existing) return c.json({ session: existing, resumed: true }, 200);
+
+  const { session, draftVersion } = startSession(companyId, now(), versions);
+  await appCtx.repos.specVersions.insert(draftVersion);
+  await appCtx.repos.onboardingSessions.insert(session);
+  return c.json({ session, draftVersion, resumed: false }, 201);
+});
+
+app.get("/api/company/:companyId/spec/sessions/:sessionId", requireCompany, (c) => {
+  const session = ownedSession(c);
+  return session ? c.json({ session, ...sessionView(session) }) : c.json({ error: "录入会话不存在" }, 404);
+});
+
+/**
+ * 导入模板。
+ *
+ * **可以反复导**：商家在自己的表里改好一行再传一次，是最自然的修法。
+ * 每次导入都重算待确认队列——不这么做的话，商家改好了表，队列里还留着
+ * 上一次的旧问题，他会以为自己没改对。
+ */
+app.post("/api/company/:companyId/spec/sessions/:sessionId/import", requireCompany, async (c) => {
+  const session = ownedSession(c);
+  if (!session) return c.json({ error: "录入会话不存在" }, 404);
+  const body = await jsonBody<{ sources: ImportSources; faceOverrides: CompanyOverrides }>(c);
+  if (!body.sources?.modules) {
+    return c.json({ error: "至少要给 modules 表（型号、类型、尺寸档位）" }, 400);
+  }
+
+  // 上一版已经确认过的型号带进来：商家改一次价，不该被要求把"NS-B12 是单门"
+  // 再答一遍。那是型号的固有属性，不是这一版的属性——而答二十遍之后，
+  // 人会开始随手点，那套队列存在的全部意义就没了。
+  const company = appCtx.repos.companies.byId(param(c, "companyId"));
+  const previous = company?.currentPublishedSpecVersionId
+    ? appCtx.repos.specBundles.byId(company.currentPublishedSpecVersionId)
+    : undefined;
+
+  try {
+    const r = ingestTemplates(session, body.sources, now(), {
+      faceOverrides: body.faceOverrides ?? {},
+      ...(previous ? { knownModules: previous.modules } : {}),
+    });
+    await appCtx.repos.onboardingSessions.update(session.id, r.session);
+    // 草稿整包也存下来：商家分几次填时，上一次导进去的东西不能丢
+    await appCtx.repos.specBundles.upsert(r.bundle);
+    return c.json({
+      session: r.session,
+      ...sessionView(r.session),
+      // 进来几条、卡住几条，两个数都要给。只报一句"导入成功"，
+      // 商家不会知道他 200 个型号里有 30 个根本没进来
+      stats: r.importResult.stats,
+      inheritedFromPrevious: r.importResult.stats.inheritedFromPrevious,
+      rejectedModuleRows: r.importResult.stats.moduleRows - r.importResult.stats.modulesImported,
+      rejectedPriceRows:
+        r.importResult.stats.priceMatrixRows - r.importResult.stats.priceMatrixImported,
+    }, 200);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+});
+
+/**
+ * 回答一条追问。
+ *
+ * **没有"跳过"这个动作。** 每一条要么能在这里用一个具体的值答掉（脸型、能力），
+ * 要么就是"表里写错了"——那种改好表重新导入，队列会自己重算，那一条自然消失。
+ * 不存在第三种情况需要一个"先划掉再说"的按钮，而留一个这样的按钮，
+ * 等于整套队列是可选的：商家点二十下就能带着一堆空数据发布。
+ */
+app.post("/api/company/:companyId/spec/sessions/:sessionId/answer", requireCompany, async (c) => {
+  const session = ownedSession(c);
+  if (!session) return c.json({ error: "录入会话不存在" }, 404);
+  const body = await jsonBody<{
+    questionId: string; unresolvedIndex: number; answer: QuestionAnswer;
+  }>(c);
+
+  let next = session;
+  if (body.questionId) {
+    // 答案要**带着值**进来，落到规格上。只把警报关掉而不补数据，等于没答——
+    // 那个柜子会带着一张空脸一路走到正视图上
+    const bundle = appCtx.repos.specBundles.byId(session.specVersionId);
+    if (!bundle) return c.json({ error: "这段会话还没有导入过任何规格" }, 409);
+    try {
+      const outcome = answerQuestion(session, bundle, body.questionId, body.answer ?? {}, now());
+      next = outcome.session;
+      await appCtx.repos.specBundles.upsert(outcome.bundle);
+    } catch (e) {
+      return c.json({
+        error: e instanceof Error ? e.message : String(e),
+        code: e instanceof OnboardingError ? e.code : "ANSWER_FAILED",
+      }, e instanceof OnboardingError && e.code === "QUESTION_NOT_FOUND" ? 404 : 400);
+    }
+  } else {
+    return c.json({
+      error: "要指明回答的是哪一条追问（questionId），并给出答案（answer）。" +
+        "表里写错的那几条不在这里改——在表里改好后重新导入，队列会自动重算。",
+    }, 400);
+  }
+  await appCtx.repos.onboardingSessions.update(session.id, next);
+  return c.json({ session: next, ...sessionView(next) });
+});
+
+/**
+ * 发布。
+ *
+ * 三道门禁在 `assertPublishable` 里：待确认项没清空、没有型号、有型号查不到价、
+ * 没有门板样式——任何一条不过都不放行。**这是 FR-2「零静默失败」的强制点**，
+ * 不是提示。
+ */
+app.post("/api/company/:companyId/spec/sessions/:sessionId/publish", requireCompany, async (c) => {
+  const session = ownedSession(c);
+  if (!session) return c.json({ error: "录入会话不存在" }, 404);
+  const companyId = param(c, "companyId");
+  const bundle = appCtx.repos.specBundles.byId(session.specVersionId);
+  if (!bundle) return c.json({ error: "这段会话还没有导入过任何规格" }, 409);
+
+  const body = await jsonBody<{ publishedBy: string }>(c);
+  const versions = appCtx.repos.specVersions.all().filter((v) => v.companyId === companyId);
+
+  let outcome;
+  try {
+    outcome = publish(session, bundle, versions, body.publishedBy ?? "company", now());
+  } catch (e) {
+    // 拦下来要说清楚**拦的是哪一条**：「发布失败」对商家毫无用处
+    return c.json({
+      error: e instanceof Error ? e.message : String(e),
+      code: e instanceof OnboardingError ? e.code : "PUBLISH_FAILED",
+      ...sessionView(session),
+    }, 409);
+  }
+
+  await appCtx.repos.specVersions.update(outcome.result.published.id, outcome.result.published);
+  if (outcome.result.archived) {
+    await appCtx.repos.specVersions.update(outcome.result.archived.id, outcome.result.archived);
+  }
+  await appCtx.repos.onboardingSessions.update(session.id, outcome.session);
+
+  // 公司指向新版本。**已发出的报价不受影响**——它们冻结了自己的快照（§3.6）
+  const company = appCtx.repos.companies.byId(companyId);
+  if (company) {
+    await appCtx.repos.companies.update(companyId, {
+      ...company, currentPublishedSpecVersionId: outcome.result.published.id,
+    });
+  }
+
+  const active = company ? isCompanyActive({
+    ...company, currentPublishedSpecVersionId: outcome.result.published.id,
+  }) : false;
+
+  // 「这家商家现在到底能不能出报价」只有**一个**答案，两道门槛都算进去：
+  //   ① 订阅生效了吗（场景 A 第 8 点）
+  //   ② 这套规格拼得出一份完整的物料清单吗（SR-M1）
+  //
+  // 第二条以前只在客户下单那一刻才查，而那时候看到错的是客户、能修的是商家。
+  // 商家等到的是"一条线索都没有"，中间没有任何一句话告诉他为什么。
+  const readiness = bomReadiness(bundle.modules, outcome.result.published.toeKickSystem);
+  const blockers: string[] = [];
+  if (!active) {
+    blockers.push("个性化服务订阅还没生效——客户 @ 你仍然能问到产品，" +
+      "但拿到的是通用预估（EstimateDraft），不是绑定你家的正式报价。");
+  }
+  if (!readiness.ready) {
+    blockers.push(
+      `规格里缺这几样，每一份报价都会被交付前检查拦下：${readiness.missing.join("、")}。` +
+      "这些不是柜体，是装完一套厨房必须有的收口件——缺一条踢脚板，客户照单下的货就装不完整。" +
+      "补进价目表后开一版新草稿即可。");
+  }
+
+  return c.json({
+    session: outcome.session,
+    published: outcome.result.published,
+    ...(outcome.result.archived ? { archived: outcome.result.archived } : {}),
+    canQuote: blockers.length === 0,
+    ...(blockers.length ? { blockers } : {}),
+    specCompleteness: readiness,
+  }, 201);
+});
+
+/** 会话的对外视图：还剩几条、下一条问什么。 */
+function sessionView(session: OnboardingSession) {
+  const pending = session.questions.filter((q) => !q.answered);
+  return {
+    status: session.status,
+    unresolvedCount: session.unresolved.length,
+    pendingQuestions: pending,
+    manualCorrections: session.manualCorrections,
+    canPublish: session.unresolved.length === 0 && session.status !== "collecting",
+  };
+}
+
+function ownedSession(c: Ctx): OnboardingSession | undefined {
+  const s = appCtx.repos.onboardingSessions.byId(param(c, "sessionId"));
+  // 令牌证明了你是哪一家，会话必须**也**属于那一家——否则 A 家拿自己的令牌
+  // 就能改 B 家的规格草稿
+  return s && s.companyId === param(c, "companyId") ? s : undefined;
+}
+
 // ── 公司侧：计费透明度与争议（FR-7 / 8.1）─────────────────────────────────
 
 app.get("/api/company/:companyId/billing", requireCompany, (c) => {
@@ -1621,6 +1858,67 @@ app.post("/api/company/:companyId/billing/:eventId/dispute", requireCompany, asy
 });
 
 // ── 平台运营 ──────────────────────────────────────────────────────────────
+
+/**
+ * 给一家商家开后台入口（SCENARIOS 场景 A 第 1 点、场景 I 第 6 点）。
+ *
+ * 令牌**只在这一次回包里出现**，之后任何接口都不再吐出它——公司目录是公开的，
+ * 令牌一旦出现在那里，隔离就等于没有。运营把它交给商家，丢了就重开一个。
+ */
+app.post("/api/admin/companies", requireAdmin, async (c) => {
+  const body = await jsonBody<{
+    id: string; name: string; aliases: string[]; quoteEmail: string;
+    province: string; serviceAreas: string[];
+    subscription: "none" | "trial" | "active"; leadFeeEnabled: boolean;
+  }>(c);
+  if (!body.name || !body.quoteEmail) {
+    return c.json({ error: "至少要有公司名与报价邮箱" }, 400);
+  }
+  const id = body.id || `co_${randomUUID().slice(0, 8)}`;
+  if (appCtx.repos.companies.byId(id)) return c.json({ error: `公司 ${id} 已存在` }, 409);
+
+  const accessToken = generateCompanyToken();
+  const company: CabinetCompany = {
+    id, name: body.name,
+    aliases: body.aliases ?? [],
+    quoteEmail: body.quoteEmail,
+    province: (body.province ?? "ON") as CabinetCompany["province"],
+    serviceAreas: body.serviceAreas ?? [],
+    createdAt: now(),
+    billingPlan: {
+      leadFeeEnabled: body.leadFeeEnabled ?? true,
+      personalizationSubscription: body.subscription ?? "none",
+    },
+    accessToken,
+  };
+  await appCtx.repos.companies.insert(company);
+  return c.json({
+    company: { ...company, accessToken: undefined },
+    // 只此一次
+    accessToken,
+    note: "这个令牌只在这一次回包里出现，请立刻交给商家并妥善保存。",
+  }, 201);
+});
+
+/** 改订阅状态。发布 + 订阅同时满足，公司才真的 active（场景 A 第 8 点）。 */
+app.post("/api/admin/companies/:id/subscription", requireAdmin, async (c) => {
+  const company = appCtx.repos.companies.byId(param(c, "id"));
+  if (!company) return c.json({ error: "公司不存在" }, 404);
+  const body = await jsonBody<{ subscription: "none" | "trial" | "active" }>(c);
+  if (!["none", "trial", "active"].includes(body.subscription ?? "")) {
+    return c.json({ error: "订阅状态只能是 none / trial / active" }, 400);
+  }
+  const next: CabinetCompany = {
+    ...company,
+    billingPlan: { ...company.billingPlan, personalizationSubscription: body.subscription! },
+  };
+  await appCtx.repos.companies.update(next.id, next);
+  return c.json({
+    company: { ...next, accessToken: undefined },
+    // status 是**派生值**，不是可独立编辑的字段（§6.2）
+    active: isCompanyActive(next),
+  });
+});
 
 app.post("/api/admin/billing/:eventId/resolve", requireAdmin, async (c) => {
   const event = appCtx.repos.billingEvents.byId(param(c, "eventId"));

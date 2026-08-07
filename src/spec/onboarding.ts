@@ -11,10 +11,13 @@
  */
 import type { ProductSpecVersion } from "../domain/types.js";
 import type { SpecBundle } from "./bundle.js";
-import { importSpecTemplates, type ImportResult, type ImportSources, type UnresolvedItem } from "./import.js";
+import {
+  importSpecTemplates,
+  type ImportOptions, type ImportResult, type ImportSources, type UnresolvedItem,
+} from "./import.js";
 import type { CompanyOverrides } from "../render/templates.js";
 import { assertMutable, nextVersionNo, publishDraft, type PublishResult } from "./version.js";
-import { capabilityQuestions } from "./capabilities.js";
+import { capabilityQuestions, type ModuleCapabilities } from "./capabilities.js";
 
 export type OnboardingStatus = "collecting" | "reviewing" | "ready" | "published";
 
@@ -91,12 +94,13 @@ export function ingestTemplates(
   session: OnboardingSession,
   sources: ImportSources,
   at: string,
-  faceOverrides: CompanyOverrides = {},
+  faceOverridesOrOptions: CompanyOverrides | ImportOptions = {},
 ): IngestResult {
   if (session.status === "published") {
     throw new OnboardingError("该会话已发布，如需修改请开新草稿", "ALREADY_PUBLISHED");
   }
-  const importResult = importSpecTemplates(session.specVersionId, session.companyId, sources, faceOverrides);
+  const importResult = importSpecTemplates(
+    session.specVersionId, session.companyId, sources, faceOverridesOrOptions);
 
   // 能力标签推不准的，也是待确认项（CATALOG_MODEL §2.2）。
   //
@@ -152,31 +156,125 @@ function buildPrompt(item: UnresolvedItem): string {
   }
 }
 
-/** 运营回答一个追问，解决对应的待确认项。每次回答计入人工修正次数。 */
-export function answerQuestion(
-  session: OnboardingSession,
-  questionId: string,
-  at: string,
-): OnboardingSession {
-  const questions = session.questions.map((q) =>
-    q.id === questionId ? { ...q, answered: true } : q);
-  const remaining = questions.filter((q) => !q.answered).length;
-  return {
-    ...session,
-    questions,
-    manualCorrections: session.manualCorrections + 1,
-    status: remaining === 0 ? "ready" : "reviewing",
-    updatedAt: at,
-  };
+/**
+ * 回答一条追问要给出的东西。
+ *
+ * **一条追问必须能被一个具体的值答掉**，否则它就不该出现在这条路径上。
+ */
+export interface QuestionAnswer {
+  /** 脸型题：这个柜子正面长什么样。 */
+  faceTemplateId?: string;
+  /** 能力题：这个柜子承载什么功能。 */
+  roles?: ModuleCapabilities["roles"];
 }
 
-/** 直接消解一个待确认项（例如运营在模板里改好后重新导入）。 */
+export interface AnswerOutcome {
+  session: OnboardingSession;
+  /** 答案已经落到规格上的整包。**必须存回去**，否则等于没答。 */
+  bundle: SpecBundle;
+}
+
+/**
+ * 运营/商家回答一条追问。
+ *
+ * ## 为什么答案必须带值
+ *
+ * 这个函数原来只把 `answered` 翻成 `true`——**它把警报关掉了，但没有补数据**。
+ * 结果是：商家点一下"我知道了"，队列清空，发布放行，而那个柜子在正视图上
+ * 依然没有脸。零静默失败于是变成了零静默失败的**反面**：一个看起来被处理过、
+ * 实际什么也没改的待确认项，比不提示更糟——因为没有人会再回头看它。
+ *
+ * 所以现在：答案带着值进来，落到规格上，再把那一条从队列里划掉。
+ * 答不上来的题（价格写错了、型号漏了）**不走这条路**——那些要在表里改好后
+ * 重新导入，函数会明确这么说，而不是给一个"算你答过了"的出口。
+ */
+export function answerQuestion(
+  session: OnboardingSession,
+  bundle: SpecBundle,
+  questionId: string,
+  answer: QuestionAnswer,
+  at: string,
+): AnswerOutcome {
+  const q = session.questions.find((x) => x.id === questionId);
+  if (!q) throw new OnboardingError(`没有这条追问：${questionId}`, "QUESTION_NOT_FOUND");
+  const item = session.unresolved[q.unresolvedIndex];
+  if (!item) throw new OnboardingError("这条追问对应的待确认项已经不在了", "ITEM_GONE");
+
+  // 待确认项记的是型号码（`raw`），不是 id——商家看的是码
+  const code = (item.raw ?? "").toUpperCase();
+  const target = bundle.modules.find((m) => m.code === code);
+
+  let modules = bundle.modules;
+  if (item.field === "faceTemplate") {
+    if (!answer.faceTemplateId) {
+      throw new OnboardingError(
+        "脸型题要给出一个脸型模板（如 F2_DOUBLE_DOOR）", "ANSWER_MISSING_VALUE");
+    }
+    if (!target) {
+      throw new OnboardingError(`规格里找不到型号 ${code}`, "MODULE_NOT_FOUND");
+    }
+    modules = modules.map((m) =>
+      m.code === code ? { ...m, faceTemplateId: answer.faceTemplateId! } : m);
+  } else if (item.field === "capabilities") {
+    if (!answer.roles?.length) {
+      throw new OnboardingError(
+        "能力题要给出至少一个角色（如 doorStorage / sinkBase）", "ANSWER_MISSING_VALUE");
+    }
+    if (!target) {
+      throw new OnboardingError(`规格里找不到型号 ${code}`, "MODULE_NOT_FOUND");
+    }
+    modules = modules.map((m) =>
+      m.code === code
+        ? { ...m, capabilities: { ...(m.capabilities ?? {}), roles: answer.roles! } }
+        : m);
+  } else {
+    // 没有"算你答过了"的出口
+    throw new OnboardingError(
+      `「${item.field}」这一条没法在会话里直接答——请在表里改好后重新导入。原因：${item.reason}`,
+      "NOT_ANSWERABLE_INLINE",
+    );
+  }
+
+  // 划掉这一条。索引会变，所以剩下的追问要重新对齐——不重算的话，
+  // 下一条答案会落到错误的型号上
+  const next = removeUnresolved(
+    { ...session, manualCorrections: session.manualCorrections + 1 },
+    q.unresolvedIndex, at);
+  return { session: next, bundle: { ...bundle, modules } };
+}
+
+/**
+ * 直接消解一个待确认项。
+ *
+ * 用在**运营已经在别处把数据补好了**的场合（比如在模板里改好重新导入之前，
+ * 先把明知不适用的那几条划掉）。它不补数据，所以不是回答追问的正路——
+ * 那条路是 `answerQuestion`，答案带着值。
+ */
 export function resolveUnresolved(session: OnboardingSession, index: number, at: string): OnboardingSession {
+  return removeUnresolved(session, index, at, { countAsCorrection: true });
+}
+
+/**
+ * 从队列里划掉第 `index` 条，并把剩下追问的索引重新对齐。
+ *
+ * **索引对齐这件事不能省**：`OnboardingQuestion.unresolvedIndex` 指向数组下标，
+ * 删掉中间一条之后，它后面每一条的下标都变了。不重算的话，下一个答案会落到
+ * 另一个型号身上——而那种错不会报错，只会让某个柜子悄悄换了脸。
+ */
+function removeUnresolved(
+  session: OnboardingSession,
+  index: number,
+  at: string,
+  opts: { countAsCorrection?: boolean } = {},
+): OnboardingSession {
   const unresolved = session.unresolved.filter((_, i) => i !== index);
-  const questions = session.questions.filter((q) => q.unresolvedIndex !== index);
+  const questions = session.questions
+    .filter((q) => q.unresolvedIndex !== index)
+    .map((q) => (q.unresolvedIndex > index
+      ? { ...q, unresolvedIndex: q.unresolvedIndex - 1 } : q));
   return {
     ...session, unresolved, questions,
-    manualCorrections: session.manualCorrections + 1,
+    manualCorrections: session.manualCorrections + (opts.countAsCorrection ? 1 : 0),
     status: unresolved.length === 0 ? "ready" : "reviewing",
     updatedAt: at,
   };

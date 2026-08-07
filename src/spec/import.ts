@@ -60,6 +60,8 @@ export interface ImportResult {
     priceGroups: number;
     /** 脸型由命名规则自动判定的型号数（不含人工指定的）。 */
     faceTemplateRuleHits: number;
+    /** 从上一版继承过来的型号数（脸型/能力）。改价时这个数应该等于型号总数。 */
+    inheritedFromPrevious: number;
   };
 }
 
@@ -91,12 +93,36 @@ function pick(row: CsvRow, ...names: string[]): string {
  * 注意返回的 bundle 只有在 `unresolved` 为空时才应被允许发布——
  * 这个约束由 `assertPublishable` 强制，不靠调用方自觉。
  */
+export interface ImportOptions {
+  faceOverrides?: CompanyOverrides;
+  /**
+   * 这家商家**上一版已经确认过**的型号。
+   *
+   * 按型号码继承脸型与能力标签。商家改一次价（同样的型号、新的标价）不该
+   * 被要求把"NS-B12 是单门"再答一遍——那是型号的固有属性，不是这一版的属性。
+   * 要求重答的代价不只是麻烦：答二十遍之后，人会开始随手点，
+   * 而这套队列存在的全部意义就是让人**认真看一眼**。
+   *
+   * 表里显式写了 `faceTemplate` 的行**优先于继承**——商家改了做法，以新的为准。
+   */
+  knownModules?: readonly ModuleSpec[];
+}
+
 export function importSpecTemplates(
   specVersionId: string,
   companyId: string,
   sources: ImportSources,
-  faceOverrides: CompanyOverrides = {},
+  faceOverridesOrOptions: CompanyOverrides | ImportOptions = {},
 ): ImportResult {
+  // 第四个参数原来就是 `faceOverrides`。保留那种写法，种子文件与测试不必跟着改。
+  const opts: ImportOptions = "faceOverrides" in faceOverridesOrOptions
+      || "knownModules" in faceOverridesOrOptions
+    ? faceOverridesOrOptions as ImportOptions
+    : { faceOverrides: faceOverridesOrOptions as CompanyOverrides };
+  const faceOverrides = opts.faceOverrides ?? {};
+  const known = new Map(
+    (opts.knownModules ?? []).map((m) => [m.code.toUpperCase(), m]));
+  let inherited = 0;
   const bundle = emptyBundle(specVersionId, companyId);
   const unresolved: UnresolvedItem[] = [];
   const base = { specVersionId, companyId };
@@ -224,20 +250,33 @@ export function importSpecTemplates(
     }
     if (widths.length === 0 || heights.length === 0 || depths.length === 0) return;
 
-    // 脸型：优先用表里显式指定的，其次按命名规则；都没有就进待确认队列，**不猜**
+    // 脸型：优先用表里显式指定的，其次按命名规则；都没有就进待确认队列，**不猜**。
+    //
+    // **但型号本身照样收下。** 之前这里是 `return`，整行丢掉——代价是一连串
+    // 假问题：价格矩阵里那个型号的每一行都会报「型号未在型号表中定义」，
+    // 而商家明明定义了。一家命名规律与我们的规则对不上的商家（这是常态，
+    // 每家的命名体系都不一样）会看到几十条互相矛盾的提示，根本不知道
+    // 真正要改的只有"告诉我们这个柜子正面长什么样"这一件事。
+    //
+    // 拦住发布的是**待确认队列本身**（`assertPublishable`），不是丢掉这一行。
+    // 尺寸是商家给的真实数据，没有理由因为不知道它长什么样就扔掉。
     const explicit = pick(row, "faceTemplate", "face", "faceTemplateId");
+    const previous = known.get(code.toUpperCase());
     let faceTemplateId = explicit;
     if (!faceTemplateId) {
       const match = matchWithOverrides(code, faceOverrides);
       if (match) {
         faceTemplateId = match.templateId;
         ruleHits++;
+      } else if (previous?.faceTemplateId) {
+        // 上一版商家已经答过这个型号长什么样，不再问第二遍
+        faceTemplateId = previous.faceTemplateId;
+        inherited++;
       } else {
         unresolved.push({
           sheet: "modules", rowNumber, field: "faceTemplate",
           reason: `型号 ${code} 未能按命名规则判定脸型，需人工指定`, raw: code,
         });
-        return;
       }
     }
 
@@ -249,7 +288,11 @@ export function importSpecTemplates(
     const mod: ModuleSpec = {
       ...base, id: `m_${slug(code)}`, code: code.toUpperCase(), type,
       widthOptions: widths, heightOptions: heights, depthOptions: depths,
-      faceTemplateId,
+      // 判不出来就留空，别塞一个占位值——空是"还不知道"，占位值是"我们猜了一个"，
+      // 而占位值会一路画到正视图上，谁也看不出那是猜的
+      ...(faceTemplateId ? { faceTemplateId } : {}),
+      // 能力标签同理：上一版确认过就带过来，别再问一遍
+      ...(previous?.capabilities ? { capabilities: previous.capabilities } : {}),
       assemblyOptions: assemblyOptions.length ? assemblyOptions : ["RTA"],
     };
     modByCode.set(mod.code, mod);
@@ -327,6 +370,7 @@ export function importSpecTemplates(
       doorStyles: bundle.doorStyles.length,
       priceGroups: bundle.priceGroups.length,
       faceTemplateRuleHits: ruleHits,
+      inheritedFromPrevious: inherited,
     },
   };
 }

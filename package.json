@@ -21,6 +21,7 @@
     "ops:prospects": "tsx src/ops/prospects-cli.ts",
     "gates": "tsx src/ops/gates-cli.ts",
     "simulate": "tsx scripts/simulate.mts",
+    "simulate:supply": "tsx scripts/simulate-supply.mts",
     "sanity:doc": "tsx scripts/sanity-doc.mts"
   },
   "dependencies": {

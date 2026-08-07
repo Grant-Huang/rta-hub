@@ -19,6 +19,7 @@ import type { FloorPlan } from "../floorplan/types.js";
 import type { StoredLayout } from "../layout/store.js";
 import type { TradeVerification } from "../trade/verification.js";
 import type { DesignSession } from "../design/stages.js";
+import type { OnboardingSession } from "../spec/onboarding.js";
 
 export interface Repositories {
   companies: JsonCollection<CabinetCompany>;
@@ -36,6 +37,8 @@ export interface Repositories {
   storedLayouts: JsonCollection<StoredLayout>;
   /** 设计会话阶段（先问再画、全局俯视图评审）。 */
   designSessions: JsonCollection<DesignSession>;
+  /** 商家入驻的规格录入会话（FR-2）。一个草稿版本对应一段会话。 */
+  onboardingSessions: JsonCollection<OnboardingSession>;
   quotes: JsonCollection<Quote>;
   auditEvents: JsonCollection<QuoteAuditEvent>;
   billingEvents: JsonCollection<LeadBillingEvent>;
@@ -65,6 +68,10 @@ export function openRepositories(dataDir = process.env.DATA_DIR ?? path.join(pro
     storedLayouts: new JsonCollection<StoredLayout>(f("layouts"))
       .addUniqueKey("plan+company", (l) => `${l.floorPlanId}:${l.companyId}`),
     designSessions: new JsonCollection<DesignSession>(f("design-sessions")),
+    // 一个草稿版本只能有一段录入会话——两段会话往同一个版本里写，
+    // 后写的会静默盖掉前一段回答过的待确认项
+    onboardingSessions: new JsonCollection<OnboardingSession>(f("onboarding-sessions"))
+      .addUniqueKey("specVersionId", (s) => s.specVersionId),
     quotes: new JsonCollection<Quote>(f("quotes")),
     auditEvents: new JsonCollection<QuoteAuditEvent>(f("audit-events")),
     // ★ 计费去重的数据层兜底

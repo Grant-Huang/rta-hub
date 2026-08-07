@@ -247,6 +247,46 @@ function countExposedEnds(
   return out;
 }
 
+/**
+ * 这套规格能不能拼出一份**完整**的物料清单。
+ *
+ * ## 为什么这件事要在发布的时候问，而不是等客户来问
+ *
+ * 交付前审核（SR-M1）会因为缺一条踢脚板拦下整份报价——那是对的，客户不该
+ * 拿到一份装不上的清单。但拦下来的时候，看到错的是**客户**，而能修的是商家，
+ * 而商家此时早已发布完、开了订阅、在等线索。他等到的是"一条线索都没有"，
+ * 中间没有任何一句话告诉他为什么。
+ *
+ * 所以同一套判断要在**发布那一刻**再跑一次：那时候商家正对着自己的价目表，
+ * 补一行踢脚板是十秒钟的事。
+ *
+ * 用的是与 BOM **同一批选择器**（`pickFiller` / `pickToeKick` / `pickPanel`）——
+ * 各写一份的话，会出现"发布时说齐了、出报价时说缺料"，而那种不一致最难查。
+ */
+export function bomReadiness(
+  modules: readonly ModuleSpec[],
+  toeKickSystem: ToeKickSystem = "plywoodPanel",
+): { ready: boolean; missing: string[] } {
+  const missing: string[] = [];
+  if (!pickFiller(modules, "base")) missing.push("地柜层填缝条");
+  if (!pickFiller(modules, "wall")) missing.push("吊柜层填缝条");
+  if (toeKickSystem === "plasticLegs") {
+    if (!modules.some((m) => m.type === "leg")) missing.push("塑料可调地脚");
+    if (!pickToeKick(modules, "plasticLegs")) missing.push("踢脚扣板");
+  } else if (!pickToeKick(modules, "plywoodPanel")) {
+    missing.push("踢脚板");
+  }
+  if (!pickPanel(modules, BASE_PANEL_HEIGHT)) missing.push("地柜收口板");
+  if (!pickPanel(modules, WALL_PANEL_HEIGHT)) missing.push("吊柜收口板");
+  // 冰箱比两边的柜子高，只贴地柜那一截会露出上面半截刨花板边。
+  // 「有冰箱且它至少一侧不靠墙」是绝大多数厨房的样子，所以这一条按必需算——
+  // 漏了它，客户下单时才会被 SR-M1 拦下，而那时候能修的人已经不在场了。
+  if (!pickPanel(modules, FRIDGE_PANEL_HEIGHT)) {
+    missing.push(`冰箱侧通高收口板（高度 ≥${FRIDGE_PANEL_HEIGHT}"）`);
+  }
+  return { ready: missing.length === 0, missing };
+}
+
 function pickFiller(modules: readonly ModuleSpec[], layer: string): ModuleSpec | undefined {
   const fillers = modules.filter((m) => m.type === "filler");
   // 吊柜填缝条更矮；按高度选，不靠型号码猜（公司命名各不相同）
