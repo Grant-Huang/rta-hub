@@ -12,28 +12,65 @@
   header { padding:12px 20px; border-bottom:1px solid #262b33; display:flex; align-items:center; gap:12px; }
   header h1 { font-size:15px; margin:0; font-weight:600; }
   .badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#262b33; color:#9aa4b2; }
-  main { flex:1; display:grid; grid-template-columns:380px 1fr; overflow:hidden; }
-  .chat { display:flex; flex-direction:column; border-right:1px solid #262b33; min-width:0; }
-  .chat-log { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:9px; }
+  /* 三栏：历史会话 / 主会话 / 产出物。宽度由 CSS 变量给，分隔条拖动时改变量。 */
+  main { flex:1; display:grid; overflow:hidden; min-height:0;
+         grid-template-columns: var(--rail-w,240px) 5px minmax(0,1fr) 5px var(--panel-w,520px); }
+  /* 拖动条。命中区比视觉宽度大一点，否则很难抓住 */
+  .gutter { background:#262b33; cursor:col-resize; position:relative; }
+  .gutter::after { content:""; position:absolute; inset:0 -4px; }
+  .gutter:hover, .gutter.dragging { background:#3a4250; }
+
+  /* 左栏：历史会话 */
+  .rail { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .rail-head { padding:10px 12px; border-bottom:1px solid #262b33; display:flex; gap:8px; align-items:center; }
+  .rail-head h2 { font-size:12px; margin:0; color:#9aa4b2; font-weight:500; flex:1; }
+  .rail-list { flex:1; min-height:0; overflow-y:auto; padding:6px; }
+  .conv { display:block; width:100%; text-align:left; background:none; border:1px solid transparent;
+          border-radius:8px; padding:8px 10px; margin-bottom:3px; cursor:pointer; color:inherit; }
+  .conv:hover { background:#1c2129; }
+  .conv.active { background:#1e3566; border-color:#4d7bd7; }
+  .conv .ct { font-size:12.5px; line-height:1.45; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .conv .cm { font-size:11px; color:#6a7382; margin-top:2px; }
+
+  /* 中栏：主会话。`min-height:0` 不可省——flex 子项默认 min-height:auto，
+     内容一长就把容器撑开，滚动条不出现、输入框被挤出可视区。 */
+  .chat { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .chat-log { flex:1; min-height:0; overflow-y:auto; padding:14px 14px 4px;
+              display:flex; flex-direction:column; gap:9px; }
   .msg { max-width:92%; padding:8px 12px; border-radius:10px; font-size:13px; line-height:1.55; white-space:pre-wrap; }
   .msg.user { align-self:flex-end; background:#2a5bd7; color:#fff; }
   .msg.assistant { align-self:flex-start; background:#1c2129; }
   .msg.system { align-self:center; background:#2b2416; color:#d8c37b; font-size:12px; }
-  .chat-input { display:flex; gap:8px; padding:11px; border-top:1px solid #262b33; }
+  /* 输入框贴着会话栏底部，不随消息流走 */
+  .chat-input { display:flex; gap:8px; padding:11px; border-top:1px solid #262b33;
+                background:#0f1216; flex:0 0 auto; }
   .chat-input input { flex:1; background:#1c2129; border:1px solid #262b33; color:inherit;
                       padding:8px 10px; border-radius:8px; font-size:13px; }
   button { background:#2a5bd7; border:none; color:#fff; padding:7px 13px; border-radius:8px;
            font-size:13px; cursor:pointer; }
   button:disabled { opacity:.45; cursor:not-allowed; }
   button.ghost { background:#262b33; }
-  .panel { display:flex; flex-direction:column; overflow:hidden; }
+  .panel { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
   .steps { display:flex; gap:6px; padding:10px 16px; border-bottom:1px solid #262b33; flex-wrap:wrap; align-items:center; }
   .step { font-size:11px; padding:3px 9px; border-radius:10px; background:#1c2129; color:#6a7382; }
   .step.done { background:#1c3a2b; color:#7bd88f; }
   .step.active { background:#2a5bd7; color:#fff; }
   .toolbar { display:flex; align-items:center; gap:8px; padding:10px 16px;
              border-bottom:1px solid #262b33; flex-wrap:wrap; }
-  .content { flex:1; overflow-y:auto; padding:16px; }
+  .content { flex:1; min-height:0; overflow-y:auto; padding:16px; }
+  /* 产出物下载条 */
+  .downloads { display:flex; flex-wrap:wrap; gap:6px; padding:8px 16px; border-bottom:1px solid #262b33; }
+  .dl { font-size:11.5px; padding:3px 9px; border-radius:8px; background:#262b33; color:#9aa4b2;
+        text-decoration:none; border:1px solid #3a4250; cursor:pointer; }
+  .dl:hover { border-color:#4d7bd7; color:#e6e8eb; }
+  /* 会话里的快捷回答 chip */
+  .quick { align-self:flex-start; max-width:92%; white-space:normal; }
+  .quick .qh { font-size:11.5px; color:#8b94a3; margin:2px 0 5px; }
+  .chip { background:#262b33; border:1px solid #3a4250; border-radius:14px; padding:4px 11px;
+          font-size:12.5px; color:#e6e8eb; cursor:pointer; margin:0 5px 5px 0; }
+  .chip:hover { border-color:#4d7bd7; }
+  .chip.alt { background:none; border-style:dashed; color:#8b94a3;
+              display:inline-block; max-width:100%; white-space:normal; text-align:left; line-height:1.45; }
   select, input[type=number] { background:#1c2129; border:1px solid #262b33; color:inherit;
            padding:6px 8px; border-radius:8px; font-size:13px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -59,7 +96,11 @@
   .status-pill.failed { background:#4d3f1c; color:#d8c37b; }
   .err { color:#d87b7b; font-size:12px; white-space:pre-wrap; }
   .cmp-lowest { color:#7bd88f; }
-  .qcard { background:#1c2129; border:1px solid #3a4250; border-radius:10px; padding:12px; margin:8px 0; }
+  /* 选择题卡片里是**结构化标记**，不是聊天正文。
+     `.msg` 的 white-space:pre-wrap 会把模板字符串里的换行与缩进原样画出来，
+     卡片被撑成两倍高、选项之间隔着大片空白——正文需要 pre-wrap，卡片不需要。 */
+  .qcard { background:#1c2129; border:1px solid #3a4250; border-radius:10px; padding:12px; margin:8px 0;
+           white-space:normal; }
   .qcard .qp { font-size:13px; font-weight:600; margin-bottom:4px; }
   .qcard .qw { font-size:11.5px; color:#8b94a3; line-height:1.5; margin-bottom:9px; }
   .opts { display:flex; flex-wrap:wrap; gap:7px; }
@@ -102,6 +143,15 @@
   <span class="badge" id="sendBadge">预览模式</span>
 </header>
 <main>
+  <aside class="rail">
+    <div class="rail-head">
+      <h2>历史会话</h2>
+      <button class="ghost" id="newConvBtn" title="开一段新会话">＋ 新建</button>
+    </div>
+    <div class="rail-list" id="convList"><p class="hint" style="padding:8px">还没有会话。</p></div>
+  </aside>
+  <div class="gutter" id="gutterL" title="拖动调整宽度"></div>
+
   <section class="chat">
     <div class="chat-log" id="chatLog">
       <div class="msg assistant">你好，我是橱柜设计顾问。先聊聊你的项目——厨房大概多大？喜欢什么风格？预算范围？所在省份？
@@ -113,10 +163,12 @@
       <button type="submit">发送</button>
     </form>
   </section>
+  <div class="gutter" id="gutterR" title="拖动调整宽度"></div>
 
   <section class="panel">
     <div class="warn">报价发送前会列出将要提供给该公司的全部信息，需你确认后才会发出。系统不会自动发送。</div>
     <div class="steps" id="steps"></div>
+    <div class="downloads" id="downloads"><span class="hint">产出物会出现在这里，可单独下载。</span></div>
     <div class="toolbar">
       <button id="uploadBtn" class="ghost">① 上传户型图</button>
       <select id="companySel"></select>
@@ -166,8 +218,191 @@ function addMsg(role, text) {
   div.className = 'msg ' + role;
   div.textContent = text;
   $('chatLog').appendChild(div);
-  $('chatLog').scrollTop = $('chatLog').scrollHeight;
+  scrollChatToBottom();
+  return div;
 }
+
+/** 新内容出现后滚到底。输入框是固定的，滚的只是消息流。 */
+function scrollChatToBottom() {
+  const log = $('chatLog');
+  log.scrollTop = log.scrollHeight;
+}
+
+// ── 快捷回答 chip ─────────────────────────────────────────────────────────
+//
+// 「您偏好的厨房风格是什么？」这类开放式问题，客户读完不知道答案该有多长。
+// 服务端随回复给出 `quickReplies`（agents/quick-replies.ts）：一句"回一个词就行"
+// 的提示 + 几个可点选项。**chip 上的字就是点下去发出去的那句话**，
+// 不是标签——服务端保证它能被需求识别认出来，否则客户点了还会被问第二遍。
+
+let quickBlock = null;
+
+function renderQuickReplies(quick) {
+  if (quickBlock) { quickBlock.remove(); quickBlock = null; }
+  if (!quick || quick.length === 0) return;
+
+  const box = document.createElement('div');
+  box.className = 'quick';
+  box.innerHTML = quick.map((q) => `
+    <div class="qh">${esc(q.hint)}</div>
+    <div>${q.options.map((o) => `<button class="chip" data-send="${esc(o)}">${esc(o)}</button>`).join('')}
+      ${q.alternative ? `<span class="chip alt" data-upload="1">${esc(q.alternative)}</span>` : ''}</div>`).join('');
+  box.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-send]');
+    if (chip) { sendChat(chip.dataset.send); return; }
+    if (e.target.closest('[data-upload]')) $('uploadBtn').click();
+  });
+  $('chatLog').appendChild(box);
+  quickBlock = box;
+  scrollChatToBottom();
+}
+
+// ── 产出物下载 ────────────────────────────────────────────────────────────
+//
+// 右栏是产出物栏：图纸、报价单、PDF。每一样都要能**单独拿走**——
+// 客户要把图发给装修队、把报价单发给业主，靠截屏是不行的。
+
+const artifacts = [];
+
+/**
+ * 登记一件产出物。
+ *
+ * `source` 要么是一段内容（字符串），要么是 `{ url }`——服务端生成的那些
+ * （报价单 PDF）走 url。**url 不能直接 window.open**：账号是靠请求头带的，
+ * 新开标签页没有那个头，服务端会 401。所以统一走 fetch。
+ */
+function registerArtifact(name, mime, source) {
+  const i = artifacts.findIndex((a) => a.name === name);
+  const entry = { name, mime, source };
+  if (i >= 0) artifacts[i] = entry; else artifacts.push(entry);
+  renderDownloads();
+}
+
+function renderDownloads() {
+  const box = $('downloads');
+  if (artifacts.length === 0) {
+    box.innerHTML = '<span class="hint">产出物会出现在这里，可单独下载。</span>';
+    return;
+  }
+  box.innerHTML = artifacts
+    .map((a, i) => `<span class="dl" data-dl="${i}">⤓ ${esc(a.name)}</span>`).join('');
+}
+
+$('downloads').addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-dl]');
+  if (!el) return;
+  const a = artifacts[Number(el.dataset.dl)];
+  if (!a) return;
+
+  let blob;
+  if (typeof a.source === 'object' && a.source.url) {
+    const res = await fetch(a.source.url, { headers: { 'x-account-id': ACCOUNT } });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      $('content').insertAdjacentHTML('afterbegin',
+        `<div class="err">${esc(body.error || '下载失败')}</div>`);
+      return;
+    }
+    blob = await res.blob();
+  } else {
+    blob = new Blob([typeof a.source === 'function' ? a.source() : a.source], { type: a.mime });
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = a.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+function clearArtifacts() { artifacts.length = 0; renderDownloads(); }
+
+// ── 分栏拖动 ──────────────────────────────────────────────────────────────
+//
+// 三栏宽度是 CSS 变量，拖动改变量。宽度记在 localStorage：
+// 每次刷新都要重新拖一遍的话，这个功能等于没有。
+
+function setupGutter(id, varName, edge, min, max) {
+  const saved = Number(localStorage.getItem(varName));
+  if (saved >= min && saved <= max) document.documentElement.style.setProperty(varName, saved + 'px');
+
+  $(id).addEventListener('pointerdown', (down) => {
+    down.preventDefault();
+    const el = $(id);
+    el.classList.add('dragging');
+    el.setPointerCapture(down.pointerId);
+    const move = (e) => {
+      const w = edge === 'left' ? e.clientX : window.innerWidth - e.clientX;
+      const clamped = Math.min(max, Math.max(min, Math.round(w)));
+      document.documentElement.style.setProperty(varName, clamped + 'px');
+    };
+    const up = () => {
+      el.classList.remove('dragging');
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      const cur = document.documentElement.style.getPropertyValue(varName);
+      localStorage.setItem(varName, parseInt(cur, 10) || '');
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  });
+}
+setupGutter('gutterL', '--rail-w', 'left', 160, 480);
+setupGutter('gutterR', '--panel-w', 'right', 320, 900);
+
+// ── 左栏：历史会话 ────────────────────────────────────────────────────────
+
+async function refreshConversations() {
+  const { body } = await api('/api/conversations');
+  const list = body.conversations || [];
+  if (list.length === 0) {
+    $('convList').innerHTML = '<p class="hint" style="padding:8px">还没有会话。</p>';
+    return;
+  }
+  $('convList').innerHTML = list.map((v) => `
+    <button class="conv ${v.id === conversationId ? 'active' : ''}" data-conv="${esc(v.id)}">
+      <span class="ct">${esc(v.title)}</span>
+      <span class="cm">${v.messageCount} 条${v.quoteCount ? ` · ${v.quoteCount} 份报价` : ''}</span>
+    </button>`).join('');
+}
+
+$('convList').addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-conv]');
+  if (!el || el.dataset.conv === conversationId) return;
+  await openConversation(el.dataset.conv);
+});
+
+/** 切到另一段会话：重放它的消息，产出物栏清空（那是上一段会话的东西）。 */
+async function openConversation(id) {
+  const { ok, body } = await api(`/api/conversations/${id}`);
+  if (!ok) return;
+  conversationId = id;
+  floorPlanId = null; layout = null; currentQuote = null;
+  stepIndex = 0; renderSteps();
+  clearArtifacts();
+  quickBlock = null;
+  $('layoutBtn').disabled = true; $('quoteBtn').disabled = true;
+  const history = body.conversation.messages || [];
+  $('content').innerHTML = history.length
+    ? '<p class="hint">已切到这段会话。产出物需要重新生成——图纸与报价都带着时间戳，不能跨会话复用。</p>'
+    : '<p class="hint">流程：上传户型图 → 补齐尺寸 → 自动排布出四视图 → 生成报价 → 确认发送。</p>';
+  $('chatLog').innerHTML = '';
+  if (history.length === 0) {
+    addMsg('assistant', '你好，我是橱柜设计顾问。先聊聊你的项目——厨房大概多大？喜欢什么风格？预算范围？所在省份？\n\n想问某家公司的具体细节，用 @公司名 点名（例如 @枫岭橱柜 / @湖畔厨柜）。');
+  }
+  for (const m of history) addMsg(m.role, m.content);
+  await refreshConversations();
+  scrollChatToBottom();
+}
+
+$('newConvBtn').addEventListener('click', async () => {
+  const { body } = await api('/api/conversations', { method: 'POST' });
+  conversationId = body.conversation?.id ?? null;
+  floorPlanId = null; layout = null; currentQuote = null;
+  stepIndex = 0; renderSteps(); clearArtifacts();
+  $('chatLog').innerHTML = '';
+  addMsg('assistant', '新会话。先说说你的项目——厨房大概多大？喜欢什么风格？预算范围？所在省份？');
+  await refreshConversations();
+});
 
 async function boot() {
   renderSteps();
@@ -176,7 +411,23 @@ async function boot() {
   $('companySel').innerHTML = (body.companies || [])
     .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
   if (body.companies?.length) await loadSpec(body.companies[0].id);
-  conversationId = (await api('/api/conversations', { method: 'POST' })).body.conversation?.id;
+  await resumeOrCreateConversation();
+}
+
+/**
+ * 接着上一段会话，没有才新建。
+ *
+ * 每次刷新都 POST 一段新会话的话，左栏很快就堆满**一条消息都没有的空会话**——
+ * 历史列表变成刷新次数的计数器。有历史就接着上一段，那也是人打开一个
+ * 聊天界面时期望看到的。
+ */
+async function resumeOrCreateConversation() {
+  const { body } = await api('/api/conversations');
+  const latest = (body.conversations || [])[0];
+  if (latest) { await openConversation(latest.id); return; }
+  const created = await api('/api/conversations', { method: 'POST' });
+  conversationId = created.body.conversation?.id ?? null;
+  await refreshConversations();
 }
 
 /**
@@ -202,7 +453,9 @@ $('acctSel').addEventListener('change', async (e) => {
   $('layoutBtn').disabled = true; $('quoteBtn').disabled = true;
   $('content').innerHTML = '<p class="hint">已切换账号，会话已重建。</p>';
   await loadProfile();
-  conversationId = (await api('/api/conversations', { method: 'POST' })).body.conversation?.id;
+  clearArtifacts();
+  $('chatLog').innerHTML = '';
+  await resumeOrCreateConversation();
 });
 
 // ── 建商：项目列表与资质核实 ──
@@ -283,19 +536,27 @@ async function loadSpec(companyId) {
 }
 $('companySel').addEventListener('change', (e) => { loadSpec(e.target.value); layout = null; $('quoteBtn').disabled = true; });
 
-$('chatForm').addEventListener('submit', async (e) => {
+$('chatForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = $('chatInput').value.trim();
-  if (!text || !conversationId) return;
-  addMsg('user', text);
   $('chatInput').value = '';
+  sendChat(text);
+});
+
+/** 发一句话。输入框与快捷回答 chip 走的是同一条路——chip 就是替客户打了那句话。 */
+async function sendChat(text) {
+  if (!text || !conversationId) return;
+  if (quickBlock) { quickBlock.remove(); quickBlock = null; }
+  addMsg('user', text);
   const { body } = await api(`/api/conversations/${conversationId}/messages`, {
     method: 'POST', body: JSON.stringify({ text }),
   });
   for (const r of body.replies || []) addMsg('assistant', r.content);
   if (!body.replies?.length) addMsg('assistant', body.error || '（无响应）');
+  renderQuickReplies(body.quickReplies || []);
   renderQuestions(body.questions || [], body.questionCompanyId || $('companySel').value);
-});
+  refreshConversations();
+}
 
 // ── 价格与偏好的选择题 ────────────────────────────────────────────────────
 //
@@ -304,14 +565,21 @@ $('chatForm').addEventListener('submit', async (e) => {
 // 选项与价格一律来自服务端（真实规格库 + 定价引擎），前端只负责渲染。
 
 let pendingQuestions = [];
+/** 会话里当前那张选择题卡片。换新卡时把旧的摘掉。 */
+let questionBlock = null;
 
 function renderQuestions(questions, companyId) {
   pendingQuestions = questions;
   if (!questions.length) return;
 
+  // 只留最新的一张。上一轮没答的题会随本轮回复再发一次——两张一模一样的卡片
+  // 叠在会话里，客户不知道该点哪张，答完另一张还留在那儿。
+  if (questionBlock) { questionBlock.remove(); questionBlock = null; }
+
   const box = document.createElement('div');
   box.className = 'msg assistant';
   box.style.maxWidth = '100%';
+  box.style.whiteSpace = 'normal'; // 里面是卡片标记，不是聊天正文
   box.innerHTML = questions.map((q, qi) => `
     <div class="qcard" data-q="${qi}">
       <div class="qp">${esc(q.prompt)}</div>
@@ -336,7 +604,8 @@ function renderQuestions(questions, companyId) {
   });
 
   $('chatLog').appendChild(box);
-  $('chatLog').scrollTop = $('chatLog').scrollHeight;
+  questionBlock = box;
+  scrollChatToBottom();
 }
 
 function onOptionClick(btn, companyId) {
@@ -511,6 +780,15 @@ function renderLayout(body) {
   const rationaleOf = (runId) =>
     (exp.perRun || []).find((x) => x.runId === runId)?.html || '';
 
+  // 每段墙的四视图各注册成一个可下载的 SVG。客户要把图发给装修队，
+  // 右栏只能看是不够的。
+  for (const r of body.views) {
+    for (const k of ['front', 'topBase', 'topWall', 'side']) {
+      const svg = r.views[k];
+      if (svg) registerArtifact(`${r.runLabel}-${VIEW_NAMES[k]}.svg`, 'image/svg+xml', svg);
+    }
+  }
+
   const viewBlocks = body.views.map((r) => `
     <div class="card">
       <h3>${esc(r.runLabel)}</h3>
@@ -577,6 +855,10 @@ $('quoteBtn').addEventListener('click', async () => {
   lastTradeNotice = body.tradePricing || null;
   stepIndex = 4; renderSteps();
   renderQuote();
+  // 正式报价单进产出物栏。走服务端的 PDF 端点，与邮件附件是同一份——
+  // 前端另拼一份的话，"客户下载的"和"公司收到的"会是两个文件。
+  registerArtifact(`报价单-${currentQuote.id}.pdf`, 'application/pdf',
+    { url: `/api/quotes/${currentQuote.id}/pdf` });
 });
 
 let lastTradeNotice = null;

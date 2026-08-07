@@ -14,6 +14,7 @@ import { stripPriceFields } from "../spec/validation.js";
 import { interactionProfile, type TradeInteractionProfile } from "../trade/interaction.js";
 import type { AgentContext, AgentReply, CompletionClient, DesignIntent } from "./types.js";
 import { escalationDecision, tierForTurn, type EscalationDecision } from "./model-tiers.js";
+import { ASK_STYLE_RULES } from "./quick-replies.js";
 
 function orchestratorSystem(profile: TradeInteractionProfile): string {
   const lines = [
@@ -25,6 +26,8 @@ function orchestratorSystem(profile: TradeInteractionProfile): string {
     "- 你只掌握通用橱柜知识。**不要报出任何具体公司的价格或型号**。",
     "- 客户想问某家公司的具体产品时，提示他用 @公司名 点名，由那家公司的助手来答。",
     "- 需要给价格感觉时，只能说「行业典型区间」，且必须说明这不是任何公司的真实报价。",
+    "",
+    ASK_STYLE_RULES,
   ];
   if (!profile.explainJargon) {
     lines.push(
@@ -114,7 +117,11 @@ export function missingFields(requirements: string): string[] {
   const checks: [string, RegExp][] = [
     ["厨房尺寸", /(\d+\s*(尺|米|m|ft|英尺|feet|inch|寸))|尺寸|面积|平米|平方/],
     ["布局", /布局|l\s*型|u\s*型|一字|岛台|island|galley/],
-    ["风格", /风格|现代|传统|简约|shaker|modern|classic|欧式|美式/],
+    // 关键词表要认得**客户真会说的词**，尤其是快捷回答按钮上印的那几个
+    // （`quick-replies.ts`）。认不出来的后果不是"少收一个字段"，而是客户点了
+    // 按钮、系统下一轮又问同一个问题——比不给按钮更糟。
+    // `test/quick-replies.test.ts` 对每个按钮做了穷举断言。
+    ["风格", /风格|现代|传统|简约|极简|北欧|轻奢|工业风|日式|中式|田园|复古|shaker|modern|classic|nordic|欧式|美式/],
     ["预算", /预算|budget|万|\$|加币|cad/],
     ["所在省份", /\b(on|bc|ab|qc|mb|sk|ns|nb|nl|pe|yt|nt|nu)\b|安大略|不列颠|阿尔伯塔|魁北克|曼尼托巴|萨斯|新斯科舍|多伦多|温哥华|卡尔加里|蒙特利尔|渥太华/],
   ];

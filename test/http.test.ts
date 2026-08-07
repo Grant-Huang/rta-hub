@@ -27,6 +27,7 @@ before(async () => {
 });
 
 const CONSUMER = "ca_demo_consumer";
+const TRADE_ACCOUNT = "ca_demo_trade";
 const base = "http://localhost";
 
 function req(pathname: string, init: RequestInit & { accountId?: string } = {}) {
@@ -49,6 +50,31 @@ test("未认证访问受保护端点返回 401", async () => {
 test("伪造的账号 id 同样被拒", async () => {
   const r = await req("/api/conversations", { method: "POST", accountId: "ca_not_real" });
   assert.equal(r.status, 401);
+});
+
+test("会话列表只回本账号的，且带得出标题——左栏靠它显示历史", async () => {
+  const created = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await created.json() as { conversation: { id: string } };
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ text: "我们家厨房要整个翻新" }),
+  });
+
+  const mine = await req("/api/conversations", { accountId: CONSUMER });
+  assert.equal(mine.status, 200);
+  const body = await mine.json() as {
+    conversations: { id: string; title: string; messageCount: number }[];
+  };
+  const row = body.conversations.find((v) => v.id === conversation.id);
+  assert.ok(row, "自己刚建的会话没出现在列表里");
+  // 标题取客户说的第一句话——「会话 cv_3f2a」对客户没有任何意义
+  assert.equal(row.title, "我们家厨房要整个翻新");
+  assert.ok(row.messageCount >= 2);
+
+  // 别人的会话不该出现在我的列表里
+  const other = await req("/api/conversations", { accountId: TRADE_ACCOUNT });
+  const otherBody = await other.json() as { conversations: { id: string }[] };
+  assert.equal(otherBody.conversations.some((v) => v.id === conversation.id), false,
+    "会话列表跨账号泄露");
 });
 
 test("公司目录只列出 active 公司，且不暴露订阅状态", async () => {
