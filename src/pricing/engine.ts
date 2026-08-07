@@ -11,8 +11,9 @@ import {
   ZERO, add, sub, mulQty, percentOf, fromCents, type Money,
 } from "../domain/money.js";
 import { priceEntryFor } from "../spec/finish.js";
+import { boxMaterialCharge, resolveBoxMaterial } from "../spec/carcass.js";
 import type {
-  AccessoryOption, AccountType, AppliedDiscount, DiscountRule, DoorStyle,
+  AccessoryOption, AccountType, AppliedDiscount, BoxMaterialOption, DiscountRule, DoorStyle,
   HardwareOption, ModuleSelection, ModuleSpec, Modifier, PriceMatrixEntry,
   Province, QuoteLineItem, QuoteLineModifier, QuoteTax, ShippingRule, TaxRule,
 } from "../domain/types.js";
@@ -26,6 +27,11 @@ export interface PricingContext {
   priceMatrix: readonly PriceMatrixEntry[];
   hardwareOptions: readonly HardwareOption[];
   accessoryOptions: readonly AccessoryOption[];
+  /**
+   * 箱体板材档位。**可以为空**——老的规格版本没有这一维，那时不加任何修饰项，
+   * 报价与从前逐分一致。
+   */
+  boxMaterialOptions?: readonly BoxMaterialOption[];
   discountRules: readonly DiscountRule[];
   shippingRule?: ShippingRule;
   taxRules: readonly TaxRule[];
@@ -34,6 +40,12 @@ export interface PricingContext {
 export interface PricingInput {
   selections: readonly ModuleSelection[];
   doorStyleId: string;
+  /**
+   * 箱体板材。与 `doorStyleId` 是**两个独立的维度**：同一款门配颗粒板箱体
+   * 和配全夹板箱体是两个价（见 `domain/types.ts` 的 `BoxMaterialOption`）。
+   * 不给就按商家的默认档。
+   */
+  boxMaterialId?: string;
   accountType: AccountType;
   province: Province;
   /** 报价时刻，决定取哪一版税率。 */
@@ -43,6 +55,11 @@ export interface PricingInput {
 /** 可解释的价格明细——报价单要能逐项核对，不能只给一个总数。 */
 export interface PriceBreakdown {
   priceGroupId: string;
+  /**
+   * 这份报价实际按的箱体档。**客户没选时这里是商家的默认档**——
+   * 报价单要写明按的是哪一档，"没写"会被读成"和别家一样"。
+   */
+  boxMaterial?: BoxMaterialOption;
   lineItems: QuoteLineItem[];
   subtotal: Money;
   discounts: AppliedDiscount[];
@@ -78,6 +95,15 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
   }
   const priceGroupId = doorStyle.priceGroupId;
 
+  // 箱体板材：客户没选就按商家的默认档。**明确选了一档而那一档不存在是数据错误**
+  // ——静默换成默认档等于按客户没要的规格出价，那份价还会被拿去下单。
+  const boxOptions = ctx.boxMaterialOptions ?? [];
+  const boxMaterial = resolveBoxMaterial(boxOptions, input.boxMaterialId);
+  if (input.boxMaterialId && !boxMaterial) {
+    throw new PricingError(
+      `箱体板材不存在：${input.boxMaterialId}`, "BOX_MATERIAL_NOT_FOUND");
+  }
+
   // ── 1. 逐行：标价 + 修饰项 ──────────────────────────────────────────────
   const lineItems: QuoteLineItem[] = [];
   for (const sel of input.selections) {
@@ -103,6 +129,16 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
     const unitListPrice = useTradeMatrix ? entry.tradePrice! : entry.listPrice;
 
     const modifiers: QuoteLineModifier[] = [];
+
+    // 箱体板材加价。**只加在有箱体的件上**——填缝条、踢脚板、塑料地脚是
+    // 一块板或一个塑料件，给它们乘上全夹板的加价是凭空加价（`spec/carcass.ts`）。
+    const boxCharge = boxMaterialCharge(mod, boxMaterial, unitListPrice);
+    if (boxCharge !== undefined) {
+      modifiers.push({
+        kind: "boxMaterial", refId: boxMaterial!.id, name: boxMaterial!.name,
+        amount: boxCharge,
+      });
+    }
 
     if (sel.assembly === "assembled" && entry.assembledUpcharge) {
       modifiers.push({
@@ -166,6 +202,7 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
 
   return {
     priceGroupId,
+    ...(boxMaterial ? { boxMaterial } : {}),
     lineItems,
     subtotal,
     discounts,

@@ -12,6 +12,7 @@ import { generateLayout } from "../src/layout/generate.js";
 import { buildBom } from "../src/layout/bom.js";
 import { pilotModules } from "../src/app/seed.js";
 import { applianceFrom } from "../src/floorplan/appliances.js";
+import { RTA_QUOTE_NOTE } from "../src/quote/rta-disclosure.js";
 import type { ParsedGeometry, WallRun } from "../src/floorplan/types.js";
 import type { GeneratedLayout } from "../src/layout/generate.js";
 import type { QuoteList } from "../src/quote/line-items.js";
@@ -206,6 +207,7 @@ test("客户给了准确尺寸时不要求披露——没有推定就没有要�
 test("未落实的偏好是提示项——不拦交付，但一定要显示给客户", () => {
   const r = auditDeliverable({
     deliverable: "quoteList", stage: "quoted", quoteList: emptyList(0),
+    customerFacingText: RTA_QUOTE_NOTE,  // 报价单必须带产品边界说明（SR-D4）
     unappliedPreferences: ["W3030 不提供「组装好发货」，这几个柜体按平板发货"],
   });
   assert.equal(r.ok, true, "这不该拦住交付");
@@ -232,4 +234,56 @@ test("阻断项一条都不放行——不参与权衡", () => {
     unappliedPreferences: ["a", "b", "c", "d", "e"],
   });
   assert.equal(r.ok, false);
+});
+
+
+// ── SR-D4：报价单要写明这份价对应的是什么产品 ────────────────────────────
+
+test("报价单没写明是 RTA：拦下来", () => {
+  // 客户拿这张单子去跟全定制的报价比，而那两个数不可比——
+  // 不是"客户没问"，是他不知道有这个维度存在，所以问不出来
+  const r = auditDeliverable({
+    deliverable: "quoteList", stage: "quoted", quoteList: emptyList(0),
+    customerFacingText: "柜体 $8,000　五金 $600　合计 $8,600",
+  });
+  assert.equal(r.ok, false);
+  const f = r.blockers.find((b) => b.code === "UNDISCLOSED_PRODUCT_SCOPE");
+  assert.ok(f, JSON.stringify(r.findings));
+  assert.equal(f.rule, "SR-D4");
+  assert.match(f.message, /RTA/);
+});
+
+test("商家有多档箱体却没写明按的哪一档：拦下来", () => {
+  const r = auditDeliverable({
+    deliverable: "quoteList", stage: "quoted", quoteList: emptyList(0),
+    customerFacingText: RTA_QUOTE_NOTE,
+    boxMaterialCount: 3,
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.blockers.some((b) => /哪一档/.test(b.message)), JSON.stringify(r.blockers));
+});
+
+test("商家只有一档箱体时不要求写——没有可比的另一档，写了只是噪音", () => {
+  const r = auditDeliverable({
+    deliverable: "quoteList", stage: "quoted", quoteList: emptyList(0),
+    customerFacingText: RTA_QUOTE_NOTE,
+    boxMaterialCount: 1,
+  });
+  assert.equal(r.ok, true, JSON.stringify(r.blockers));
+});
+
+test("两条都写全了就放行", () => {
+  const r = auditDeliverable({
+    deliverable: "quoteList", stage: "quoted", quoteList: emptyList(0),
+    customerFacingText: `【箱体板材】全夹板箱体（你选的）\n\n${RTA_QUOTE_NOTE}`,
+    boxMaterialCount: 3,
+  });
+  assert.equal(r.ok, true, JSON.stringify(r.blockers));
+  assert.ok(r.checkedRules.includes("SR-D4"), r.checkedRules.join());
+});
+
+test("这一条只管报价单——图纸不必每张都写一遍 RTA", () => {
+  const r = auditDeliverable({ deliverable: "planView", stage: "planReview", layout });
+  assert.equal(r.checkedRules.includes("SR-D4"), false,
+    "俯视图上也要求写 RTA 说明，那是把每张图都变成免责声明");
 });

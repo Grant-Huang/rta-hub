@@ -21,7 +21,9 @@
  * 所以单独成区。分类汇总让客户一眼看到钱花在哪一类上。
  */
 import { format, type Money } from "../domain/money.js";
-import type { DoorStyle, ModuleSpec, Quote, QuoteLineItem } from "../domain/types.js";
+import type {
+  BoxMaterialOption, DoorStyle, ModuleSpec, Quote, QuoteLineItem,
+} from "../domain/types.js";
 import type { BomCategory, BomLine } from "../layout/bom.js";
 import { matchFaceTemplate } from "../render/templates.js";
 
@@ -79,6 +81,14 @@ export interface CategorySubtotal {
 }
 
 export interface QuoteList {
+  /**
+   * 这份价按的是哪一档箱体板材。
+   *
+   * **必须写出来。** 客户拿这张单子去跟另一家比，那一家报的可能是颗粒板箱体，
+   * 这一家是全夹板——不写，两个数看起来就是同一件东西的两个价。
+   * 客户没主动选时这里是商家的默认档，文字里会点明"按基础档算的"。
+   */
+  boxMaterial?: { name: string; chosen: boolean; note?: string };
   cabinets: CabinetGroup[];
   /** 填缝条、踢脚/地脚、收口板。 */
   trim: QuoteListRow[];
@@ -95,6 +105,8 @@ export interface BuildListInput {
   doorStyles: readonly DoorStyle[];
   /** BOM 提供分类与来由；缺省时按型号 type 归类。 */
   bomLines?: readonly BomLine[];
+  /** 该公司的箱体板材档位，用来把 `quote.boxMaterialId` 翻成客户看得懂的名字。 */
+  boxMaterials?: readonly BoxMaterialOption[];
 }
 
 const BOM_TO_QUOTE: Record<BomCategory, QuoteCategory> = {
@@ -155,7 +167,18 @@ export function buildQuoteList(input: BuildListInput): QuoteList {
   const itemsTotal = (cabinets.reduce((s, g) => s + g.groupTotal, 0)
     + trim.reduce((s, r) => s + r.lineTotal, 0)) as Money;
 
+  const box = (input.boxMaterials ?? []).find((m) => m.id === quote.boxMaterialId);
+
   return {
+    ...(box ? {
+      boxMaterial: {
+        name: box.name,
+        // 客户主动选过，还是我们按商家的基础档替他定的——这两件事在解释上不一样，
+        // 后者要说明"你没选，按基础档算的"，否则客户会以为自己选过全夹板
+        chosen: !box.isDefault,
+        ...(box.note ? { note: box.note } : {}),
+      },
+    } : {}),
     cabinets, trim, subtotals, itemsTotal,
     reconciliationDelta: (itemsTotal - quote.subtotal) as Money,
   };
@@ -301,6 +324,13 @@ export function renderQuoteListText(list: QuoteList): string {
   const head = "代码".padEnd(W.code) + "名称".padEnd(W.name) +
     "数量".padStart(W.qty) + "单价".padStart(W.unit) + "总价".padStart(W.total);
 
+  if (list.boxMaterial) {
+    // 摆在最前面，跟门板样式一样是"这份价对的是什么产品"的一部分
+    out.push(`【箱体板材】${list.boxMaterial.name}` +
+      (list.boxMaterial.chosen ? "（你选的）" : "（你没选，按该商家的基础档算的）"));
+    if (list.boxMaterial.note) out.push(`  ${list.boxMaterial.note}`);
+    out.push("");
+  }
   out.push("【柜体（含门板）】", head, "─".repeat(62));
   for (const g of list.cabinets) {
     out.push(row(g.cabinet, W));
@@ -360,7 +390,15 @@ export function renderQuoteListHtml(list: QuoteList): string {
     `<td class="num">${s.includedIn ? `<span class="ql-note">${esc(s.includedIn)}</span>` : format(s.amount)}</td></tr>`,
   ).join("");
 
+  const boxLine = list.boxMaterial
+    ? `<p class="ql-box"><b>箱体板材：</b>${esc(list.boxMaterial.name)}` +
+      (list.boxMaterial.chosen ? "（你选的）" : "（你没选，按该商家的基础档算的）") +
+      (list.boxMaterial.note ? `<span class="ql-note">${esc(list.boxMaterial.note)}</span>` : "") +
+      "</p>"
+    : "";
+
   return `<div class="quote-list">
+    ${boxLine}
     <h4>柜体（含门板）</h4>
     <table class="ql">${head}<tbody>${cabinetRows}</tbody></table>
     ${list.trim.length ? `<h4>填缝与收口件</h4>

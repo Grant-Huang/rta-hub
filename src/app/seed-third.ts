@@ -140,6 +140,15 @@ export const thirdCompanyTemplates: ImportSources = {
     "BL-EP,panel,24,34-1/2,3/4,RTA",
   ].join("\n"),
 
+  // 第三家做三档，实木那一档贵得多——三家的档数与加价各不相同，
+  // 那正是"照商家给的样子建模"该有的样子
+  boxMaterials: [
+    "code,name,upcharge,default,note",
+    "particleBoard,Birch Core Board,0%,yes,标价按这一档",
+    "plywood,Baltic Birch Plywood,26%,,桦木夹板箱体",
+    "solidWood,Solid Birch Box,55%,,实木拼板侧板",
+  ].join("\n"),
+
   priceMatrix: [
     "moduleCode,priceGroup,listPrice,assembledUpcharge",
     "BL-B12,CORE,131.00,14%", "BL-B12,SELECT,236.00,14%",

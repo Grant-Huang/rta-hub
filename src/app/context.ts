@@ -97,6 +97,7 @@ export async function seedInitialData(ctx: AppContext): Promise<void> {
     priceMatrix: seed.pilotPriceMatrix,
     hardwareOptions: seed.pilotHardware,
     accessoryOptions: seed.pilotAccessories,
+    boxMaterialOptions: seed.pilotBoxMaterials,
     discountRules: seed.pilotDiscounts,
     shippingRule: seed.pilotShipping,
   };

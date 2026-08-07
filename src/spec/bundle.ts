@@ -5,8 +5,8 @@
  * §3.6），永远一起读、一起写，拆成六个文件只会增加一致性风险。
  */
 import type {
-  AccessoryOption, DiscountRule, DoorStyle, HardwareOption, ModuleSpec,
-  PriceGroup, PriceMatrixEntry, ShippingRule,
+  AccessoryOption, BoxMaterialOption, DiscountRule, DoorStyle, HardwareOption,
+  ModuleSpec, PriceGroup, PriceMatrixEntry, ShippingRule,
 } from "../domain/types.js";
 import type { PricingContext } from "../pricing/engine.js";
 import type { TaxRule } from "../domain/types.js";
@@ -21,6 +21,8 @@ export interface SpecBundle {
   priceMatrix: PriceMatrixEntry[];
   hardwareOptions: HardwareOption[];
   accessoryOptions: AccessoryOption[];
+  /** 箱体板材档位。老规格版本没有这一维，为空数组。 */
+  boxMaterialOptions: BoxMaterialOption[];
   discountRules: DiscountRule[];
   shippingRule?: ShippingRule;
 }
@@ -29,7 +31,7 @@ export function emptyBundle(specVersionId: string, companyId: string): SpecBundl
   return {
     id: specVersionId, companyId,
     priceGroups: [], doorStyles: [], modules: [], priceMatrix: [],
-    hardwareOptions: [], accessoryOptions: [], discountRules: [],
+    hardwareOptions: [], accessoryOptions: [], boxMaterialOptions: [], discountRules: [],
   };
 }
 
@@ -43,6 +45,7 @@ export function toPricingContext(bundle: SpecBundle, taxRules: readonly TaxRule[
     priceMatrix: bundle.priceMatrix,
     hardwareOptions: bundle.hardwareOptions,
     accessoryOptions: bundle.accessoryOptions,
+    boxMaterialOptions: bundle.boxMaterialOptions ?? [],
     discountRules: bundle.discountRules,
     ...(bundle.shippingRule ? { shippingRule: bundle.shippingRule } : {}),
     taxRules,

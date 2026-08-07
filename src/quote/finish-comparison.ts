@@ -80,6 +80,12 @@ export interface FinishComparisonInput {
   /** 与当前报价**完全相同**的选择。换的只有门板样式。 */
   selections: readonly ModuleSelection[];
   currentDoorStyleId: string;
+  /**
+   * 这份报价用的箱体板材。**必须传**，否则比价会按默认档定价，
+   * 而客户实际选的是全夹板——比价表上的数就不是他真选了那个花色会拿到的数，
+   * 而"比价与实际报价对不上"是最难解释的一种不一致（本文件的核心约定）。
+   */
+  boxMaterialId?: string;
   accountType: PricingInput["accountType"];
   province: PricingInput["province"];
   at: string;
@@ -151,6 +157,7 @@ function evaluate(style: DoorStyle, input: FinishComparisonInput): FinishOption 
     const priced = computePrice(input.ctx, {
       selections: [...input.selections],
       doorStyleId: style.id,
+      ...(input.boxMaterialId ? { boxMaterialId: input.boxMaterialId } : {}),
       accountType: input.accountType,
       province: input.province,
       at: input.at,

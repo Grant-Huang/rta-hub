@@ -36,7 +36,12 @@ export function parseCsv(text: string, delimiter?: string): string[][] {
       }
       continue;
     }
-    if (ch === '"') { inQuotes = true; continue; }
+    // 引号**只在字段开头**才是引号（RFC 4180）。
+    //
+    // 之前这里是"见到引号就进引号模式"，于是商家写「1/2" 夹板箱体」这种
+    // 完全正常的一句话，整张表就报「引号未闭合」并且一行都导不进来。
+    // 英寸符号在橱柜价目表里到处都是——这不是边角情况。
+    if (ch === '"' && field.length === 0) { inQuotes = true; continue; }
     if (ch === delim) { row.push(field); field = ""; continue; }
     if (ch === "\r") continue;
     if (ch === "\n") {
