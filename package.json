@@ -20,7 +20,8 @@
     "test": "tsx --test test/*.test.ts",
     "ops:prospects": "tsx src/ops/prospects-cli.ts",
     "gates": "tsx src/ops/gates-cli.ts",
-    "simulate": "tsx scripts/simulate.mts"
+    "simulate": "tsx scripts/simulate.mts",
+    "sanity:doc": "tsx scripts/sanity-doc.mts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
