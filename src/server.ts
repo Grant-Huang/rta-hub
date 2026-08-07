@@ -29,7 +29,7 @@ import {
   buildSendDisclosure, confirm, createQuoteFromLlmOutput, recordSendResult,
 } from "./app/quote-service.js";
 import { openDispute, resolveDispute } from "./billing/lead-events.js";
-import { quoteContentHash } from "./quote/state.js";
+import { quoteContentHash, verifySnapshot } from "./quote/state.js";
 import { layoutFace, toSvg } from "./render/face-grammar.js";
 import { buildFace, BASE_FACE_HEIGHT, matchFaceTemplate, type FaceTemplateId } from "./render/templates.js";
 import {
@@ -89,6 +89,7 @@ import {
   applianceFrom, normalizeAppliances, provenanceNote, violationCaveat,
   type ApplianceKind, type ApplianceSpec,
 } from "./floorplan/appliances.js";
+import { auditDeliverable, renderAuditText } from "./delivery/audit.js";
 import { disputeWindowEndsAt, isWithinDisputeWindow } from "./billing/lead-events.js";
 import {
   assertLaunchReady, launchGateReport, launchGateSummary, LaunchGatesNotMet,
@@ -350,6 +351,26 @@ function applianceNotes(plan: FloorPlan, acceptable: boolean): {
     ...(note ? { applianceProvenance: note } : {}),
     ...(caveat ? { ergonomicsCaveat: caveat } : {}),
   };
+}
+
+/**
+ * 把要交给客户的文字拼成一段，供交付前审核核对「该说的话真的说了」。
+ *
+ * 只检查数据字段是不够的：`provenance: "assumed"` 存在数据里，
+ * 但客户读到的是文字——两者可能脱节，而脱节的那一次正是出事的那一次。
+ */
+function customerText(
+  explanation: { viewGuideText?: string; perRun?: { text: string }[] } | undefined,
+  notes: { applianceProvenance?: string; ergonomicsCaveat?: string },
+  extra: string[] = [],
+): string {
+  return [
+    explanation?.viewGuideText ?? "",
+    ...(explanation?.perRun ?? []).map((p) => p.text),
+    notes.applianceProvenance ?? "",
+    notes.ergonomicsCaveat ?? "",
+    ...extra,
+  ].join("\n");
 }
 
 /** 合成某会话在某公司下的偏好（跨公司项 + 该公司项）。 */
@@ -764,6 +785,33 @@ app.post("/api/quotes", requireAccount, async (c) => {
   });
 
   const session = appCtx.repos.designSessions.byId(conv.id);
+
+  // ── 交付前审核（FR-14）──
+  //
+  // 报价是客户**据以做决定**的东西：拿去跟别家比、拿去下单。所以这一步查得最严，
+  // 而且把快照复算也算进来——一份复算对不上的报价，看起来和对得上的一模一样。
+  const listText = renderQuoteListText(list);
+  const audit = auditDeliverable({
+    deliverable: "quoteList",
+    stage: session?.stage ?? "quoted",
+    ...(stored ? { layout: toGeneratedLayout(stored) } : {}),
+    ...(activePlan ? { wallRuns: activePlan.parsedGeometry.wallRuns } : {}),
+    modules: pricing.modules,
+    ...(bom ? { bom } : {}),
+    quote: result.quote,
+    quoteList: list,
+    ...(activePlan?.appliances?.length ? { appliances: activePlan.appliances } : {}),
+    snapshot: verifySnapshot(result.quote, pricing, now()),
+    customerFacingText: listText,
+  });
+  if (!audit.ok) {
+    // 拦下来，并**说清楚拦的是什么**——「报价校验未通过」对客户毫无用处
+    return c.json({
+      error: "这份报价没通过交付前检查，先不能给你",
+      audit, auditText: renderAuditText(audit),
+    }, 409);
+  }
+
   if (session && session.companyId === company.id && session.stage === "fullDrawings") {
     await appCtx.repos.designSessions.upsert(markQuoted(session, now()));
   }
@@ -772,8 +820,9 @@ app.post("/api/quotes", requireAccount, async (c) => {
     quote: result.quote,
     formattedTotal: format(result.quote.total),
     quoteList: list,
-    quoteListText: renderQuoteListText(list),
+    quoteListText: listText,
     quoteListHtml: renderQuoteListHtml(list),
+    audit, auditText: renderAuditText(audit),
     // trade 账号被降级定价时如实说明原因，不静默按零售价出单
     ...(account.accountType === "trade" && !gate.allowed
       ? { tradePricing: { applied: false, reason: gate.reason, nextStep: gate.nextStep } }
@@ -1195,11 +1244,21 @@ app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
       : "首版全局排布",
   });
 
+  // 交付前审核：把散在各处的检查合起来，回答「这一份现在能不能给客户」
+  const explanation = explanationFor(plan, layout, company.id, prefs);
+  const audit = auditDeliverable({
+    deliverable: "planView", stage: session.stage,
+    layout, wallRuns: plan.parsedGeometry.wallRuns,
+    ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
+    customerFacingText: customerText(explanation, applianceNotes(plan, layout.acceptable)),
+  });
+
   return c.json({
     designLayoutId, revisionNo,
     stage: session.stage,
     planViews: renderPlanViews(plan.parsedGeometry, layout.placements),
     moduleCounts: layout.moduleCounts,
+    audit, auditText: renderAuditText(audit),
     ergonomics: layout.ergonomics,
     // 推定的家电尺寸会影响硬约束结论——**由推定值导致的否决必须说明它是推定的**，
     // 否则客户会以为自己的厨房真的排不下（FR-3.2）
@@ -1207,7 +1266,7 @@ app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
     aesthetics: layout.aesthetics,
     acceptable: layout.acceptable,
     warnings: layout.warnings,
-    explanation: explanationFor(plan, layout, company.id, prefs),
+    explanation,
     prompt: stagePrompt(session, { planAcceptable: layout.acceptable }),
     /** 这一版是应哪次修改而出的——客户能对上自己刚说的话。 */
     ...(lastRevision ? { revision: lastRevision } : {}),
@@ -1261,31 +1320,46 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     changeSummary: "按户型自动生成初版方案",
   });
 
+  // 交付前审核（FR-14）。四视图这一步已经有完整 BOM 与偏好落实结果，
+  // 所以查得比俯视图那一步更全
+  const bom = bomFor(plan, layout, company.id);
+  const selections = applyPreferencesToSelections(bomToSelections(bom), prefs, bundle);
+  const unapplied = unappliedPreferences(bomToSelections(bom), prefs, bundle);
+  const explanation = explanationFor(plan, layout, company.id, prefs);
+  const notes = applianceNotes(plan, layout.acceptable);
+  const audit = auditDeliverable({
+    deliverable: "fourViews", stage: session.stage,
+    layout, wallRuns: plan.parsedGeometry.wallRuns,
+    modules: bundle.modules, bom,
+    ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
+    unappliedPreferences: unapplied,
+    customerFacingText: customerText(explanation, notes),
+  });
+
   return c.json({
     layoutKey: layoutKey(plan.id, company.id),
     designLayoutId,
     revisionNo,
     warnings: layout.warnings,
     moduleCounts: layout.moduleCounts,
+    audit, auditText: renderAuditText(audit),
     // 人体工程硬约束与美观评分（FR-4）
     ergonomics: layout.ergonomics,
-    ...applianceNotes(plan, layout.acceptable),
+    ...notes,
     aesthetics: layout.aesthetics,
     acceptable: layout.acceptable,
     // 直接可喂给 /api/quotes（结构里没有任何价格字段，FR-8）。
     // 五金/配件按 appliesTo* 过滤后才加上——加到装不了的柜体上会被定价校验整单拒绝
     // 完整 BOM：柜体 + 填缝条 + 踢脚/地脚 + 收口板。
     // 只报柜体的话，客户拿到的是一份缺料的价格（见 layout/bom.ts）
-    selections: applyPreferencesToSelections(
-      bomToSelections(bomFor(plan, layout, company.id)), prefs, bundle),
-    bomMissing: bomFor(plan, layout, company.id).missing,
+    selections,
+    bomMissing: bom.missing,
     // 偏好没能完全落实时如实说明——静默地部分落实最坏（客户拆箱才发现吊柜是平板的）
-    unappliedPreferences: unappliedPreferences(
-      bomToSelections(bomFor(plan, layout, company.id)), prefs, bundle),
+    unappliedPreferences: unapplied,
     planViews: renderPlanViews(plan.parsedGeometry, layout.placements),
     views: viewsFor(plan, layout, company.id),
     // 图纸配解释：这是什么图、为什么这么排（全部来自算出来的结果）
-    explanation: explanationFor(plan, layout, company.id, prefs),
+    explanation,
     appliedPreferences: prefs,
   }, 201);
 });
