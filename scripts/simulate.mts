@@ -178,25 +178,70 @@ async function main(): Promise<void> {
       body: JSON.stringify(floorplanBody),
     });
     const floorPlanId = fp.floorPlan.id;
-
-    for (const w of k.walls) {
-      await call(`/api/floorplans/${floorPlanId}/resolve`, {
-        method: "POST", acct,
-        // 岛台要带上 kind/depth——不带的话它会被当成一段普通的墙接到上一段后面，
-        // 全局俯视图上就变成"厨房多了一面墙"，而不是中间摆了个岛台
-        body: JSON.stringify({
-          addRun: {
-            label: w.label, length: w.length,
-            ...(w.kind ? { kind: w.kind } : {}),
-            ...(w.depth !== undefined ? { depth: w.depth } : {}),
-          },
-        }),
-      });
+    if (fp.extractionNote) {
+      console.log(`  抽取说明：${String(fp.extractionNote).slice(0, 120)}`);
+      timeline.push({ kind: "note", level: "info", text: String(fp.extractionNote) });
     }
-    await call(`/api/floorplans/${floorPlanId}/resolve`, {
-      method: "POST", acct, body: JSON.stringify({ ceilingHeight: k.ceilingHeight }),
-    });
 
+    // 有真实图时：优先确认视觉抽出的墙段长度（不另加一堆 length=0 的墙导致永远不 ready）
+    // 没抽出墙时：退回手动 addRun（与无图场景同一路径）
+    let runsAfterGeom: Json[] = [];
+    {
+      const snap = await call(`/api/floorplans/${floorPlanId}`, { acct });
+      const existing = (snap.floorPlan?.parsedGeometry?.wallRuns ?? []) as Json[];
+      const usableVision = existing.length > 0 && existing.length <= k.walls.length + 1;
+      if (k.sourceImage && usableVision) {
+        for (let i = 0; i < k.walls.length; i++) {
+          const w = k.walls[i]!;
+          const run = existing[i];
+          if (run?.id) {
+            await call(`/api/floorplans/${floorPlanId}/resolve`, {
+              method: "POST", acct,
+              body: JSON.stringify({ wallRunId: run.id, length: w.length }),
+            });
+          } else {
+            await call(`/api/floorplans/${floorPlanId}/resolve`, {
+              method: "POST", acct,
+              body: JSON.stringify({
+                addRun: {
+                  label: w.label, length: w.length,
+                  ...(w.kind ? { kind: w.kind } : {}),
+                  ...(w.depth !== undefined ? { depth: w.depth } : {}),
+                },
+              }),
+            });
+          }
+        }
+      } else {
+        for (const w of k.walls) {
+          await call(`/api/floorplans/${floorPlanId}/resolve`, {
+            method: "POST", acct,
+            // 岛台要带上 kind/depth——不带的话它会被当成一段普通的墙接到上一段后面，
+            // 全局俯视图上就变成"厨房多了一面墙"，而不是中间摆了个岛台
+            body: JSON.stringify({
+              addRun: {
+                label: w.label, length: w.length,
+                ...(w.kind ? { kind: w.kind } : {}),
+                ...(w.depth !== undefined ? { depth: w.depth } : {}),
+              },
+            }),
+          });
+        }
+      }
+      await call(`/api/floorplans/${floorPlanId}/resolve`, {
+        method: "POST", acct, body: JSON.stringify({ ceilingHeight: k.ceilingHeight }),
+      });
+      // 消解视觉留下的待确认项（全局 wallRuns / 低置信字段），否则 FR-15 几何永远不齐
+      const pending = await call(`/api/floorplans/${floorPlanId}`, { acct });
+      for (const u of (pending.floorPlan?.unresolvedItems ?? []) as Json[]) {
+        if (u.resolved) continue;
+        await call(`/api/floorplans/${floorPlanId}/resolve`, {
+          method: "POST", acct, body: JSON.stringify({ itemId: u.id }),
+        });
+      }
+      runsAfterGeom = ((await call(`/api/floorplans/${floorPlanId}`, { acct }))
+        .floorPlan.parsedGeometry.wallRuns ?? []) as Json[];
+    }
     // 客户声明的家电（FR-3.2）。不声明就走推定值（冰箱 + 灶具），
     // 那条路径已经被别的场景覆盖了；这里要测的是**声明之后**的行为：
     // 留空按实际尺寸算、说不确定的如实标成推定、配套柜按能力标签查。
@@ -214,11 +259,15 @@ async function main(): Promise<void> {
       });
     }
 
-    const runs = (await call(`/api/floorplans/${floorPlanId}`, { acct }))
-      .floorPlan.parsedGeometry.wallRuns as Json[];
+    const runs = runsAfterGeom.length
+      ? runsAfterGeom
+      : ((await call(`/api/floorplans/${floorPlanId}`, { acct }))
+        .floorPlan.parsedGeometry.wallRuns as Json[]);
     let featureCount = 0;
-    for (const w of k.walls) {
-      const run = runs.find((r) => r.label === w.label);
+    for (let wi = 0; wi < k.walls.length; wi++) {
+      const w = k.walls[wi]!;
+      // 真实图抽取的标签可能是 Wall 1 / 北墙，与场景里的 North 对不上——按序号对齐
+      const run = runs.find((r) => r.label === w.label) ?? runs[wi];
       if (!run) continue;
       for (const f of w.features) {
         const r = await call(`/api/floorplans/${floorPlanId}/resolve`, {
