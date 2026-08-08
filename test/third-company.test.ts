@@ -133,7 +133,7 @@ test("两家的报价件数不同——那是正确的结果，不是 bug", () =
 
 test("解不出贴合组合时如实说明，不静默把 48\" 变成 42\"", () => {
   const layout = generateLayout(kitchen(108), pilotModules, { ceilingHeight: 108, appliances });
-  assert.ok(layout.warnings.some((w) => w.message.includes("顶线")),
+  assert.ok(layout.warnings.some((w) => /顶线|crown molding/i.test(w.message)),
     `没有说明顶上留了空当：${layout.warnings.map((w) => w.message).join(" / ")}`);
 });
 

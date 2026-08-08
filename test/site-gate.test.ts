@@ -39,8 +39,8 @@ test("生产环境没配口令 → 拒绝启动，而不是静默全开", () => 
 test("非生产没配口令 → 不启用，但启动提示必须说明没有保护", () => {
   const cfg = resolveSiteGate(env({}));
   assert.equal(cfg.enabled, false);
-  assert.match(startupNotice(cfg), /未启用/);
-  assert.match(startupNotice(cfg), /冒充任意账号/);
+  assert.match(startupNotice(cfg), /未启用|disabled/i);
+  assert.match(startupNotice(cfg), /冒充任意账号|impersonate/i);
 });
 
 test("显式关闭是逃生口，必须是有意为之", () => {
