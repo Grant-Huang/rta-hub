@@ -43,31 +43,30 @@ export interface ElementStyle {
   strokeWidth: number;
   /** 虚线样式。家电位是虚线——它不是我们供的货，图上要看得出区别。 */
   dash?: string;
-  /** 图例上的名字。中文，客户看的。 */
+  /** 图例上的名字。图纸固定英文（无视客户语言偏好）。 */
   legend: string;
 }
 
 export const PALETTE: Record<ElementKind, ElementStyle> = {
-  cabinet: { fill: "#f5f1e8", stroke: "#333333", strokeWidth: 1, legend: "柜体" },
-  // 水槽柜给一个可分辨的浅绿——客户看图第一个找的就是水槽
-  sinkBase: { fill: "#dff0e8", stroke: "#333333", strokeWidth: 1, legend: "水槽柜" },
-  applianceCabinet: { fill: "#e9eef5", stroke: "#333333", strokeWidth: 1, legend: "家电配套柜" },
-  filler: { fill: "#e6e0d4", stroke: "#333333", strokeWidth: 1, legend: "填缝条" },
-  panel: { fill: "#ded6c4", stroke: "#333333", strokeWidth: 1, legend: "收口板" },
-  // 家电位：灰 + 虚线。虚线表示"这个位置留给你的家电，不在报价里"
-  appliance: { fill: "#f0f0f0", stroke: "#999999", strokeWidth: 1, dash: "5 3", legend: "家电位（自备）" },
-  counter: { fill: "#3b3b3b", stroke: "#3b3b3b", strokeWidth: 0, legend: "台面" },
-  // 俯视图里台面只画一圈外沿：填色会把下面的柜体和水槽盆全盖住。
-  // 它比柜体轮廓大出一圈——门洞旁"为什么要让开一点"就在这一圈上看得见。
-  counterEdge: { fill: "none", stroke: "#3b3b3b", strokeWidth: 1.1, legend: "台面外沿" },
-  toeKick: { fill: "#d9d3c6", stroke: "#333333", strokeWidth: 0.75, legend: "踢脚" },
-  wall: { fill: "none", stroke: "#333333", strokeWidth: 2.5, legend: "墙体" },
-  featureWindow: { fill: "none", stroke: "#4d9ad7", strokeWidth: 6, legend: "窗" },
-  featurePlumbing: { fill: "none", stroke: "#5fb08a", strokeWidth: 6, legend: "上下水" },
-  featureGas: { fill: "none", stroke: "#c0714d", strokeWidth: 6, legend: "燃气口" },
-  featureElectrical: { fill: "none", stroke: "#c8a33a", strokeWidth: 6, legend: "强电位" },
-  featureDoor: { fill: "none", stroke: "#8a8a8a", strokeWidth: 6, legend: "门洞" },
-  featureObstruction: { fill: "none", stroke: "#a0522d", strokeWidth: 6, legend: "障碍" },
+  cabinet: { fill: "#f5f1e8", stroke: "#333333", strokeWidth: 1, legend: "Cabinet" },
+  // Sink base gets a readable green — first thing customers look for
+  sinkBase: { fill: "#dff0e8", stroke: "#333333", strokeWidth: 1, legend: "Sink base" },
+  applianceCabinet: { fill: "#e9eef5", stroke: "#333333", strokeWidth: 1, legend: "Appliance cabinet" },
+  filler: { fill: "#e6e0d4", stroke: "#333333", strokeWidth: 1, legend: "Filler" },
+  panel: { fill: "#ded6c4", stroke: "#333333", strokeWidth: 1, legend: "Panel" },
+  // Appliances: gray + dashed — dashed means "your appliance, not in the quote"
+  appliance: { fill: "#f0f0f0", stroke: "#999999", strokeWidth: 1, dash: "5 3", legend: "Appliance (owner-supplied)" },
+  counter: { fill: "#3b3b3b", stroke: "#3b3b3b", strokeWidth: 0, legend: "Countertop" },
+  // Plan view: counter is outline only so cabinets/sink bowl stay visible.
+  counterEdge: { fill: "none", stroke: "#3b3b3b", strokeWidth: 1.1, legend: "Counter edge" },
+  toeKick: { fill: "#d9d3c6", stroke: "#333333", strokeWidth: 0.75, legend: "Toe kick" },
+  wall: { fill: "none", stroke: "#333333", strokeWidth: 2.5, legend: "Wall" },
+  featureWindow: { fill: "none", stroke: "#4d9ad7", strokeWidth: 6, legend: "Window" },
+  featurePlumbing: { fill: "none", stroke: "#5fb08a", strokeWidth: 6, legend: "Plumbing" },
+  featureGas: { fill: "none", stroke: "#c0714d", strokeWidth: 6, legend: "Gas" },
+  featureElectrical: { fill: "none", stroke: "#c8a33a", strokeWidth: 6, legend: "Electrical" },
+  featureDoor: { fill: "none", stroke: "#8a8a8a", strokeWidth: 6, legend: "Door opening" },
+  featureObstruction: { fill: "none", stroke: "#a0522d", strokeWidth: 6, legend: "Obstruction" },
 };
 
 /** 线条与文字的墨色。图纸上只该有这几档，多了就显得杂。 */

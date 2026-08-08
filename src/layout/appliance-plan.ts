@@ -24,7 +24,10 @@
  */
 import type { ParsedGeometry, WallFeature, WallRun } from "../floorplan/types.js";
 import { quantize } from "../floorplan/types.js";
-import { APPLIANCE_LABEL, reservedWidth, type ApplianceKind, type ApplianceSpec } from "../floorplan/appliances.js";
+import {
+  applianceLabel, reservedWidth, type ApplianceKind, type ApplianceSpec,
+} from "../floorplan/appliances.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 import { buildKitchenPlan, usableSpan } from "./plan-model.js";
 
 /**
@@ -137,7 +140,9 @@ function landingOk(
 export function planAppliances(
   geometry: ParsedGeometry,
   appliances: readonly ApplianceSpec[],
+  language: UiLanguage = DEFAULT_LANGUAGE,
 ): AppliancePlan {
+  const lang = language ?? DEFAULT_LANGUAGE;
   const placed: PlacedAppliance[] = [];
   const warnings: AppliancePlanWarning[] = [];
   const runs = geometry.wallRuns.filter((r) => r.length > 0);
@@ -208,12 +213,16 @@ export function planAppliances(
     if (spec.kind === "rangeHood") continue;            // 跟着灶台，最后处理
 
     const need = reservedWidth(spec);
-    const spot = findSpot(runs, spec, need, overlaps, (runId) => hard.get(runId) ?? []);
+    const name = applianceLabel(spec.kind, lang);
+    const spot = findSpot(runs, spec, need, overlaps, (runId) => hard.get(runId) ?? [], lang);
     if (!spot) {
       warnings.push({
         kind: spec.kind,
-        message: `${APPLIANCE_LABEL[spec.kind]}需要 ${need}" 的位置，` +
-          `但没有一段墙能放下（已排除门洞、障碍与其他家电占位）`,
+        message: msg(lang,
+          `${name} needs ${need}" but no wall run can fit it` +
+            ` (excluding doors, obstructions, and other appliances)`,
+          `${name}需要 ${need}" 的位置，` +
+            `但没有一段墙能放下（已排除门洞、障碍与其他家电占位）`),
       });
       continue;
     }
@@ -237,15 +246,20 @@ export function planAppliances(
       const rp = plan.runs.find((r) => r.run.id === cooktop.wallRunId);
       const span = rp ? usableSpan(rp, "wall") : { start: 0, end: run.length };
       const x = quantize(Math.max(span.start, Math.min(center - width / 2, span.end - width)));
+      const cookName = applianceLabel(cooktop.spec.kind, lang);
       placed.push({
         spec: hood, wallRunId: cooktop.wallRunId, x, width,
         layer: "wall",
-        reason: `抽油烟机在吊柜层，正对${APPLIANCE_LABEL[cooktop.spec.kind]}`,
+        reason: msg(lang,
+          `Range hood on the wall layer, centered over the ${cookName}`,
+          `抽油烟机在吊柜层，正对${cookName}`),
       });
     } else {
       warnings.push({
         kind: "rangeHood",
-        message: "有抽油烟机但没有排出灶台位，烟机无处安放——请先确认灶具的位置",
+        message: msg(lang,
+          "Range hood is present but no cooktop/range was placed — confirm the cooking appliance first",
+          "有抽油烟机但没有排出灶台位，烟机无处安放——请先确认灶具的位置"),
       });
     }
   }
@@ -276,10 +290,12 @@ function findSpot(
   need: number,
   overlaps: (runId: string, x: number, width: number) => boolean,
   blockers: (runId: string) => readonly Span[],
+  lang: UiLanguage,
 ): Spot | undefined {
   const fits = (run: WallRun, x: number) =>
     x >= 0 && x + need <= run.length && !overlaps(run.id, x, need)
     && landingOk(run, x, need, spec.kind, blockers(run.id));
+  const name = applianceLabel(spec.kind, lang);
 
   // ① 户型上的对应特征——现场事实，压过偏好
   const anchorKind = ANCHOR_FEATURE[spec.kind];
@@ -289,10 +305,14 @@ function findSpot(
       if (!f) continue;
       const x = quantize(Math.max(0, Math.min(f.offset - need / 2, run.length - need)));
       if (fits(run, x)) {
+        const utility = anchorKind === "gas"
+          ? msg(lang, "a gas line", "燃气口")
+          : msg(lang, "a hardwired outlet", "强电位");
         return {
           runId: run.id, x,
-          reason: `${run.label}上有${anchorKind === "gas" ? "燃气口" : "强电位"}，` +
-            `${APPLIANCE_LABEL[spec.kind]}按现场管线落位`,
+          reason: msg(lang,
+            `${run.label} has ${utility}; ${name} follows the site utility`,
+            `${run.label}上有${utility}，${name}按现场管线落位`),
         };
       }
     }
@@ -308,9 +328,14 @@ function findSpot(
       // 挨着放，不压在特征上——水槽/窗那块地方另有用处
       for (const x of [quantize(f.offset + f.width), quantize(f.offset - need)]) {
         if (fits(run, x)) {
+          const near = zone === "nearSink"
+            ? msg(lang, "the sink", "水槽")
+            : msg(lang, "the window", "窗户");
           return {
             runId: run.id, x,
-            reason: `按你说的「靠近${zone === "nearSink" ? "水槽" : "窗户"}」落位`,
+            reason: msg(lang,
+              `Placed per your preference near ${near}`,
+              `按你说的「靠近${near}」落位`),
           };
         }
       }
@@ -319,7 +344,12 @@ function findSpot(
   if (zone === "nearEntry") {
     const first = runs[0]!;
     if (fits(first, 0)) {
-      return { runId: first.id, x: 0, reason: "按你说的「靠近入口」放在第一段墙的起点" };
+      return {
+        runId: first.id, x: 0,
+        reason: msg(lang,
+          "Placed at the start of the first wall run per your “near entry” preference",
+          "按你说的「靠近入口」放在第一段墙的起点"),
+      };
     }
   }
 
@@ -344,15 +374,24 @@ function findSpot(
         return {
           runId: run.id, x,
           reason: req
-            ? `放在${run.label}靠边处，同时给两侧留出所需的台面`
-            : `放在${run.label}上（这段墙最宽裕）`,
+            ? msg(lang,
+              `Placed near the end of ${run.label}, leaving required landing on both sides`,
+              `放在${run.label}靠边处，同时给两侧留出所需的台面`)
+            : msg(lang,
+              `Placed on ${run.label} (the roomiest run)`,
+              `放在${run.label}上（这段墙最宽裕）`),
         };
       }
     }
     // 两头都不行就整段扫一遍
     for (let probe = 0; probe + need <= run.length; probe = quantize(probe + 3)) {
       if (fits(run, probe)) {
-        return { runId: run.id, x: probe, reason: `放在${run.label}上剩余的空当里` };
+        return {
+          runId: run.id, x: probe,
+          reason: msg(lang,
+            `Placed in the remaining gap on ${run.label}`,
+            `放在${run.label}上剩余的空当里`),
+        };
       }
     }
   }

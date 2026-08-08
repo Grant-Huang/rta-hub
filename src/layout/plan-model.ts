@@ -33,6 +33,7 @@
  */
 import type { ParsedGeometry, WallFeature, WallRun } from "../floorplan/types.js";
 import { isIsland } from "../floorplan/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 /** 走向：0=向右，90=向下，180=向左，270=向上。 */
 export type Heading = 0 | 90 | 180 | 270;
@@ -185,7 +186,10 @@ const zero = (): Record<PlanLayerName, number> => ({ base: 0, wall: 0, tall: 0 }
  * 中间段两头各让 27"，剩 54"——同样紧，但紧得有道理，而且两个转角柜落在
  * 两面长墙上，那里本来就是储物区。
  */
-export function buildKitchenPlan(geometry: ParsedGeometry): KitchenPlan {
+export function buildKitchenPlan(
+  geometry: ParsedGeometry,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): KitchenPlan {
   const walls = geometry.wallRuns.filter((r) => !isIsland(r));
   const islands = geometry.wallRuns.filter((r) => isIsland(r));
 
@@ -254,7 +258,12 @@ export function buildKitchenPlan(geometry: ParsedGeometry): KitchenPlan {
     bounds: boundsOf(runs),
     ...(connected
       ? {}
-      : { note: "有墙段无法与相邻墙段相接，图中为示意排列，实际方位请以现场为准。" }),
+      : {
+          note: msg(language,
+            "Some wall runs could not be joined to their neighbors; " +
+              "the drawing is a schematic layout — confirm orientation on site.",
+            "有墙段无法与相邻墙段相接，图中为示意排列，实际方位请以现场为准。"),
+        }),
   };
 }
 

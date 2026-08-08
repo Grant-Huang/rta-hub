@@ -58,10 +58,10 @@ export function resolveSiteGate(env: NodeJS.ProcessEnv = process.env): SiteGateC
   if (!password) {
     if (isProduction) {
       throw new SiteGateMisconfigured(
-        "生产环境必须设置 SITE_PASSWORD。\n" +
-        "现在的账号鉴权是不校验的 X-Account-Id 头（检查清单 E1），" +
-        "没有这道口令，任何人都能冒充任意账号读取姓名、邮箱与户型图。\n" +
-        "确实要开放公网访问，请显式设置 SITE_PASSWORD_DISABLED=true。",
+        "SITE_PASSWORD is required in production.\n" +
+        "Account auth is currently an unchecked X-Account-Id header (checklist E1); " +
+        "without this gate anyone can impersonate any account and read names, emails, and floor plans.\n" +
+        "To intentionally open public access, set SITE_PASSWORD_DISABLED=true.",
       );
     }
     return { secret: randomBytes(32).toString("hex"), enabled: false };
@@ -186,17 +186,17 @@ export function siteGate(cfg: SiteGateConfig) {
 
     // API 请求返回 401 JSON，页面请求返回登录页——前端才好分辨该跳转还是该提示
     if (url.pathname.startsWith("/api/")) {
-      return c.json({ error: "需要访问口令", code: "SITE_LOCKED" }, 401);
+      return c.json({ error: "Access password required", code: "SITE_LOCKED" }, 401);
     }
     return c.html(unlockPage(), 401);
   };
 }
 
-/** 登录页。刻意不提示"口令错误还是账号不存在"这类细节——这里只有一个口令。 */
+/** Unlock page. Intentionally vague — there is only one site password. */
 export function unlockPage(error?: string): string {
   return `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8" />
-<title>RTA-Hub · 需要访问口令</title>
+<html lang="en"><head><meta charset="utf-8" />
+<title>RTA-Hub · Access required</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
@@ -215,10 +215,10 @@ export function unlockPage(error?: string): string {
 <body>
   <form method="POST" action="/__unlock">
     <h1>RTA-Hub</h1>
-    <p>这是一个尚未公开的预览环境，需要访问口令。</p>
+    <p>This is a private preview. Enter the access password to continue.</p>
     ${error ? `<div class="err">${error}</div>` : ""}
-    <input type="password" name="password" placeholder="访问口令" autofocus required />
-    <button type="submit">进入</button>
+    <input type="password" name="password" placeholder="Access password" autofocus required />
+    <button type="submit">Enter</button>
   </form>
 </body></html>`;
 }
@@ -226,7 +226,7 @@ export function unlockPage(error?: string): string {
 /** 启动时的状态说明——不启用时必须说清楚，免得以为有保护。 */
 export function startupNotice(cfg: SiteGateConfig): string {
   return cfg.enabled
-    ? "整站口令：已启用"
-    : "整站口令：**未启用** —— 任何能访问本端口的人都能冒充任意账号（检查清单 E1）。" +
-      "仅限本地开发使用；对外暴露前必须设置 SITE_PASSWORD。";
+    ? "Site password: enabled"
+    : "Site password: **disabled** — anyone who can reach this port can impersonate any account (checklist E1). " +
+      "Local development only; set SITE_PASSWORD before exposing the service.";
 }

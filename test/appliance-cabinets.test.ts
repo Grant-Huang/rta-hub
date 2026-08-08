@@ -49,7 +49,7 @@ test("冰箱顶上排出上柜，且它与冰箱位同中心", () => {
   const layout = generateLayout(geo(longWall()), pilotModules, {
     ceilingHeight: 96, appliances: [fridge],
   });
-  const over = layout.placements.find((p) => p.label === "冰箱上柜");
+  const over = layout.placements.find((p) => p.label === "Fridge upper");
   assert.ok(over, "应该排出冰箱上柜");
   const slot = layout.placements.find((p) => p.applianceKind === "refrigerator")!;
   const dc = Math.abs((over.x + over.width / 2) - (slot.x + slot.width / 2));
@@ -65,10 +65,10 @@ test("这家没有冰箱上柜型号时**报出来**，不静默跳过", () => {
   const layout = generateLayout(geo(longWall()), without, {
     ceilingHeight: 96, appliances: [fridge],
   });
-  assert.equal(layout.placements.some((p) => p.label === "冰箱上柜"), false);
-  const w = layout.warnings.find((x) => x.message.includes("冰箱上柜"));
+  assert.equal(layout.placements.some((p) => p.label === "Fridge upper"), false);
+  const w = layout.warnings.find((x) => /fridge upper|冰箱上柜/i.test(x.message));
   assert.ok(w, `应该报出缺型号，实际 warnings: ${JSON.stringify(layout.warnings)}`);
-  assert.ok(w.message.includes("空当"), w.message);
+  assert.ok(/open gap|空当/i.test(w.message), w.message);
 });
 
 test("冰箱上柜比冰箱位宽时，旁边的吊柜要让开——不能叠在一起", () => {
@@ -77,7 +77,7 @@ test("冰箱上柜比冰箱位宽时，旁边的吊柜要让开——不能叠�
   const layout = generateLayout(geo(longWall()), pilotModules, {
     ceilingHeight: 96, appliances: [fridge],
   });
-  const over = layout.placements.find((p) => p.label === "冰箱上柜")!;
+  const over = layout.placements.find((p) => p.label === "Fridge upper")!;
   const slot = layout.placements.find((p) => p.applianceKind === "refrigerator")!;
   assert.ok(over.width > slot.width, "这条断言的前提：上柜确实比冰箱位宽");
 
@@ -104,7 +104,7 @@ test("冰箱两侧不靠墙的那些侧面，BOM 里要有**通高**收口板", 
   assert.equal(tall.length, 1, `应有一行通高收口板，实际 ${JSON.stringify(bom.lines.filter((l) => l.category === "panel"))}`);
   // 墙两头都不是内墙角 → 冰箱两侧都要贴
   assert.equal(tall[0]!.qty, 2);
-  assert.ok(tall[0]!.reason?.includes("冰箱"), tall[0]!.reason);
+  assert.ok(/Fridge|冰箱/i.test(tall[0]!.reason ?? ""), tall[0]!.reason);
 });
 
 test("冰箱贴着内墙角的那一侧不用贴板——那侧对着墙", () => {
@@ -135,7 +135,7 @@ test("这家没有够高的收口板时，BOM 如实记进 missing", () => {
   const bom = buildBom({
     layout, wallRuns: runs, modules: shortOnly, toeKickSystem: "plywoodPanel",
   });
-  assert.ok(bom.missing.some((x) => x.includes("冰箱侧")), bom.missing.join("；"));
+  assert.ok(bom.missing.some((x) => /fridge-side|冰箱侧/i.test(x)), bom.missing.join("；"));
   // 而且不能拿一块 34.5" 的板顶上去充数
   assert.equal(bom.lines.some((l) => l.category === "panel" && l.height >= 84), false);
 });
@@ -154,7 +154,7 @@ test("收口板按要盖住的高度选，不靠型号在表里的先后顺序",
     layout, wallRuns: runs, modules: reordered, toeKickSystem: "plywoodPanel",
   });
   const basePanel = bom.lines.find(
-    (l) => l.category === "panel" && l.reason?.includes("外露侧面"));
+    (l) => l.category === "panel" && /exposed end|外露侧面/i.test(l.reason ?? ""));
   assert.ok(basePanel);
   assert.ok(basePanel.height < 84, `地柜收口板不该选到通高板，实际 ${basePanel.height}"`);
 });
@@ -177,7 +177,7 @@ test("嵌入式灶台下面有柜子——它是台面上的一个洞，不是�
   assert.ok(under, "灶台下面应该有柜子");
   assert.equal(under.kind, "cabinet");
   assert.ok(under.moduleCode, "必须是规格库里真实存在的型号");
-  assert.ok(under.label?.includes("开孔"), under.label);
+  assert.ok(/cutout|开孔/i.test(under.label ?? ""), under.label);
 });
 
 test("灶下柜不会用抽屉柜——上层抽屉会顶到灶体", () => {
@@ -215,13 +215,13 @@ test("没有任何顶部开放的箱体时，退到门板柜并**说明这是替
   });
   const under = layout.placements.find(
     (p) => p.layer === "base" && p.applianceKind === "cooktop");
-  const w = layout.warnings.find((x) => x.message.includes("灶下柜"));
+  const w = layout.warnings.find((x) => /cooktop base|灶下柜/i.test(x.message));
   assert.ok(w, `要么排出灶下柜要么说明为什么排不出，实际 warnings 为空；under=${JSON.stringify(under)}`);
   if (under) {
     // 用了替代型号：必须说出用的是哪个
     assert.ok(w.message.includes(under.moduleCode ?? "?"), w.message);
   } else {
-    assert.ok(w.message.includes("必须有柜子"), w.message);
+    assert.ok(/needs a cabinet|必须有柜子/i.test(w.message), w.message);
   }
 });
 

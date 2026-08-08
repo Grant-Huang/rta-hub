@@ -42,7 +42,7 @@ test("有图有模型：真的把图交给了模型，抽出来的墙段进了�
   assert.equal(extraction.status, "ok");
   assert.equal(plan.parsedGeometry.wallRuns.length, 1);
   assert.equal(plan.parsedGeometry.wallRuns[0]?.length, 144);
-  assert.equal(extractionNote(extraction), undefined, "一切正常时不该多说一句");
+  assert.equal(extractionNote(extraction, "zh"), undefined, "一切正常时不该多说一句");
 });
 
 test("没收到图：说清是「没收到图」，不含糊成「模型读不出来」", async () => {
@@ -51,13 +51,13 @@ test("没收到图：说清是「没收到图」，不含糊成「模型读不�
     input, undefined, stub(async () => { called = true; return undefined; }));
   assert.equal(called, false);
   assert.equal(extraction.status, "noImage");
-  assert.match(extractionNote(extraction)!, /没收到图片内容/);
+  assert.match(extractionNote(extraction, "zh")!, /没收到图片内容/);
 });
 
 test("没配模型：说的是「没配」，并指向手动录入", async () => {
   const { extraction } = await createFloorPlanWithOutcome(input, IMAGE, undefined);
   assert.equal(extraction.status, "notConfigured");
-  assert.match(extractionNote(extraction)!, /没有配置视觉模型/);
+  assert.match(extractionNote(extraction, "zh")!, /没有配置视觉模型/);
 });
 
 test("模型报错：上传照样成功，但**原因原样说出来**", async () => {
@@ -69,23 +69,23 @@ test("模型报错：上传照样成功，但**原因原样说出来**", async (
   assert.ok(plan.id, "抽取失败把整次上传也弄失败了");
   assert.equal(extraction.status, "failed");
   assert.equal(extraction.status === "failed" && extraction.reason, "HTTP 404 /v1/chat/completions");
-  assert.match(extractionNote(extraction)!, /HTTP 404/, "报错原因没传给客户");
-  assert.match(extractionNote(extraction)!, /端点配置/, "没告诉人该去查哪儿");
+  assert.match(extractionNote(extraction, "zh")!, /HTTP 404/, "报错原因没传给客户");
+  assert.match(extractionNote(extraction, "zh")!, /端点配置/, "没告诉人该去查哪儿");
 });
 
 test("模型读不出东西：与「报错」分开说——图糊和配置错要做的事不一样", async () => {
   const { extraction } = await createFloorPlanWithOutcome(
     input, IMAGE, stub(async () => undefined));
   assert.equal(extraction.status, "emptyResult");
-  assert.match(extractionNote(extraction)!, /太模糊|标注不清/);
+  assert.match(extractionNote(extraction, "zh")!, /太模糊|标注不清/);
 });
 
 test("四种情况的说法互不相同——都一样就等于什么也没说", () => {
   const notes = [
-    extractionNote({ status: "notConfigured" }),
-    extractionNote({ status: "noImage" }),
-    extractionNote({ status: "emptyResult" }),
-    extractionNote({ status: "failed", reason: "x" }),
+    extractionNote({ status: "notConfigured" }, "zh"),
+    extractionNote({ status: "noImage" }, "zh"),
+    extractionNote({ status: "emptyResult" }, "zh"),
+    extractionNote({ status: "failed", reason: "x" }, "zh"),
   ];
   assert.equal(new Set(notes).size, 4, `四种情况说了重复的话：${notes.join(" | ")}`);
   // 每一种都要给出下一步——只说"读不了"而不说接下来干什么，客户就卡在这儿了

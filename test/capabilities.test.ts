@@ -75,7 +75,7 @@ test("匹配不到脸型的柜体标为低可信，走待确认队列", () => {
   const m = mod({ code: "完全看不懂的码", type: "base" });
   const r = capabilitiesFor(m);
   assert.equal(r.confidence, "low");
-  assert.ok(r.reason.includes("匹配不到脸型"), r.reason);
+  assert.ok(r.reason.includes("matched no face template"), r.reason);
 
   const qs = capabilityQuestions([m]);
   assert.equal(qs.length, 1, "低可信的推断必须进待确认队列");
@@ -89,7 +89,7 @@ test("家电柜推不出配哪种家电，要问一次", () => {
   const m = mod({ code: "OC3084", type: "tall", faceTemplateId: "F14_APPLIANCE" });
   const r = capabilitiesFor(m);
   assert.equal(r.confidence, "low");
-  assert.ok(r.reason.includes("配哪种家电"), r.reason);
+  assert.ok(r.reason.includes("which appliance"), r.reason);
   assert.deepEqual(r.capabilities.roles, ["applianceHousing"]);
 });
 
@@ -217,7 +217,7 @@ test("能力推不准的型号会进入驻待确认队列，且不允许发布",
     after.unresolved.some((u) => u.field === "capabilities"),
     "推不准的能力必须进队列——认错水槽柜会让这家的每一版方案都排错",
   );
-  assert.throws(() => assertPublishable(after, bundle), /待确认项/);
+  assert.throws(() => assertPublishable(after, bundle), /unresolved item/i);
 });
 
 test("推得准的规格不会因为这层新增而卡住发布", async () => {

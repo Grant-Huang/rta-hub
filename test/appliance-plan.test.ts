@@ -37,7 +37,7 @@ test("有燃气口时灶具按现场管线落位——现场事实压过一切�
   const range = plan.placed.find((p) => p.spec.kind === "range");
   assert.ok(range);
   assert.ok(Math.abs(range.x + range.width / 2 - 60) <= 3, `灶应在燃气口附近，实际 ${range.x}`);
-  assert.ok(range.reason.includes("燃气"), range.reason);
+  assert.ok(range.reason.includes("gas"), range.reason);
 });
 
 test("没有对应特征时也要放——没有哪家厨房是没冰箱的", () => {
@@ -49,7 +49,9 @@ test("没有对应特征时也要放——没有哪家厨房是没冰箱的", ()
 test("客户说的位置偏好被采纳，且在 reason 里说得出来", () => {
   const w = wall({ id: "a", length: 180, features: [feat("p", "plumbing", 90, 0)] });
   const plan = planAppliances(geo(w), [appl("refrigerator", { preferredZone: "nearEntry" })]);
-  assert.ok(plan.placed[0]!.reason.includes("靠近入口"), plan.placed[0]!.reason);
+  assert.ok(/near entry/i.test(plan.placed[0]!.reason), plan.placed[0]!.reason);
+  const zh = planAppliances(geo(w), [appl("refrigerator", { preferredZone: "nearEntry" })], "zh");
+  assert.ok(zh.placed[0]!.reason.includes("靠近入口"), zh.placed[0]!.reason);
 });
 
 // ── 硬约束在落位阶段参与 ──────────────────────────────────────────────────
@@ -92,7 +94,7 @@ test("放不下就如实报出来，不静默丢掉", () => {
   const plan = planAppliances(geo(wall({ id: "a", length: 30 })), [appl("refrigerator")]);
   assert.equal(plan.placed.length, 0);
   assert.equal(plan.warnings.length, 1);
-  assert.ok(plan.warnings[0]!.message.includes("冰箱"), plan.warnings[0]!.message);
+  assert.ok(/Refrigerator/i.test(plan.warnings[0]!.message), plan.warnings[0]!.message);
 });
 
 // ── 跨层：烟机跟着灶台 ────────────────────────────────────────────────────
@@ -140,7 +142,7 @@ test("图上的家电标签带宽度——客户要能一眼看出这是几寸�
     ceilingHeight: 96, appliances: [appl("refrigerator", { width: 33 })],
   });
   const fridge = layout.placements.find((p) => p.applianceKind === "refrigerator")!;
-  assert.ok(fridge.label?.includes("冰箱"), fridge.label);
+  assert.ok(fridge.label?.includes("Refrigerator"), fridge.label);
   assert.ok(fridge.label?.includes("33"), fridge.label);
   assert.equal(fridge.applianceSpec?.provenance, "customer");
 });

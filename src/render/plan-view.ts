@@ -85,7 +85,7 @@ export function renderPlanView(
   style: PlanViewStyle = DEFAULT_PLAN_STYLE,
 ): string {
   const plan = buildKitchenPlan(geometry);
-  const title = layer === "base" ? "全局俯视图 · 地柜层" : "全局俯视图 · 吊柜层";
+  const title = layer === "base" ? "Overall plan · Base" : "Overall plan · Wall";
   const withCounter = style.showCountertop ?? layer === "base";
 
   // 图例先算：它要占多高，得在坐标映射之前定下来，否则会压在第一排柜子上
@@ -233,7 +233,7 @@ function drawCornerLine(
     const b = toPlane(rp, along, depth);
     canvas.add(line(px(a.x), py(a.y), px(b.x), py(b.y), INK.note, 0.8, "3 3"));
     const label = toPlane(rp, along + (side === "start" ? -3 : 3), depth + 7);
-    canvas.add(text(px(label.x), py(label.y), "转角",
+    canvas.add(text(px(label.x), py(label.y), "Corner",
       { size: TYPE.code, fill: INK.note, middle: true }));
   }
 }
@@ -358,7 +358,7 @@ function drawAisles(canvas: Canvas, plan: KitchenPlan, px: Mapper, py: Mapper): 
       canvas.add(dimension(
         { x: px(seg.from.x), y: py(seg.from.y) },
         { x: px(seg.to.x), y: py(seg.to.y) },
-        `过道 ${formatInches(seg.gap)}`));
+        `Aisle ${formatInches(seg.gap)}`));
     }
   }
 }

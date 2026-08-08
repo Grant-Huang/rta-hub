@@ -15,49 +15,64 @@
  * 必须是同一种标注方式。
  */
 import type { Placement } from "../../layout/generate.js";
-import { APPLIANCE_LABEL } from "../../floorplan/appliances.js";
+import { applianceLabelForDrawing } from "../../floorplan/appliances.js";
 import { formatInches } from "./primitives.js";
 
 export interface Annotation {
   /** 主标注：型号码，或家电名。 */
   primary: string;
-  /** 次标注：尺寸、或"推定"这类注脚。窄的地方会被省掉。 */
+  /** 次标注：尺寸、或"assumed"这类注脚。窄的地方会被省掉。 */
   secondary?: string;
 }
 
 /**
  * 一个构件在图上该写什么。
  *
+ * 图纸文字固定英文，无视客户语言偏好。
+ *
  * 返回 `undefined` 表示不写——填缝条只有 3/4" 宽，写上去也看不清，
  * 它在图例里说明就够了。
  */
 export function annotationFor(p: Placement): Annotation | undefined {
   if (p.kind === "appliance" && p.applianceKind) {
-    const name = APPLIANCE_LABEL[p.applianceKind];
+    const name = applianceLabelForDrawing(p.applianceKind);
     const spec = p.applianceSpec;
     return {
       primary: name,
-      // **推定值要在图上就看得出来**：客户以为我们知道他的冰箱多宽，
-      // 而其实是按常见款猜的。等到装不进去才发现就晚了。
+      // Assumed sizes must be visible on the drawing itself.
       secondary: spec
-        ? `${formatInches(spec.width)}${spec.provenance === "assumed" ? "（推定）" : ""}`
+        ? `${formatInches(spec.width)}${spec.provenance === "assumed" ? " (assumed)" : ""}`
         : formatInches(p.width),
     };
   }
   if (p.label === "sink") {
-    return { primary: "水槽", ...(p.moduleCode ? { secondary: p.moduleCode } : {}) };
+    return { primary: "Sink", ...(p.moduleCode ? { secondary: p.moduleCode } : {}) };
   }
   if (p.applianceKind !== undefined && p.moduleCode) {
-    // 配套柜：写它服务的是哪台家电，型号码退到次位——客户认得"冰箱上柜"，
-    // 认不得 RFW3615
+    // Appliance cabinet: name what it serves; SKU is secondary.
+    const englishCabinet =
+      p.label && !/[\u4e00-\u9fff]/.test(p.label)
+        ? p.label
+        : `${applianceLabelForDrawing(p.applianceKind)} cabinet`;
     return {
-      primary: p.label ?? `${APPLIANCE_LABEL[p.applianceKind]}配套柜`,
+      primary: englishCabinet,
       secondary: p.moduleCode,
     };
   }
   if (p.moduleCode) return { primary: p.moduleCode };
   if (p.kind === "filler") return undefined;
-  return p.label ? { primary: p.label } : undefined;
+  // Drop Chinese placement labels from the drawing — use English fallbacks.
+  if (p.label) {
+    if (/填缝/.test(p.label)) return undefined;
+    if (/[\u4e00-\u9fff]/.test(p.label)) {
+      if (p.applianceKind) {
+        return { primary: applianceLabelForDrawing(p.applianceKind) };
+      }
+      return undefined;
+    }
+    return { primary: p.label };
+  }
+  return undefined;
 }
 
 /**

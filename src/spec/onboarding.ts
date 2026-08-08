@@ -97,7 +97,7 @@ export function ingestTemplates(
   faceOverridesOrOptions: CompanyOverrides | ImportOptions = {},
 ): IngestResult {
   if (session.status === "published") {
-    throw new OnboardingError("该会话已发布，如需修改请开新草稿", "ALREADY_PUBLISHED");
+    throw new OnboardingError("This session is already published; start a new draft to make changes", "ALREADY_PUBLISHED");
   }
   const importResult = importSpecTemplates(
     session.specVersionId, session.companyId, sources, faceOverridesOrOptions);
@@ -138,21 +138,21 @@ export function ingestTemplates(
 }
 
 function buildPrompt(item: UnresolvedItem): string {
-  const where = `${item.sheet} 表第 ${item.rowNumber} 行的「${item.field}」`;
+  const where = `${item.sheet} sheet, row ${item.rowNumber}, field "${item.field}"`;
   switch (item.field) {
     case "faceTemplate":
-      return `${where}：${item.reason}。这个型号在正视图上长什么样？（单门 / 双门 / 一抽一门 / 几个抽屉 / 水槽柜 / 转角…）`;
+      return `${where}: ${item.reason}. What does this module look like on the elevation? (single door / double door / drawer over door / drawer stack / sink base / corner…)`;
     case "type":
-      return `${where}：${item.reason}。它属于地柜、吊柜、高柜、转角柜还是水槽柜？`;
+      return `${where}: ${item.reason}. Is it a base, wall, tall, corner, or sink base cabinet?`;
     case "capabilities":
-      return `型号「${item.raw ?? ""}」：${item.reason}。` +
-        `它承载什么功能？（门板储物 / 抽屉柜 / 水槽柜 / 灶下柜 / 家电柜 / 转角 / 开放格）` +
-        `——排布算法按这个决定它能放在哪，认错了每一版方案都会错。`;
+      return `Module "${item.raw ?? ""}": ${item.reason}. ` +
+        `What roles does it carry? (doorStorage / drawerStorage / sinkBase / cooktopBase / applianceHousing / cornerAccess / openShelf) ` +
+        `— layout uses this to decide where it can go; a wrong answer breaks every design.`;
     case "listPrice":
     case "tradePrice":
-      return `${where}：${item.reason}。请提供该型号在这个价格组下的标价（只填数字，如 245.50）。`;
+      return `${where}: ${item.reason}. Provide the list price for this module in this price group (numbers only, e.g. 245.50).`;
     default:
-      return `${where}：${item.reason}。请补充。`;
+      return `${where}: ${item.reason}. Please supply a value.`;
   }
 }
 
@@ -196,9 +196,9 @@ export function answerQuestion(
   at: string,
 ): AnswerOutcome {
   const q = session.questions.find((x) => x.id === questionId);
-  if (!q) throw new OnboardingError(`没有这条追问：${questionId}`, "QUESTION_NOT_FOUND");
+  if (!q) throw new OnboardingError(`No such question: ${questionId}`, "QUESTION_NOT_FOUND");
   const item = session.unresolved[q.unresolvedIndex];
-  if (!item) throw new OnboardingError("这条追问对应的待确认项已经不在了", "ITEM_GONE");
+  if (!item) throw new OnboardingError("The unresolved item for this question is gone", "ITEM_GONE");
 
   // 待确认项记的是型号码（`raw`），不是 id——商家看的是码
   const code = (item.raw ?? "").toUpperCase();
@@ -208,20 +208,20 @@ export function answerQuestion(
   if (item.field === "faceTemplate") {
     if (!answer.faceTemplateId) {
       throw new OnboardingError(
-        "脸型题要给出一个脸型模板（如 F2_DOUBLE_DOOR）", "ANSWER_MISSING_VALUE");
+        "Face questions require a face template id (e.g. F2_DOUBLE_DOOR)", "ANSWER_MISSING_VALUE");
     }
     if (!target) {
-      throw new OnboardingError(`规格里找不到型号 ${code}`, "MODULE_NOT_FOUND");
+      throw new OnboardingError(`Module ${code} not found in the spec`, "MODULE_NOT_FOUND");
     }
     modules = modules.map((m) =>
       m.code === code ? { ...m, faceTemplateId: answer.faceTemplateId! } : m);
   } else if (item.field === "capabilities") {
     if (!answer.roles?.length) {
       throw new OnboardingError(
-        "能力题要给出至少一个角色（如 doorStorage / sinkBase）", "ANSWER_MISSING_VALUE");
+        "Capability questions require at least one role (e.g. doorStorage / sinkBase)", "ANSWER_MISSING_VALUE");
     }
     if (!target) {
-      throw new OnboardingError(`规格里找不到型号 ${code}`, "MODULE_NOT_FOUND");
+      throw new OnboardingError(`Module ${code} not found in the spec`, "MODULE_NOT_FOUND");
     }
     modules = modules.map((m) =>
       m.code === code
@@ -230,7 +230,7 @@ export function answerQuestion(
   } else {
     // 没有"算你答过了"的出口
     throw new OnboardingError(
-      `「${item.field}」这一条没法在会话里直接答——请在表里改好后重新导入。原因：${item.reason}`,
+      `"${item.field}" cannot be answered inline — fix it in the sheet and re-import. Reason: ${item.reason}`,
       "NOT_ANSWERABLE_INLINE",
     );
   }
@@ -288,24 +288,24 @@ function removeUnresolved(
 export function assertPublishable(session: OnboardingSession, bundle: SpecBundle): void {
   if (session.unresolved.length > 0) {
     throw new OnboardingError(
-      `还有 ${session.unresolved.length} 个待确认项未处理，不能发布`,
+      `${session.unresolved.length} unresolved item(s) remain; cannot publish`,
       "UNRESOLVED_ITEMS",
     );
   }
   if (bundle.modules.length === 0) {
-    throw new OnboardingError("规格里没有任何型号，不能发布", "EMPTY_SPEC");
+    throw new OnboardingError("Spec has no modules; cannot publish", "EMPTY_SPEC");
   }
   const withoutPrice = bundle.modules.filter(
     (m) => !bundle.priceMatrix.some((e) => e.moduleId === m.id),
   );
   if (withoutPrice.length > 0) {
     throw new OnboardingError(
-      `以下型号在价格矩阵里没有任何价格条目：${withoutPrice.map((m) => m.code).join(", ")}`,
+      `These modules have no price matrix entries: ${withoutPrice.map((m) => m.code).join(", ")}`,
       "MODULES_WITHOUT_PRICE",
     );
   }
   if (bundle.doorStyles.length === 0) {
-    throw new OnboardingError("没有定义任何门板样式（门板决定价格组）", "NO_DOOR_STYLES");
+    throw new OnboardingError("No door styles defined (door styles determine price groups)", "NO_DOOR_STYLES");
   }
 }
 
@@ -324,7 +324,7 @@ export function publish(
 ): PublishOutcome {
   assertPublishable(session, bundle);
   const draft = versions.find((v) => v.id === session.specVersionId);
-  if (!draft) throw new OnboardingError(`未找到草稿版本 ${session.specVersionId}`, "DRAFT_NOT_FOUND");
+  if (!draft) throw new OnboardingError(`Draft version ${session.specVersionId} not found`, "DRAFT_NOT_FOUND");
   assertMutable(draft);
 
   const result = publishDraft(versions, session.companyId, session.specVersionId, publishedBy, at);

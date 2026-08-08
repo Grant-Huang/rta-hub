@@ -15,11 +15,19 @@
  *
  * 用法：npx tsx scripts/simulate.mts [输出目录] [场景数]
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   BUILTIN_SCENARIO_COUNT, generateScenarios, type Scenario, type ScenarioSet,
 } from "./scenarios.mts";
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SOURCES_DIR = path.join(SCRIPT_DIR, "..", "test", "sources");
+
+function asksForDrawing(text: string): boolean {
+  return /需要我帮你生成设计图吗|Shall I generate a design drawing/i.test(text);
+}
 
 process.env.SMTP_HOST = "";
 process.env.ADMIN_TOKEN = "sim";
@@ -140,9 +148,34 @@ async function main(): Promise<void> {
     }
 
     // 2. 上传户型 + 补齐尺寸与特征
+    // 有 sourceImage 时上传真实样例图（覆盖「用户上传户型图」路径）；否则仍用占位元数据。
+    let floorplanBody: Record<string, unknown> = {
+      fileName: `kitchen-${k.id}.png`, mimeType: "image/png", sizeBytes: 204800,
+    };
+    if (k.sourceImage) {
+      const imgPath = path.join(SOURCES_DIR, k.sourceImage);
+      if (!existsSync(imgPath)) {
+        failures.push(`${k.id}. ${k.name}：缺少样例户型图 ${k.sourceImage}`);
+        continue;
+      }
+      const bytes = readFileSync(imgPath);
+      const mime = k.sourceImage.toLowerCase().endsWith(".jpg") || k.sourceImage.toLowerCase().endsWith(".jpeg")
+        ? "image/jpeg" : "image/png";
+      floorplanBody = {
+        fileName: k.sourceImage,
+        mimeType: mime,
+        sizeBytes: bytes.length,
+        image: `data:${mime};base64,${bytes.toString("base64")}`,
+      };
+      console.log(`  上传真实户型图：${k.sourceImage}（${(bytes.length / 1024).toFixed(0)} KB）`);
+      timeline.push({
+        kind: "note", level: "info",
+        text: `Uploaded floor-plan image: ${k.sourceImage} (${bytes.length} bytes)`,
+      });
+    }
     const fp = await call(`/api/conversations/${conversation.id}/floorplan`, {
       method: "POST", acct,
-      body: JSON.stringify({ fileName: `kitchen-${k.id}.png`, mimeType: "image/png", sizeBytes: 204800 }),
+      body: JSON.stringify(floorplanBody),
     });
     const floorPlanId = fp.floorPlan.id;
 
@@ -214,10 +247,43 @@ async function main(): Promise<void> {
     timeline.push({ kind: "answered", note: prefNote(k) });
     console.log(`  选择题 ${(qs.questions ?? []).length} 道　偏好已记录`);
 
-    // 4. **先问再画**：拿到「需要我帮你生成设计图吗？」
+    // 3b. FR-15：出图前用白话补齐检查表关键项（风格/省份；无窗/无家电则明示推迟）
+    // 预算可由 preferences.budgetBand 满足；不能猜上下水——场景 walls.features 必须带 plumbing。
+    {
+      const hasWindows = k.walls.some((w) => w.features.some((f) => f.kind === "window"));
+      const hasPlumbing = k.walls.some((w) => w.features.some((f) => f.kind === "plumbing"));
+      if (!hasPlumbing) {
+        failures.push(`${k.id}. ${k.name}：场景未声明上下水，违反 FR-15（不能猜）`);
+      }
+      const sealParts = [
+        /modern|shaker|style|风格|现代|北欧|简约/i.test(k.turns.join("\n"))
+          ? "" : "Modern style.",
+        /ontario|\bon\b|安大略|bc|alberta|province/i.test(k.turns.join("\n"))
+          ? "" : "Ontario ON.",
+        hasWindows ? "" : "No windows.",
+        k.appliances?.length ? "" : "Appliances later.",
+      ].filter(Boolean);
+      if (sealParts.length) {
+        const seal = sealParts.join(" ");
+        const sealRes = await call(`/api/conversations/${conversation.id}/messages`, {
+          method: "POST", acct, body: JSON.stringify({ text: seal }),
+        });
+        said("user", seal);
+        for (const reply of sealRes.replies ?? []) said("assistant", reply.content);
+        console.log(`  FR-15 确认：${seal}`);
+      }
+    }
+
+    // 4. **先问再画**：拿到「需要我帮你生成设计图吗？」/ Shall I generate…
     const askDesign = await call(
       `/api/conversations/${conversation.id}/design?companyId=co_pilot`, { acct });
     console.log(`  阶段 ${askDesign.session?.stage}：${(askDesign.prompt?.message ?? "").split("\n")[0]}`);
+    if (askDesign.designBrief?.confirmationText) {
+      timeline.push({
+        kind: "note", level: "info",
+        text: `Design brief ready=${Boolean(askDesign.designBrief.readyToAskDesign)}`,
+      });
+    }
     said("assistant", askDesign.prompt?.message ?? "");
 
     // 5. 客户点头 → 全局俯视图（多轮改）
@@ -375,9 +441,12 @@ async function main(): Promise<void> {
     const fail = (msg: string) => { failures.push(`${k.id}. ${k.name}：${msg}`); };
 
     if (askDesign.session?.stage !== "readyToDraw") {
-      fail(`资料齐了却停在 ${askDesign.session?.stage}，没走到「先问再画」`);
+      fail(`资料齐了却停在 ${askDesign.session?.stage}，没走到「先问再画」` +
+        (askDesign.designBrief?.openItems
+          ? `；openItems=${JSON.stringify(askDesign.designBrief.openItems.map((i: Json) => i.id))}`
+          : ""));
     }
-    if (!(askDesign.prompt?.message ?? "").includes("需要我帮你生成设计图吗")) {
+    if (!asksForDrawing(askDesign.prompt?.message ?? "")) {
       fail("出图前没有征询客户意见");
     }
     if (planRounds.length !== k.revisions.length + 1) {
@@ -388,7 +457,7 @@ async function main(): Promise<void> {
     // 但分节方式让它读起来是"先确认后看图"——产出物的结构会传达因果关系，
     // 所以这里直接盯住产出物里事件的先后。
     const at = (pred: (b: Beat) => boolean) => timeline.findIndex(pred);
-    const iAsk = at((b) => b.kind === "say" && b.text.includes("需要我帮你生成设计图吗"));
+    const iAsk = at((b) => b.kind === "say" && asksForDrawing(b.text));
     const iFirstPlan = at((b) => b.kind === "planViews");
     const iApprove = at((b) => b.kind === "say" && b.text.includes("排布可以了"));
     const iFour = at((b) => b.kind === "fourViews");

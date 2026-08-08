@@ -91,28 +91,43 @@ export class CaslComplianceError extends Error {
  */
 export function assertCaslCompliant(email: OutboundEmail, sender: SenderIdentity): void {
   if (!sender.name || !sender.email) {
-    throw new CaslComplianceError("发件人身份不完整（CASL 要求披露发件人名称与联系方式）", "MISSING_IDENTITY");
+    throw new CaslComplianceError(
+      "Sender identity incomplete (CASL requires sender name and contact)",
+      "MISSING_IDENTITY",
+    );
   }
   if (email.kind !== "lead") {
     if (!email.unsubscribeUrl) {
       throw new CaslComplianceError(
-        `${email.kind} 类邮件必须带可用的退订链接（CASL）`,
+        `${email.kind} emails must include a working unsubscribe URL (CASL)`,
         "MISSING_UNSUBSCRIBE",
       );
     }
     // 两个版本都要有 —— 只在其中一个里放退订链接，另一版的收件人就无从退订
     if (!email.text.includes(email.unsubscribeUrl)) {
-      throw new CaslComplianceError("退订链接必须出现在纯文本正文里", "UNSUBSCRIBE_NOT_IN_BODY");
+      throw new CaslComplianceError(
+        "Unsubscribe URL must appear in the plain-text body",
+        "UNSUBSCRIBE_NOT_IN_BODY",
+      );
     }
     if (email.html && !email.html.includes(email.unsubscribeUrl)) {
-      throw new CaslComplianceError("退订链接必须出现在 HTML 正文里", "UNSUBSCRIBE_NOT_IN_BODY");
+      throw new CaslComplianceError(
+        "Unsubscribe URL must appear in the HTML body",
+        "UNSUBSCRIBE_NOT_IN_BODY",
+      );
     }
   }
   if (!email.text.includes(sender.name)) {
-    throw new CaslComplianceError("纯文本正文必须包含发件人身份", "IDENTITY_NOT_IN_BODY");
+    throw new CaslComplianceError(
+      "Plain-text body must include sender identity",
+      "IDENTITY_NOT_IN_BODY",
+    );
   }
   if (email.html && !email.html.includes(sender.name)) {
-    throw new CaslComplianceError("HTML 正文必须包含发件人身份", "IDENTITY_NOT_IN_BODY");
+    throw new CaslComplianceError(
+      "HTML body must include sender identity",
+      "IDENTITY_NOT_IN_BODY",
+    );
   }
 }
 
@@ -123,10 +138,16 @@ export function assertSubscribed(
 ): EmailSubscription {
   const sub = subscriptions.find((s) => s.email.toLowerCase() === to.toLowerCase());
   if (!sub) {
-    throw new CaslComplianceError(`${to} 不在邮件列表中，不得发送营销类邮件`, "NOT_SUBSCRIBED");
+    throw new CaslComplianceError(
+      `${to} is not on the mailing list; marketing mail not allowed`,
+      "NOT_SUBSCRIBED",
+    );
   }
   if (sub.status !== "active") {
-    throw new CaslComplianceError(`${to} 已退订，不得再发送`, "UNSUBSCRIBED");
+    throw new CaslComplianceError(
+      `${to} has unsubscribed; cannot send`,
+      "UNSUBSCRIBED",
+    );
   }
   return sub;
 }
@@ -161,13 +182,13 @@ export async function sendEmail(email: OutboundEmail, opts: SendOptions = {}): P
     assertCaslCompliant(email, sender);
   } catch (e) {
     if (e instanceof CaslComplianceError) {
-      return { delivered: false, dryRun, error: `CASL 校验未通过：${e.message}` };
+      return { delivered: false, dryRun, error: `CASL check failed: ${e.message}` };
     }
     throw e;
   }
 
   if (dryRun) {
-    return { delivered: false, dryRun: true, error: "SMTP 未配置：dry-run，未发送任何邮件" };
+    return { delivered: false, dryRun: true, error: "SMTP not configured: dry-run, no mail sent" };
   }
 
   try {
@@ -227,28 +248,28 @@ export interface QuoteEmailInput {
  */
 export function buildQuoteEmail(input: QuoteEmailInput, sender: SenderIdentity): OutboundEmail {
   const text = [
-    `${input.companyName} 团队您好，`,
+    `Hello ${input.companyName} team,`,
     "",
-    `我们平台上的一位客户（${input.customerName}，${input.province}）完成了一版厨房橱柜设计，`,
-    "并确认将报价请求发送给贵司。明细如下：",
+    `A customer on our platform (${input.customerName}, ${input.province}) finished a kitchen cabinet design`,
+    "and confirmed sending this quote request to you. Details:",
     "",
     input.quoteText,
     "",
-    `客户联系邮箱：${input.customerEmail}`,
-    `报价单编号：${input.quoteId}`,
+    `Customer email: ${input.customerEmail}`,
+    `Quote ID: ${input.quoteId}`,
     "",
-    "这是客户本人确认后发出的一次性询价，不是营销邮件。",
+    "This is a one-time inquiry the customer confirmed — not a marketing message.",
     "",
     "———",
     `${sender.name}`,
-    sender.contact ? `联系方式：${sender.contact}` : "",
-    sender.email ? `邮箱：${sender.email}` : "",
+    sender.contact ? `Contact: ${sender.contact}` : "",
+    sender.email ? `Email: ${sender.email}` : "",
   ].filter(Boolean).join("\n");
 
   return {
     kind: "lead",
     to: "", // 由调用方填公司报价邮箱
-    subject: `[询价] 厨房橱柜报价请求 · ${input.quoteId}`,
+    subject: `[Quote request] Kitchen cabinets · ${input.quoteId}`,
     text,
   };
 }
@@ -268,26 +289,26 @@ export interface InviteEmailInput {
  */
 export function buildInviteEmail(input: InviteEmailInput, sender: SenderIdentity): OutboundEmail {
   const text = [
-    `${input.companyName} 您好，`,
+    `Hello ${input.companyName},`,
     "",
-    "感谢订阅 RTA-Hub 的合作资讯。",
+    "Thanks for subscribing to RTA-Hub partner updates.",
     "",
     input.deIdentifiedSignal,
     "",
-    "入驻后，客户在平台上完成设计并确认后，报价请求会直接发到贵司登记的邮箱。",
-    "我们按成交线索计费，入驻与规格录入不收费。",
+    "Once onboarded, quote requests from customers who finish a design and confirm will go to your registered email.",
+    "We bill on closed leads; onboarding and catalog entry are free.",
     "",
     "———",
     `${sender.name}`,
-    sender.contact ? `联系方式：${sender.contact}` : "",
+    sender.contact ? `Contact: ${sender.contact}` : "",
     "",
-    `不想再收到这类邮件？点此退订：${input.unsubscribeUrl}`,
+    `Prefer not to receive these? Unsubscribe: ${input.unsubscribeUrl}`,
   ].filter(Boolean).join("\n");
 
   return {
     kind: "invite",
     to: "",
-    subject: "RTA-Hub 合作机会",
+    subject: "RTA-Hub partnership opportunity",
     text,
     unsubscribeUrl: input.unsubscribeUrl,
   };
@@ -295,8 +316,8 @@ export function buildInviteEmail(input: InviteEmailInput, sender: SenderIdentity
 
 /** 去标识化的销售信号描述（FR-13 第 3 条的执行点）。 */
 export function deIdentifySignal(mentionCount: number, region?: string): string {
-  const where = region ? `${region}地区` : "平台上";
+  const where = region ? `in ${region}` : "on the platform";
   return mentionCount > 1
-    ? `近期${where}有 ${mentionCount} 位客户在设计过程中点名寻找贵司。`
-    : `近期${where}有客户在设计过程中点名寻找贵司。`;
+    ? `Recently ${where}, ${mentionCount} customers asked for your company while designing.`
+    : `Recently ${where}, a customer asked for your company while designing.`;
 }

@@ -91,7 +91,7 @@ function applyModifier(base: Money, modifier: Modifier): Money {
 export function computePrice(ctx: PricingContext, input: PricingInput): PriceBreakdown {
   const doorStyle = ctx.doorStyles.find((d) => d.id === input.doorStyleId);
   if (!doorStyle) {
-    throw new PricingError(`门板样式不存在：${input.doorStyleId}`, "DOOR_STYLE_NOT_FOUND");
+    throw new PricingError(`Door style not found: ${input.doorStyleId}`, "DOOR_STYLE_NOT_FOUND");
   }
   const priceGroupId = doorStyle.priceGroupId;
 
@@ -101,7 +101,7 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
   const boxMaterial = resolveBoxMaterial(boxOptions, input.boxMaterialId);
   if (input.boxMaterialId && !boxMaterial) {
     throw new PricingError(
-      `箱体板材不存在：${input.boxMaterialId}`, "BOX_MATERIAL_NOT_FOUND");
+      `Box material not found: ${input.boxMaterialId}`, "BOX_MATERIAL_NOT_FOUND");
   }
 
   // ── 1. 逐行：标价 + 修饰项 ──────────────────────────────────────────────
@@ -109,7 +109,7 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
   for (const sel of input.selections) {
     const mod = ctx.modules.find((m) => m.id === sel.moduleId);
     if (!mod) {
-      throw new PricingError(`型号不存在：${sel.moduleId}`, "MODULE_NOT_FOUND");
+      throw new PricingError(`Module not found: ${sel.moduleId}`, "MODULE_NOT_FOUND");
     }
     // 查价走 `priceEntryFor`：`finishDependent: false` 的型号（塑料地脚）
     // 在矩阵里只有一行，那一行对所有花色都适用（§3.5.5）。
@@ -119,7 +119,7 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
     if (!entry) {
       // 价格矩阵空洞：该型号不供应该价格组。绝不回退到「某个默认价」。
       throw new PricingError(
-        `型号 ${mod.code} 在价格组 ${priceGroupId} 下无价格条目`,
+        `No price entry for ${mod.code} under price group ${priceGroupId}`,
         "PRICE_MATRIX_HOLE",
       );
     }
@@ -144,13 +144,13 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
       modifiers.push({
         kind: "assembly",
         refId: `${entry.moduleId}:assembled`,
-        name: "组装加价",
+        name: "Assembly upcharge",
         amount: applyModifier(unitListPrice, entry.assembledUpcharge),
       });
     }
     for (const hwId of sel.hardwareOptionIds) {
       const hw = ctx.hardwareOptions.find((h) => h.id === hwId);
-      if (!hw) throw new PricingError(`五金选项不存在：${hwId}`, "HARDWARE_NOT_FOUND");
+      if (!hw) throw new PricingError(`Hardware option not found: ${hwId}`, "HARDWARE_NOT_FOUND");
       modifiers.push({
         kind: "hardware", refId: hw.id, name: hw.name,
         amount: applyModifier(unitListPrice, hw.priceModifier),
@@ -158,7 +158,7 @@ export function computePrice(ctx: PricingContext, input: PricingInput): PriceBre
     }
     for (const acId of sel.accessoryOptionIds) {
       const ac = ctx.accessoryOptions.find((a) => a.id === acId);
-      if (!ac) throw new PricingError(`配件选项不存在：${acId}`, "ACCESSORY_NOT_FOUND");
+      if (!ac) throw new PricingError(`Accessory option not found: ${acId}`, "ACCESSORY_NOT_FOUND");
       modifiers.push({
         kind: "accessory", refId: ac.id, name: ac.name,
         amount: applyModifier(unitListPrice, ac.priceModifier),
@@ -307,7 +307,7 @@ function resolveTax(rules: readonly TaxRule[], province: Province, at: string): 
       (r.effectiveTo === undefined || t < Date.parse(r.effectiveTo)),
   );
   if (!hit) {
-    throw new PricingError(`未找到 ${province} 在 ${at} 生效的税率`, "TAX_RULE_NOT_FOUND");
+    throw new PricingError(`No tax rule for ${province} effective at ${at}`, "TAX_RULE_NOT_FOUND");
   }
   return hit;
 }

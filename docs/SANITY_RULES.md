@@ -33,38 +33,38 @@
 
 | 编号 | 规则 | 严重度 | 由谁执行 |
 |---|---|---|---|
-| SR-G1 | 构件不超出墙段长度 | 🚫 阻断 | 交付前审核 |
-| SR-G2 | 同段墙同一层内构件不重叠 | 🚫 阻断 | 交付前审核 |
-| SR-G3 | 跨墙段构件足迹不重叠 | 🚫 阻断 | 交付前审核 |
-| SR-G4 | 门洞旁留出台面外伸的距离 | 🚫 阻断 | 交付前审核 |
-| SR-G5 | 内墙角必须让位或用转角柜 | 🚫 阻断 | 排布层 |
-| SR-E1 | 水槽两侧工作台面 24" / 18" | 🚫 阻断 | 交付前审核 |
-| SR-E2 | 灶具两侧落台区 15" / 12" | 🚫 阻断 | 交付前审核 |
-| SR-E3 | 冰箱把手侧落台区 ≥15" | 🚫 阻断 | 交付前审核 |
-| SR-E4 | 洗碗机紧邻水槽（≤36"） | 🚫 阻断 | 交付前审核 |
-| SR-E5 | 岛台过道 ≥36"（建议 42"） | 🚫 阻断 | 交付前审核 |
-| SR-E6 | 工作三角在建议范围内 | ⚠️ 提示 | 交付前审核 |
-| SR-E7 | 盲角柜要提示可达性 | ⚠️ 提示 | 交付前审核 |
-| SR-E8 | 至少一段 ≥36" 的连续备餐台面 | ⚠️ 提示 | 交付前审核 |
-| SR-M1 | 物料清单不缺件 | 🚫 阻断 | 交付前审核 |
-| SR-M2 | 只用规格库里真实存在的型号与尺寸 | 🚫 阻断 | 交付前审核 |
-| SR-M3 | 不提供的组装形式要说明 | ⚠️ 提示 | 交付前审核 |
-| SR-Q1 | 逐行合计与小计一致 | 🚫 阻断 | 交付前审核 |
-| SR-Q2 | 价格快照复算一致 | 🚫 阻断 | 交付前审核 |
-| SR-D1 | 推定值必须在交给客户的文字里披露 | 🚫 阻断 | 交付前审核 |
-| SR-D2 | 客户提了但落不下去的要求要说明 | ⚠️ 提示 | 交付前审核 |
-| SR-D3 | 这个阶段该不该出这份东西 | 🚫 阻断 | 交付前审核 |
-| SR-D4 | 报价单要写明这份价对应的是什么产品 | 🚫 阻断 | 交付前审核 |
-| SR-V1 | 水槽与每个家电位都有文字标签 | 🚫 阻断 | 渲染层 |
-| SR-V2 | 图例与图上实际画出的元素一致 | 🚫 阻断 | 渲染层 |
-| SR-V3 | 推定尺寸在图上标「推定」 | 🚫 阻断 | 渲染层 |
-| SR-V4 | 全局俯视图连不起来时必须标注 | ⚠️ 提示 | 交付前审核 |
+| SR-G1 | Components stay within wall-run length | 🚫 阻断 | 交付前审核 |
+| SR-G2 | No overlap within the same wall run and layer | 🚫 阻断 | 交付前审核 |
+| SR-G3 | No overlapping footprints across wall runs | 🚫 阻断 | 交付前审核 |
+| SR-G4 | Clearance beside openings for countertop overhang | 🚫 阻断 | 交付前审核 |
+| SR-G5 | Inside corners must yield or use a corner cabinet | 🚫 阻断 | 排布层 |
+| SR-E1 | Sink landing zones 24" / 18" | 🚫 阻断 | 交付前审核 |
+| SR-E2 | Cooktop landing zones 15" / 12" | 🚫 阻断 | 交付前审核 |
+| SR-E3 | Refrigerator landing ≥15" on handle side | 🚫 阻断 | 交付前审核 |
+| SR-E4 | Dishwasher adjacent to sink (≤36") | 🚫 阻断 | 交付前审核 |
+| SR-E5 | Island aisle ≥36" (prefer 42") | 🚫 阻断 | 交付前审核 |
+| SR-E6 | Work triangle within recommended range | ⚠️ 提示 | 交付前审核 |
+| SR-E7 | Blind-corner cabinets warn about reach | ⚠️ 提示 | 交付前审核 |
+| SR-E8 | At least one ≥36" continuous prep counter | ⚠️ 提示 | 交付前审核 |
+| SR-M1 | BOM has no missing parts | 🚫 阻断 | 交付前审核 |
+| SR-M2 | Only real catalog SKUs and sizes | 🚫 阻断 | 交付前审核 |
+| SR-M3 | Disclose assembly forms you do not offer | ⚠️ 提示 | 交付前审核 |
+| SR-Q1 | Line totals reconcile with subtotal | 🚫 阻断 | 交付前审核 |
+| SR-Q2 | Price snapshot recomputes consistently | 🚫 阻断 | 交付前审核 |
+| SR-D1 | Assumed values must be disclosed in customer-facing text | 🚫 阻断 | 交付前审核 |
+| SR-D2 | State customer requests that could not be applied | ⚠️ 提示 | 交付前审核 |
+| SR-D3 | Deliverable is allowed at this stage | 🚫 阻断 | 交付前审核 |
+| SR-D4 | Quote states which product the price covers | 🚫 阻断 | 交付前审核 |
+| SR-V1 | Sink and every appliance opening has a text label | 🚫 阻断 | 渲染层 |
+| SR-V2 | Legend matches what is actually drawn | 🚫 阻断 | 渲染层 |
+| SR-V3 | Assumed sizes marked "assumed" on drawings | 🚫 阻断 | 渲染层 |
+| SR-V4 | Disconnected overall plan views must be annotated | ⚠️ 提示 | 交付前审核 |
 
 ## 几何与干涉
 
 装得进去、彼此不打架。这一组全部是阻断项——几何不成立的方案，后面所有的好看与便宜都没有意义。
 
-#### SR-G1　构件不超出墙段长度
+#### SR-G1　Components stay within wall-run length
 
 | | |
 |---|---|
@@ -75,7 +75,7 @@
 
 **为什么**：超出墙长的柜子现场装不进去。这是最基本的一条，但它只在单段墙内成立——跨墙段的问题要靠 SR-G3。
 
-#### SR-G2　同段墙同一层内构件不重叠
+#### SR-G2　No overlap within the same wall run and layer
 
 | | |
 |---|---|
@@ -86,7 +86,7 @@
 
 **为什么**：两个柜子占同一段墙面，装的时候必然有一个放不下。
 
-#### SR-G3　跨墙段构件足迹不重叠
+#### SR-G3　No overlapping footprints across wall runs
 
 | | |
 |---|---|
@@ -97,7 +97,7 @@
 
 **为什么**：内墙角处两段墙的柜子会占同一块 24"×24"，而它们**不在同一段墙上**——SR-G1/G2 的盲区正好在这里。客户的原话：「只有把它们连起来的时候，才会发现开关门的问题、干涉的问题」。
 
-#### SR-G4　门洞旁留出台面外伸的距离
+#### SR-G4　Clearance beside openings for countertop overhang
 
 | | |
 |---|---|
@@ -108,7 +108,7 @@
 
 **为什么**：台面不是柜体的投影，它四周比箱体大出一圈。按柜体判「没超墙」的方案，现场台面会压在门套线上，门开到一半就顶住。客户的说法是「至少要让出一点点距离」——那一点就是台面外伸。
 
-#### SR-G5　内墙角必须让位或用转角柜
+#### SR-G5　Inside corners must yield or use a corner cabinet
 
 | | |
 |---|---|
@@ -123,7 +123,7 @@
 
 NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前必须核对现行版本**（见 PRE_LAUNCH_CHECKLIST）。
 
-#### SR-E1　水槽两侧工作台面 24" / 18"
+#### SR-E1　Sink landing zones 24" / 18"
 
 | | |
 |---|---|
@@ -134,7 +134,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：洗菜、沥水、备餐都要放东西。两侧都不够的厨房用起来处处别扭，而这是排布阶段就能避免的。
 
-#### SR-E2　灶具两侧落台区 15" / 12"
+#### SR-E2　Cooktop landing zones 15" / 12"
 
 | | |
 |---|---|
@@ -145,7 +145,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：**这是安全要求**：端下来的热锅要有地方放。不够就是烫伤风险，不是「用起来不方便」。
 
-#### SR-E3　冰箱把手侧落台区 ≥15"
+#### SR-E3　Refrigerator landing ≥15" on handle side
 
 | | |
 |---|---|
@@ -156,7 +156,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：从冰箱里拿出来的东西要有地方搁，否则只能端着走。
 
-#### SR-E4　洗碗机紧邻水槽（≤36"）
+#### SR-E4　Dishwasher adjacent to sink (≤36")
 
 | | |
 |---|---|
@@ -167,7 +167,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：每次装碗都要端着滴水的餐具走一段。
 
-#### SR-E5　岛台过道 ≥36"（建议 42"）
+#### SR-E5　Island aisle ≥36" (prefer 42")
 
 | | |
 |---|---|
@@ -178,7 +178,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：<36" 人过不去。按箱体量会算出一条实际上并不存在的合格过道——两边台面各外伸 1-1/2"，正好卡在分界上。
 
-#### SR-E6　工作三角在建议范围内
+#### SR-E6　Work triangle within recommended range
 
 | | |
 |---|---|
@@ -189,7 +189,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：超出范围只是走动多，不影响能不能用——所以是提示不是阻断。三点坐标必须来自同一份连通平面，否则算出来的距离是假的。
 
-#### SR-E7　盲角柜要提示可达性
+#### SR-E7　Blind-corner cabinets warn about reach
 
 | | |
 |---|---|
@@ -200,7 +200,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：盲角深处够不着是这类柜体的固有特性，不是排布错了——但客户要知道，否则装完才发现里面的东西拿不出来。
 
-#### SR-E8　至少一段 ≥36" 的连续备餐台面
+#### SR-E8　At least one ≥36" continuous prep counter
 
 | | |
 |---|---|
@@ -215,7 +215,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 照这份清单下单，东西要能装完整，且每一项都真实存在。
 
-#### SR-M1　物料清单不缺件
+#### SR-M1　BOM has no missing parts
 
 | | |
 |---|---|
@@ -226,7 +226,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：缺一条踢脚板，客户就是装不上。方案再好看也没用。
 
-#### SR-M2　只用规格库里真实存在的型号与尺寸
+#### SR-M2　Only real catalog SKUs and sizes
 
 | | |
 |---|---|
@@ -237,7 +237,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：规格库里不存在的尺寸，定价时会在价格矩阵里查不到而整单拒绝——那时客户看到的只是一句「报价校验未通过」，根因在几百行之外。
 
-#### SR-M3　不提供的组装形式要说明
+#### SR-M3　Disclose assembly forms you do not offer
 
 | | |
 |---|---|
@@ -252,7 +252,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 客户拿着这个数去比价、去签合同。
 
-#### SR-Q1　逐行合计与小计一致
+#### SR-Q1　Line totals reconcile with subtotal
 
 | | |
 |---|---|
@@ -263,7 +263,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：客户拿去跟别家比，比的是个错数。
 
-#### SR-Q2　价格快照复算一致
+#### SR-Q2　Price snapshot recomputes consistently
 
 | | |
 |---|---|
@@ -278,7 +278,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 该说的话真的说了，该客户点头的地方真的等他点了头。
 
-#### SR-D1　推定值必须在交给客户的文字里披露
+#### SR-D1　Assumed values must be disclosed in customer-facing text
 
 | | |
 |---|---|
@@ -289,7 +289,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：查的是**文字，不是数据字段**。`provenance` 存在数据里，但客户读到的是文字——两者可能脱节，而脱节的那一次正是出事的那一次：客户按图订柜，冰箱塞不进去。
 
-#### SR-D2　客户提了但落不下去的要求要说明
+#### SR-D2　State customer requests that could not be applied
 
 | | |
 |---|---|
@@ -300,7 +300,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：「整体看着大气一点」这类话落不到具体参数上。系统要说「这一版与上一版相同」，而不是重画一张一样的图假装改过。
 
-#### SR-D3　这个阶段该不该出这份东西
+#### SR-D3　Deliverable is allowed at this stage
 
 | | |
 |---|---|
@@ -311,7 +311,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：客户还没看过全局排布就拿到报价单，等于跳过了他确认的那一步。
 
-#### SR-D4　报价单要写明这份价对应的是什么产品
+#### SR-D4　Quote states which product the price covers
 
 | | |
 |---|---|
@@ -326,7 +326,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 客户看图做判断。图上少一个标签，判断依据就少一条。
 
-#### SR-V1　水槽与每个家电位都有文字标签
+#### SR-V1　Sink and every appliance opening has a text label
 
 | | |
 |---|---|
@@ -337,7 +337,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：只靠颜色区分，客户分不清哪块是冰箱位哪块是烤箱位。
 
-#### SR-V2　图例与图上实际画出的元素一致
+#### SR-V2　Legend matches what is actually drawn
 
 | | |
 |---|---|
@@ -348,7 +348,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：图例里有图上没有的东西，客户会在图上找一个不存在的构件；反过来则是看到一个不认识的颜色。
 
-#### SR-V3　推定尺寸在图上标「推定」
+#### SR-V3　Assumed sizes marked "assumed" on drawings
 
 | | |
 |---|---|
@@ -359,7 +359,7 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 
 **为什么**：与 SR-D1 同一条原则的图纸侧：等到装不进去才发现就晚了。
 
-#### SR-V4　全局俯视图连不起来时必须标注
+#### SR-V4　Disconnected overall plan views must be annotated
 
 | | |
 |---|---|

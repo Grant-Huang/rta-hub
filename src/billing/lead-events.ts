@@ -107,12 +107,12 @@ export function openDispute(
 ): LeadBillingEvent {
   if (!isWithinDisputeWindow(event, input.at, windowDays)) {
     throw new BillingError(
-      `争议窗口已于 ${disputeWindowEndsAt(event, windowDays)} 关闭`,
+      `Dispute window closed at ${disputeWindowEndsAt(event, windowDays)}`,
       "DISPUTE_WINDOW_CLOSED",
     );
   }
   if (event.feeStatus === "paid" || event.feeStatus === "refunded") {
-    throw new BillingError(`费用状态为 ${event.feeStatus}，不可再提起争议`, "DISPUTE_NOT_ALLOWED");
+    throw new BillingError(`Fee status is ${event.feeStatus}; dispute not allowed`, "DISPUTE_NOT_ALLOWED");
   }
   return {
     ...event,
@@ -132,7 +132,7 @@ export function resolveDispute(
   input: { resolvedBy: string; resolution: "upheld" | "refunded" | "partialRefund"; at: string },
 ): LeadBillingEvent {
   if (!event.dispute) {
-    throw new BillingError("该计费事件没有待裁定的争议", "NO_OPEN_DISPUTE");
+    throw new BillingError("This billing event has no open dispute to resolve", "NO_OPEN_DISPUTE");
   }
   const feeStatus: FeeStatus = input.resolution === "upheld" ? "pending" : "refunded";
   return {
@@ -156,14 +156,14 @@ export function invoice(
   windowDays = LEAD_DISPUTE_WINDOW_DAYS,
 ): LeadBillingEvent {
   if (event.feeStatus === "disputed") {
-    throw new BillingError("争议未裁定，不能出账", "DISPUTED_CANNOT_INVOICE");
+    throw new BillingError("Dispute is unresolved; cannot invoice", "DISPUTED_CANNOT_INVOICE");
   }
   if (event.feeStatus !== "pending") {
-    throw new BillingError(`费用状态为 ${event.feeStatus}，不能出账`, "NOT_PENDING");
+    throw new BillingError(`Fee status is ${event.feeStatus}; cannot invoice`, "NOT_PENDING");
   }
   if (isWithinDisputeWindow(event, at, windowDays)) {
     throw new BillingError(
-      `争议窗口至 ${disputeWindowEndsAt(event, windowDays)} 才结束，期间不得出账`,
+      `Dispute window remains open until ${disputeWindowEndsAt(event, windowDays)}; cannot invoice yet`,
       "DISPUTE_WINDOW_OPEN",
     );
   }

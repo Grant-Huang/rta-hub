@@ -18,6 +18,7 @@ import type { ParsedGeometry } from "../floorplan/types.js";
 import { generateLayout } from "../layout/generate.js";
 import { renderFourViews, type FourViews, type ViewStyle } from "../render/views.js";
 import { matchFaceTemplate } from "../render/templates.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export interface EstimateRequest {
   conversationId: string;
@@ -32,6 +33,8 @@ export interface EstimateOptions {
   taxRules?: readonly TaxRule[];
   /** 来源是否已经过核实。未核实时 disclaimer 会额外说明。 */
   sourceVerified?: boolean;
+  /** 客户可见文案语言；默认英文。 */
+  language?: UiLanguage;
 }
 
 let seq = 0;
@@ -67,7 +70,10 @@ export function buildEstimateDraft(
       const rate = rule.components.reduce((s, c) => s + c.ratePercent, 0);
       low = add(low, percentOf(low, rate));
       high = add(high, percentOf(high, rate));
-      taxNote = `，已按 ${req.province} ${rate}% 税率含税`;
+      const lang = opts.language ?? DEFAULT_LANGUAGE;
+      taxNote = msg(lang,
+        `, including ${req.province} tax at ${rate}%`,
+        `，已按 ${req.province} ${rate}% 税率含税`);
     } catch {
       taxNote = "";
     }
@@ -79,7 +85,7 @@ export function buildEstimateDraft(
     basedOn: "genericCatalog",
     lineItems,
     totalRange: { low, high },
-    disclaimer: buildDisclaimer(catalog, taxNote, opts.sourceVerified ?? false),
+    disclaimer: buildDisclaimer(catalog, taxNote, opts.sourceVerified ?? false, opts.language ?? DEFAULT_LANGUAGE),
     createdAt: req.at,
   };
 }
@@ -90,30 +96,50 @@ export function buildEstimateDraft(
  * 如果 `GenericCatalog` 的数据来源还没定案（开放问题 5 / 检查清单 A4），
  * 文案必须**如实说明这是构造的占位区间**——不能一边用占位数据一边宣称"行业典型区间"。
  */
-function buildDisclaimer(catalog: GenericCatalog, taxNote: string, sourceVerified: boolean): string {
-  const head = "以上为行业典型区间，**不是任何具体公司的真实报价**。";
+function buildDisclaimer(
+  catalog: GenericCatalog,
+  taxNote: string,
+  sourceVerified: boolean,
+  lang: UiLanguage,
+): string {
+  const head = msg(lang,
+    "These are typical industry ranges — **not a real quote from any specific company**.",
+    "以上为行业典型区间，**不是任何具体公司的真实报价**。");
   const body = sourceVerified
-    ? `区间来自平台维护的行业基准目录${taxNote}。实际价格取决于公司、门板样式、五金配置与安装条件。`
-    : `⚠️ 当前区间为**未经核实的占位数据**（来源：${catalog.sourceNote}）${taxNote}，仅供感知量级，不应作为决策依据。`;
+    ? msg(lang,
+      ` Ranges come from the platform's industry baseline catalog${taxNote}. Actual prices depend on the seller, door style, hardware, and install conditions.`,
+      `区间来自平台维护的行业基准目录${taxNote}。实际价格取决于公司、门板样式、五金配置与安装条件。`)
+    : msg(lang,
+      ` ⚠️ Current ranges are **unverified placeholder data** (source: ${catalog.sourceNote})${taxNote} — for order-of-magnitude only, not for decisions.`,
+      `⚠️ 当前区间为**未经核实的占位数据**（来源：${catalog.sourceNote}）${taxNote}，仅供感知量级，不应作为决策依据。`);
   return `${head}${body}`;
 }
 
 /** MVP-1 的纯文本呈现（四视图版本在 MVP-2，复用同一套脸型模板）。 */
-export function renderEstimateText(draft: EstimateDraft): string {
-  const typeNames: Record<string, string> = {
-    base: "地柜", wall: "吊柜", tall: "高柜", corner: "转角柜", sinkBase: "水槽柜",
-    filler: "填缝条", panel: "饰面板", toeKick: "踢脚板", crown: "顶角线",
-  };
+export function renderEstimateText(
+  draft: EstimateDraft,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const lang = language;
+  const typeNames: Record<string, string> = lang === "zh"
+    ? {
+      base: "地柜", wall: "吊柜", tall: "高柜", corner: "转角柜", sinkBase: "水槽柜",
+      filler: "填缝条", panel: "饰面板", toeKick: "踢脚板", crown: "顶角线",
+    }
+    : {
+      base: "Base", wall: "Wall", tall: "Tall", corner: "Corner", sinkBase: "Sink base",
+      filler: "Filler", panel: "Panel", toeKick: "Toe kick", crown: "Crown",
+    };
   const rows = draft.lineItems.map((l) =>
     `  ${(typeNames[l.moduleType] ?? l.moduleType).padEnd(6)} × ${String(l.qty).padStart(2)}   ` +
     `${format(l.estimatedPriceRange.low)} – ${format(l.estimatedPriceRange.high)}`,
   );
   return [
-    "通用预估（非具体公司报价）",
+    msg(lang, "Generic estimate (not a company quote)", "通用预估（非具体公司报价）"),
     "────────────────────────────",
     ...rows,
     "────────────────────────────",
-    `  合计区间   ${format(draft.totalRange.low)} – ${format(draft.totalRange.high)}`,
+    `  ${msg(lang, "Range total", "合计区间")}   ${format(draft.totalRange.low)} – ${format(draft.totalRange.high)}`,
     "",
     draft.disclaimer,
   ].join("\n");
@@ -234,8 +260,10 @@ export function buildIllustratedEstimate(
       runLabel: run.label,
       views: renderFourViews(run, layout.placements, opts.viewStyle),
     })),
-    viewsDisclaimer:
+    viewsDisclaimer: msg(opts.language ?? DEFAULT_LANGUAGE,
+      "Views are drawn from common industry size steps — **not any seller's real SKUs**. " +
+        "After you pick a company, the system re-layouts with that company's published catalog.",
       "示意图按行业通用尺寸档位绘制，**不对应任何具体公司的真实型号**。" +
-      "选定公司后，系统会用该公司规格库里真实存在的型号重新排布并出图。",
+        "选定公司后，系统会用该公司规格库里真实存在的型号重新排布并出图。"),
   };
 }

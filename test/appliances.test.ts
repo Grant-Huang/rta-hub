@@ -71,8 +71,8 @@ test("全是客户给的尺寸时，不说任何「按推定值」的话", () =>
     applianceFrom({ kind: "range", width: 30 }),
   ];
   assert.deepEqual(assumedOnes(list), []);
-  assert.equal(provenanceNote(list), undefined, "没有推定值就别说有——与 explain.ts 同一条原则");
-  assert.equal(violationCaveat(list), undefined);
+  assert.equal(provenanceNote(list, "zh"), undefined, "没有推定值就别说有——与 explain.ts 同一条原则");
+  assert.equal(violationCaveat(list, "zh"), undefined);
 });
 
 test("有推定值时，说明里点名是哪几样、按多少预留", () => {
@@ -80,7 +80,7 @@ test("有推定值时，说明里点名是哪几样、按多少预留", () => {
     applianceFrom({ kind: "refrigerator" }),           // 推定
     applianceFrom({ kind: "range", width: 36 }),        // 客户给的
   ];
-  const note = provenanceNote(list);
+  const note = provenanceNote(list, "zh");
   assert.ok(note, "有推定值就必须说");
   assert.ok(note.includes("冰箱"), note);
   assert.ok(note.includes("33"), "要说清按多少预留的");
@@ -89,7 +89,7 @@ test("有推定值时，说明里点名是哪几样、按多少预留", () => {
 
 test("硬约束否决时的注脚说明「可能并不成立」，而不是断言排不下", () => {
   const list = [applianceFrom({ kind: "refrigerator" })];
-  const caveat = violationCaveat(list);
+  const caveat = violationCaveat(list, "zh");
   assert.ok(caveat);
   assert.ok(caveat.includes("推定"), caveat);
   assert.ok(
@@ -106,7 +106,7 @@ test("「有哪些家电」是多选且不可跳过——一个家电都不放�
   assert.equal(q.skippable, false);
   assert.ok(q.options.some((o) => o.id === "refrigerator"));
   assert.ok(q.options.some((o) => o.id === "rangeHood"));
-  assert.ok(q.why.includes("净空") || q.why.includes("排布"), "要说清它影响什么");
+  assert.ok(/clearance|layout|净空|排布/i.test(q.why), "要说清它影响什么");
 });
 
 test("宽度题里必须有「我去量一下再说」", () => {
@@ -114,7 +114,7 @@ test("宽度题里必须有「我去量一下再说」", () => {
   assert.ok(q);
   const unsure = q.options.find((o) => o.id === "refrigerator:unsure");
   assert.ok(unsure, "逼客户先量尺寸，是把系统的困难转嫁给他");
-  assert.ok(unsure.detail?.includes("推定"), "选了它要让客户知道图上会标出来");
+  assert.ok(/assumed|推定/i.test(unsure.detail ?? ""), "选了它要让客户知道图上会标出来");
   // 常见档位也在
   assert.ok(q.options.some((o) => o.id === "refrigerator:33"));
 });
@@ -140,7 +140,7 @@ test("只对推定尺寸的家电追问宽度，客户给过准确数字的不�
     kindsAnswered: true, maxPerTurn: 5,
   });
   assert.equal(qs.length, 1);
-  assert.ok(qs[0]!.prompt.includes("冰箱"), qs[0]!.prompt);
+  assert.ok(/冰箱|Refrigerator/i.test(qs[0]!.prompt), qs[0]!.prompt);
 });
 
 test("全部尺寸都确认过之后就不再问了", () => {

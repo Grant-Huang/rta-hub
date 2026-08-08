@@ -133,7 +133,7 @@ export function renderFrontElevation(
     HEIGHTS.counterTop,
   );
   const viewHeight = wallTop + 6;
-  const ctx = open(run.length, viewHeight, style, `${run.label} 正视图`, {
+  const ctx = open(run.length, viewHeight, style, `${run.label} — Front elevation`, {
     // 左侧要放「台面 36"」，底下要放两行柜体标注 + 一条总长尺寸线
     padLeft: style.showDimensions ? PAD_LEFT_WITH_DIMENSION : PAD,
     padBottom: PAD + 24,
@@ -180,11 +180,11 @@ export function renderFrontElevation(
   if (style.showDimensions) {
     // 总长尺寸线让到柜体标注下面——压在标注上等于两行字叠着，谁也读不出来
     dimension(ctx, { x: 0, y: viewHeight }, { x: run.length, y: viewHeight }, formatInches(run.length), 46);
-    dimension(ctx, { x: 0, y: viewHeight }, { x: 0, y: viewHeight - HEIGHTS.counterTop }, `台面 ${formatInches(HEIGHTS.counterTop)}`, -14);
+    dimension(ctx, { x: 0, y: viewHeight }, { x: 0, y: viewHeight - HEIGHTS.counterTop }, `Counter ${formatInches(HEIGHTS.counterTop)}`, -14);
     const wallCab = mine.find((p) => p.layer === "wall");
     if (wallCab) {
       dimension(ctx, { x: run.length, y: viewHeight - HEIGHTS.counterTop },
-        { x: run.length, y: viewHeight - HEIGHTS.wallBaseline }, `净空 ${formatInches(HEIGHTS.backsplash)}`, 16);
+        { x: run.length, y: viewHeight - HEIGHTS.wallBaseline }, `Clearance ${formatInches(HEIGHTS.backsplash)}`, 16);
     }
   }
 
@@ -289,7 +289,7 @@ export function renderTopView(
 ): string {
   const mine = placements.filter((p) => p.wallRunId === run.id && p.layer === layer);
   const depth = Math.max(...mine.map((p) => p.depth), layer === "base" ? 24 : 12);
-  const ctx = open(run.length, depth + 4, style, `${run.label} 俯视图（${layer === "base" ? "地柜层" : "吊柜层"}）`);
+  const ctx = open(run.length, depth + 4, style, `${run.label} — Plan (${layer === "base" ? "base" : "wall"})`);
   const { s } = ctx;
 
   // 墙线
@@ -361,7 +361,7 @@ export function renderSideView(
     deepWall: { depth: 24, top: HEIGHTS.wallBaseline + wallH },
   }[section];
 
-  const ctx = open(spec.depth + 6, spec.top + 6, style, `侧视图（${section}）`);
+  const ctx = open(spec.depth + 6, spec.top + 6, style, `Side section (${section})`);
   const { s } = ctx;
   const H = spec.top + 6;
   const yOf = (topIn: number) => (H - topIn) * s;
@@ -396,7 +396,7 @@ export function renderSideView(
       dimension(ctx, { x: 0, y: H }, { x: spec.depth, y: H }, formatInches(spec.depth), 16);
     } else if (section === "wall" || section === "deepWall") {
       dimension(ctx, { x: spec.depth + 4, y: H - HEIGHTS.wallBaseline }, { x: spec.depth + 4, y: H - HEIGHTS.wallBaseline - wallH }, formatInches(wallH), 0);
-      dimension(ctx, { x: spec.depth + 4, y: H }, { x: spec.depth + 4, y: H - HEIGHTS.wallBaseline }, `底边 ${formatInches(HEIGHTS.wallBaseline)}`, 30);
+      dimension(ctx, { x: spec.depth + 4, y: H }, { x: spec.depth + 4, y: H - HEIGHTS.wallBaseline }, `Bottom ${formatInches(HEIGHTS.wallBaseline)}`, 30);
       dimension(ctx, { x: 0, y: H }, { x: spec.depth, y: H }, formatInches(spec.depth), 16);
     } else {
       dimension(ctx, { x: spec.depth + 4, y: H }, { x: spec.depth + 4, y: H - tallH }, formatInches(tallH), 0);

@@ -27,6 +27,7 @@ import { sortBoxMaterials } from "../spec/carcass.js";
 import {
   APPLIANCE_LABEL, COMMON_WIDTHS, type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export type PreferenceKey =
   | "budgetBand"
@@ -95,19 +96,19 @@ export function resolvePreferences(
 export function describeImpact(impact: PriceImpact): string {
   switch (impact.kind) {
     case "included":
-      return "已含在基础价内";
+      return "Included in base price";
     case "perCabinet":
-      return `每个柜体 +${format(impact.amount)}`;
+      return `+${format(impact.amount)} per cabinet`;
     case "percentOfList":
-      return `适用柜体标价 +${impact.percent}%`;
+      return `+${impact.percent}% of applicable cabinet list`;
     case "relativeToCheapest":
       return impact.percent === 0
-        ? "本档最低价位"
-        : `比最低价位约贵 ${impact.percent}%`;
+        ? "Lowest price tier"
+        : `About ${impact.percent}% above the lowest tier`;
     case "range":
-      return `约 ${format(impact.low)} – ${format(impact.high)}`;
+      return `About ${format(impact.low)} – ${format(impact.high)}`;
     case "unknown":
-      return `价格待确认（${impact.reason}）`;
+      return `Price TBD (${impact.reason})`;
   }
 }
 
@@ -152,7 +153,7 @@ export function priceGroupPremiums(bundle: SpecBundle): Map<string, PriceImpact>
     const mine = byGroup.get(g.id) ?? new Map();
     const shared = [...mine.keys()].filter((id) => basePrices.has(id));
     if (shared.length === 0) {
-      out.set(g.id, { kind: "unknown", reason: "与基准价位没有可比型号" });
+      out.set(g.id, { kind: "unknown", reason: "No overlapping SKUs with the base tier" });
       continue;
     }
     let sumMine = 0;
@@ -162,7 +163,7 @@ export function priceGroupPremiums(bundle: SpecBundle): Map<string, PriceImpact>
       sumBase += basePrices.get(id)!;
     }
     if (sumBase === 0) {
-      out.set(g.id, { kind: "unknown", reason: "基准价位为零" });
+      out.set(g.id, { kind: "unknown", reason: "Base tier price is zero" });
       continue;
     }
     out.set(g.id, {
@@ -182,7 +183,7 @@ export function doorStyleQuestion(bundle: SpecBundle): PreferenceQuestion | unde
     (d) => premiumPercent(premiums.get(d.priceGroupId)) === 0);
 
   const options = bundle.doorStyles.map((d) => {
-    const impact = premiums.get(d.priceGroupId) ?? { kind: "unknown" as const, reason: "该价位无报价数据" };
+    const impact = premiums.get(d.priceGroupId) ?? { kind: "unknown" as const, reason: "No list price for this tier" };
     const parts = [d.material, d.color].filter(Boolean);
     return option({
       id: d.id,
@@ -195,8 +196,8 @@ export function doorStyleQuestion(bundle: SpecBundle): PreferenceQuestion | unde
 
   return {
     key: "doorStyle",
-    prompt: "门板样式想选哪一款？",
-    why: "门板决定了整体观感，也是价格差异最大的一项——同样的柜体，换门板价格可以差两成以上。",
+    prompt: "Which door style do you want?",
+    why: "The door drives the look and is usually the biggest price swing — same boxes, different doors can move the total by 20%+.",
     multiSelect: false,
     options,
     skippable: false,
@@ -221,9 +222,9 @@ export function boxMaterialQuestion(bundle: SpecBundle): PreferenceQuestion | un
   const baseline = materials.find((m) => m.isDefault) ?? materials[0];
   return {
     key: "boxMaterial",
-    prompt: "柜体（箱体）想用什么板？",
-    why: "这一项和门板样式是**两回事**：门板决定看得见的样子，箱体决定柜子本身用什么板做。"
-      + "价格也分开算——同一款门配不同箱体是两个价。水槽柜下面最能看出差别。",
+    prompt: "What box (carcass) material do you want?",
+    why: "This is separate from the door finish: doors are what you see; the box is what the cabinet is made of. "
+      + "Pricing is separate too — same door on different boxes are two prices. The difference shows most under the sink.",
     multiSelect: false,
     options: materials.map((m) => option({
       id: m.id,
@@ -256,8 +257,8 @@ export function hardwareQuestion(
 
   return {
     key: "hardware",
-    prompt: "五金要不要升级？可以多选，也可以都不选。",
-    why: "五金是每天开合都会碰到的部分，也是用久了最容易出问题的地方。这里的价格是每个柜体的加价。",
+    prompt: "Want any hardware upgrades? Multi-select, or skip.",
+    why: "Hardware is what you touch every day, and where wear shows first. Prices below are per cabinet.",
     multiSelect: true,
     options: bundle.hardwareOptions.map((h) => hardwareOption(h, opts.estimatedCabinetCount)),
     skippable: true,
@@ -271,7 +272,7 @@ function hardwareOption(h: HardwareOption, cabinetCount?: number): PreferenceOpt
   if (cabinetCount && cabinetCount > 0 && impact.kind === "perCabinet") {
     return {
       ...base,
-      priceNote: `${base.priceNote}（按 ${cabinetCount} 个柜体估算，合计约 ${format(mulQty(impact.amount, cabinetCount))}）`,
+      priceNote: `${base.priceNote} (≈ ${format(mulQty(impact.amount, cabinetCount))} for ${cabinetCount} cabinets)`,
     };
   }
   return base;
@@ -282,8 +283,8 @@ export function accessoryQuestion(bundle: SpecBundle): PreferenceQuestion | unde
 
   return {
     key: "accessories",
-    prompt: "有没有想加的功能配件？可以多选。",
-    why: "配件只装在能装的柜体上，不是每个柜子都加钱。选了之后我们会在方案里标出装在哪几个柜子。",
+    prompt: "Any functional accessories to add? Multi-select OK.",
+    why: "Accessories only go on cabinets that can take them — you don't pay per cabinet across the whole kitchen.",
     multiSelect: true,
     options: bundle.accessoryOptions.map((a) => accessoryOption(a, bundle)),
     skippable: true,
@@ -298,7 +299,9 @@ function accessoryOption(a: AccessoryOption, bundle: SpecBundle): PreferenceOpti
     id: a.id,
     label: a.name,
     priceImpact: impactOfModifier(a.priceModifier),
-    ...(codes.length ? { detail: `可装于 ${codes.slice(0, 4).join("、")}${codes.length > 4 ? " 等" : ""}` } : {}),
+    ...(codes.length
+      ? { detail: `Fits ${codes.slice(0, 4).join(", ")}${codes.length > 4 ? ", …" : ""}` }
+      : {}),
   });
   return base;
 }
@@ -324,17 +327,17 @@ export function assemblyQuestion(bundle: SpecBundle): PreferenceQuestion | undef
 
   return {
     key: "assembly",
-    prompt: "柜体要平板发货自己组装，还是组装好发货？",
-    why: "RTA（平板发货）便宜，但需要自己或请人组装一整套柜体；组装好发货省事，运费通常也更高。",
+    prompt: "Ship flat-pack (RTA) for you to assemble, or assembled?",
+    why: "RTA is cheaper but you (or a hired installer) assemble the set; assembled ships ready but usually costs more to freight.",
     multiSelect: false,
     options: [
       option({
-        id: "RTA" satisfies AssemblyOption, label: "平板发货（RTA），自己组装",
+        id: "RTA" satisfies AssemblyOption, label: "Flat-pack (RTA) — assemble yourself",
         priceImpact: { kind: "included" }, recommended: true,
       }),
       option({
-        id: "assembled" satisfies AssemblyOption, label: "组装好发货",
-        detail: "省去组装工时",
+        id: "assembled" satisfies AssemblyOption, label: "Assembled",
+        detail: "Skip assembly labor",
         priceImpact: low === high
           ? { kind: "perCabinet", amount: low }
           : { kind: "range", low, high },
@@ -361,25 +364,25 @@ export function storageQuestion(bundle: SpecBundle): PreferenceQuestion | undefi
 
   return {
     key: "storage",
-    prompt: "地柜偏好抽屉还是门板？",
-    why: "抽屉取放锅碗方便（不用蹲下来伸手进柜子深处），但同宽度下比门板柜贵。灶台和水槽附近做抽屉收益最大。",
+    prompt: "Prefer drawers or doors on the base run?",
+    why: "Drawers are easier for pots and pans (no deep crouching), but cost more than door cabinets of the same width. Highest payoff near the range and sink.",
     multiSelect: false,
     options: [
       option({
-        id: "drawers", label: "尽量多做抽屉",
-        detail: "取放最方便，造价最高",
-        priceImpact: { kind: "unknown", reason: "取决于最终排布，出方案后即可看到差额" },
+        id: "drawers", label: "As many drawers as possible",
+        detail: "Most convenient, highest cost",
+        priceImpact: { kind: "unknown", reason: "Depends on the final layout — delta shows after we generate" },
       }),
       option({
-        id: "balanced", label: "灶台/水槽附近做抽屉，其余门板",
-        detail: "常见做法",
-        priceImpact: { kind: "unknown", reason: "取决于最终排布" },
+        id: "balanced", label: "Drawers near range/sink; doors elsewhere",
+        detail: "Common approach",
+        priceImpact: { kind: "unknown", reason: "Depends on the final layout" },
         recommended: true,
       }),
       option({
-        id: "doors", label: "以门板柜为主",
-        detail: "造价最低",
-        priceImpact: { kind: "unknown", reason: "取决于最终排布" },
+        id: "doors", label: "Mostly door cabinets",
+        detail: "Lowest cost",
+        priceImpact: { kind: "unknown", reason: "Depends on the final layout" },
       }),
     ],
     skippable: true,
@@ -400,20 +403,20 @@ export function applianceQuestion(): PreferenceQuestion {
     "refrigerator", "range", "wallOven", "rangeHood", "dishwasher", "microwave",
   ];
   const why =
-    "家电占的墙面是从柜子里扣出来的，尺寸差 3 寸就可能少一个柜。" +
-    "另外冰箱把手一侧、灶具两侧都有净空要求（放刚端下来的热锅），会影响整体排布。";
+    "Appliances take wall space out of the cabinet run — 3\" can cost you a whole cabinet. " +
+    "Fridge handle side and both sides of the range also need landing clearance, which reshapes the layout.";
 
   return {
     key: "appliances",
-    prompt: "厨房里会有哪些家电？",
+    prompt: "Which appliances will be in the kitchen?",
     why,
     multiSelect: true,
     options: kinds.map((kind) => option({
       id: kind,
       label: APPLIANCE_LABEL[kind],
-      ...(kind === "rangeHood" ? { detail: "会占用灶台正上方的吊柜位" } : {}),
-      ...(kind === "dishwasher" ? { detail: "需要紧邻水槽（NKBA 要求 36 英寸以内）" } : {}),
-      priceImpact: { kind: "unknown", reason: "家电本身不在报价内；它影响的是柜体数量" },
+      ...(kind === "rangeHood" ? { detail: "Uses the wall-cabinet bay above the range" } : {}),
+      ...(kind === "dishwasher" ? { detail: "Needs to sit next to the sink (NKBA: within 36\")" } : {}),
+      priceImpact: { kind: "unknown", reason: "Appliances aren't in the quote; they change cabinet count" },
       ...(kind === "refrigerator" || kind === "range" || kind === "dishwasher"
         ? { recommended: true } : {}),
     })),
@@ -435,24 +438,23 @@ export function applianceWidthQuestion(kind: ApplianceKind): PreferenceQuestion 
 
   return {
     key: "applianceWidths",
-    prompt: `${label}的宽度是多少？`,
-    why: "柜位会按你的尺寸留空（冰箱两侧还要各留 1 英寸通风）。" +
-      "按常见尺寸猜的话，你的机器更宽就装不进去，更窄就白白浪费储物。",
+    prompt: `How wide is the ${label}?`,
+    why: "We'll reserve the bay to your size (fridge also needs 1\" clearance each side). " +
+      "Guessing a common size means a wider unit won't fit, or a narrower one wastes storage.",
     multiSelect: false,
     options: [
       ...widths.map((w, i) => option({
         id: `${kind}:${w}`,
-        label: `${w} 英寸`,
+        label: `${w}"`,
         ...(widthDetail(kind, w) ? { detail: widthDetail(kind, w)! } : {}),
-        priceImpact: { kind: "unknown", reason: "影响的是能排下多少柜子，不是单价" },
-        // 中间那档是最常见的
+        priceImpact: { kind: "unknown", reason: "Affects how many cabinets fit, not unit price" },
         ...(i === Math.floor(widths.length / 2) ? { recommended: true } : {}),
       })),
       option({
         id: `${kind}:unsure`,
-        label: "我去量一下再说",
-        detail: `先按 ${label}常见尺寸预留；图上会标出这是推定值`,
-        priceImpact: { kind: "unknown", reason: "按常见尺寸预留，之后可改" },
+        label: "I'll measure and come back",
+        detail: `Reserve a common ${label} width for now; the drawing will mark it as assumed`,
+        priceImpact: { kind: "unknown", reason: "Common size reserved; changeable later" },
       }),
     ],
     skippable: true,
@@ -462,9 +464,9 @@ export function applianceWidthQuestion(kind: ApplianceKind): PreferenceQuestion 
 /** 常见宽度的口语化说明。没有说法的就不编一个。 */
 function widthDetail(kind: ApplianceKind, width: number): string | undefined {
   if (kind !== "refrigerator") return undefined;
-  if (width === 30) return "窄款，小户型常见";
-  if (width === 33) return "最常见";
-  if (width === 36) return "对开门 / 法式";
+  if (width === 30) return "Narrow — common in small kitchens";
+  if (width === 33) return "Most common";
+  if (width === 36) return "French door / side-by-side";
   return undefined;
 }
 
@@ -478,25 +480,25 @@ export function appliancePlacementQuestion(kind: ApplianceKind): PreferenceQuest
   const label = APPLIANCE_LABEL[kind];
   return {
     key: "appliances",
-    prompt: `${label}想放在哪个位置？`,
-    why: `${label}的位置会牵动整条动线：冰箱把手一侧要留 15 英寸以上的落台面，` +
-      "灶具两侧要能放热锅，水槽和洗碗机要挨着。",
+    prompt: `Where should the ${label} go?`,
+    why: `${label} placement drives the work triangle: fridge needs ≥15" landing on the handle side, ` +
+      "the range needs hot-pan landing on both sides, and sink + dishwasher stay together.",
     multiSelect: false,
     options: [
       option({
-        id: `${kind}:nearEntry`, label: "靠近入口",
-        detail: "买菜进门先放下",
-        priceImpact: { kind: "unknown", reason: "不影响单价" },
+        id: `${kind}:nearEntry`, label: "Near the entry",
+        detail: "Drop groceries as you walk in",
+        priceImpact: { kind: "unknown", reason: "Doesn't change unit price" },
         recommended: kind === "refrigerator",
       }),
       option({
-        id: `${kind}:nearSink`, label: "靠近水槽",
-        priceImpact: { kind: "unknown", reason: "不影响单价" },
+        id: `${kind}:nearSink`, label: "Near the sink",
+        priceImpact: { kind: "unknown", reason: "Doesn't change unit price" },
       }),
       option({
-        id: `${kind}:any`, label: "我不确定，你帮我定",
-        detail: "按人体工程与动线自动安排",
-        priceImpact: { kind: "unknown", reason: "不影响单价" },
+        id: `${kind}:any`, label: "Not sure — you decide",
+        detail: "Place by ergonomics and traffic flow",
+        priceImpact: { kind: "unknown", reason: "Doesn't change unit price" },
       }),
     ],
     skippable: true,
@@ -538,30 +540,30 @@ export function budgetQuestion(ctx: BudgetContext): PreferenceQuestion | undefin
 
   const caveat = ctx.sourceVerified
     ? ""
-    : "（价格区间基于平台通用参考数据，尚未逐条核实，仅供确定量级）";
+    : " (Ranges use the platform reference catalog and are not fully verified item-by-item — for order-of-magnitude only.)";
 
   return {
     key: "budgetBand",
-    prompt: `按你这个厨房的尺寸（地柜约 ${Math.round(inches)}"），柜体部分大致在这几档，你倾向哪一档？`,
-    why: `预算档位会影响我们推荐的门板价位与配件取舍。这里只含柜体，不含台面、电器与安装。${caveat}`,
+    prompt: `For a kitchen this size (about ${Math.round(inches)}" of base run), the cabinet portion usually lands in these bands — which fits you?`,
+    why: `The band steers door-tier and accessory trade-offs. Cabinets only — no countertops, appliances, or install.${caveat}`,
     multiSelect: false,
     options: [
       option({
-        id: "economy", label: "控制成本优先",
+        id: "economy", label: "Keep cost down",
         priceImpact: { kind: "range", low, high: mid },
       }),
       option({
-        id: "standard", label: "中间档，性价比优先",
+        id: "standard", label: "Mid range — value first",
         priceImpact: { kind: "range", low: mid, high },
         recommended: true,
       }),
       option({
-        id: "premium", label: "不设上限，优先质感",
-        priceImpact: { kind: "unknown", reason: "取决于门板与配件选择" },
+        id: "premium", label: "No hard cap — finish first",
+        priceImpact: { kind: "unknown", reason: "Depends on door and accessory choices" },
       }),
       option({
-        id: "unsure", label: "还没想好，先看方案再说",
-        priceImpact: { kind: "unknown", reason: "未选择" },
+        id: "unsure", label: "Not sure yet — show options first",
+        priceImpact: { kind: "unknown", reason: "Not chosen" },
       }),
     ],
     skippable: true,
@@ -579,13 +581,13 @@ export function budgetQuestion(ctx: BudgetContext): PreferenceQuestion | undefin
 export function tradeoffQuestion(): PreferenceQuestion {
   return {
     key: "tradeoff",
-    prompt: "如果预算需要取舍，你更想先保住哪一样？",
-    why: "有了这个，后面的取舍我们可以按你的倾向先给建议，不用每一项都来问你一遍。",
+    prompt: "If the budget needs trade-offs, which one do you want to keep first?",
+    why: "With this, later trade-offs can follow your priority instead of asking every time.",
     multiSelect: false,
     options: [
-      option({ id: "price", label: "总价", detail: "配件与升级项从简", priceImpact: { kind: "included" } }),
-      option({ id: "quality", label: "用料与五金", detail: "面板可以朴素，五金不将就", priceImpact: { kind: "included" } }),
-      option({ id: "lookAndFeel", label: "外观质感", detail: "门板与颜色优先", priceImpact: { kind: "included" } }),
+      option({ id: "price", label: "Total price", detail: "Keep accessories and upgrades light", priceImpact: { kind: "included" } }),
+      option({ id: "quality", label: "Materials & hardware", detail: "Panels can be plain; hardware shouldn't be", priceImpact: { kind: "included" } }),
+      option({ id: "lookAndFeel", label: "Look & finish", detail: "Door style and color first", priceImpact: { kind: "included" } }),
     ],
     skippable: true,
   };
@@ -696,56 +698,62 @@ export function validatePreferences(
 
   if (raw.doorStyleId !== undefined) {
     if (!bundle?.doorStyles.some((d) => d.id === raw.doorStyleId)) {
-      throw new PreferenceError(`门板样式 ${raw.doorStyleId} 不在该公司的规格库中`);
+      throw new PreferenceError(`Door style ${raw.doorStyleId} is not in this company's catalog`);
     }
     company.doorStyleId = raw.doorStyleId;
   }
   if (raw.boxMaterialId !== undefined) {
     if (!bundle?.boxMaterialOptions?.some((m) => m.id === raw.boxMaterialId)) {
-      throw new PreferenceError(`箱体板材 ${raw.boxMaterialId} 不在该公司的规格库中`);
+      throw new PreferenceError(`Box material ${raw.boxMaterialId} is not in this company's catalog`);
     }
     company.boxMaterialId = raw.boxMaterialId;
   }
   if (raw.hardwareOptionIds !== undefined) {
-    company.hardwareOptionIds = checkIds(raw.hardwareOptionIds, bundle?.hardwareOptions ?? [], "五金");
+    company.hardwareOptionIds = checkIds(raw.hardwareOptionIds, bundle?.hardwareOptions ?? [], "Hardware");
   }
   if (raw.accessoryOptionIds !== undefined) {
-    company.accessoryOptionIds = checkIds(raw.accessoryOptionIds, bundle?.accessoryOptions ?? [], "配件");
+    company.accessoryOptionIds = checkIds(raw.accessoryOptionIds, bundle?.accessoryOptions ?? [], "Accessory");
   }
 
   if (raw.assembly !== undefined) {
     if (raw.assembly !== "RTA" && raw.assembly !== "assembled") {
-      throw new PreferenceError("组装方式只能是 RTA 或 assembled");
+      throw new PreferenceError("Assembly must be RTA or assembled");
     }
     shared.assembly = raw.assembly;
   }
   if (raw.storage !== undefined) {
     if (!["drawers", "doors", "balanced"].includes(raw.storage)) {
-      throw new PreferenceError("储物偏好只能是 drawers / doors / balanced");
+      throw new PreferenceError("Storage preference must be drawers / doors / balanced");
     }
     shared.storage = raw.storage;
   }
   if (raw.budgetBand !== undefined) {
     if (!["economy", "standard", "premium", "unsure"].includes(raw.budgetBand)) {
-      throw new PreferenceError("预算档位取值非法");
+      throw new PreferenceError("Invalid budget band");
     }
     shared.budgetBand = raw.budgetBand;
   }
   if (raw.tradeoff !== undefined) {
     if (!["price", "quality", "lookAndFeel"].includes(raw.tradeoff)) {
-      throw new PreferenceError("取舍优先级取值非法");
+      throw new PreferenceError("Invalid trade-off priority");
     }
     shared.tradeoff = raw.tradeoff;
+  }
+  if (raw.language !== undefined) {
+    if (raw.language !== "en" && raw.language !== "zh") {
+      throw new PreferenceError("language must be en or zh");
+    }
+    shared.language = raw.language;
   }
   return { shared, company };
 }
 
 function checkIds(ids: unknown, known: readonly { id: string }[], label: string): string[] {
-  if (!Array.isArray(ids)) throw new PreferenceError(`${label}选择必须是数组`);
+  if (!Array.isArray(ids)) throw new PreferenceError(`${label} selection must be an array`);
   const set = new Set(known.map((k) => k.id));
   for (const id of ids) {
     if (typeof id !== "string" || !set.has(id)) {
-      throw new PreferenceError(`${label} ${String(id)} 不在该公司的规格库中`);
+      throw new PreferenceError(`${label} ${String(id)} is not in this company's catalog`);
     }
   }
   return [...new Set(ids as string[])];
@@ -822,6 +830,7 @@ export function unappliedPreferences(
   selections: readonly { moduleId: string }[],
   prefs: CustomerPreferences,
   bundle: SpecBundle,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
 ): string[] {
   const notes: string[] = [];
   const byId = indexModules(bundle);
@@ -834,17 +843,21 @@ export function unappliedPreferences(
         .map((m) => m.code),
     )];
     if (cannot.length > 0) {
-      notes.push(
-        `${cannot.join("、")} 不提供「${prefs.assembly === "assembled" ? "组装好发货" : "平板发货"}」，` +
-        `这几个柜体按${prefs.assembly === "assembled" ? "平板" : "组装好"}发货——` +
+      const assembled = prefs.assembly === "assembled";
+      notes.push(msg(lang,
+        `${cannot.join(", ")} do not offer ${assembled ? "assembled" : "RTA"} shipping; ` +
+        `those cabinets ship ${assembled ? "flat-pack" : "assembled"} — ` +
+        `most sellers only assemble base cabinets.`,
+        `${cannot.join("、")} 不提供「${assembled ? "组装好发货" : "平板发货"}」，` +
+        `这几个柜体按${assembled ? "平板" : "组装好"}发货——` +
         `多数公司只对地柜提供组装服务。`,
-      );
+      ));
     }
   }
 
-  for (const [ids, pool, label] of [
-    [prefs.accessoryOptionIds ?? [], bundle.accessoryOptions, "配件"],
-    [prefs.hardwareOptionIds ?? [], bundle.hardwareOptions, "五金"],
+  for (const [ids, pool, labelEn, labelZh] of [
+    [prefs.accessoryOptionIds ?? [], bundle.accessoryOptions, "Accessory", "配件"],
+    [prefs.hardwareOptionIds ?? [], bundle.hardwareOptions, "Hardware", "五金"],
   ] as const) {
     for (const id of ids) {
       const opt = pool.find((o) => o.id === id);
@@ -859,7 +872,10 @@ export function unappliedPreferences(
             : true;
       }).length;
       if (applicable === 0) {
-        notes.push(`${label}「${opt.name}」在这版方案的柜体上都装不了，未计入报价。`);
+        notes.push(msg(lang,
+          `${labelEn} "${opt.name}" doesn't fit any cabinet in this layout — not included in the quote.`,
+          `${labelZh}「${opt.name}」在这版方案的柜体上都装不了，未计入报价。`,
+        ));
       }
     }
   }

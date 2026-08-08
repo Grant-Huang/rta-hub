@@ -48,7 +48,7 @@ test("对比表按总价升序，最低价标 delta 为 0", () => {
     quote({ id: "q1", companyId: "co_a", total: fromDollars("1130.00") }),
     quote({ id: "q2", companyId: "co_b", total: fromDollars("980.00") }),
     quote({ id: "q3", companyId: "co_c", total: fromDollars("1450.00") }),
-  ], nameOf, AT);
+  ], nameOf, AT, "zh");
 
   assert.deepEqual(cmp.rows.map((r) => r.companyName), ["Lakeside", "Maple Ridge", "Northern"]);
   assert.equal(cmp.rows[0]!.deltaFromLowest, 0);
@@ -60,7 +60,7 @@ test("含税口径不一致时明确警告（FR-6 的关键要求）", () => {
   const cmp = buildComparison("cv_1", [
     quote({ id: "q1", companyId: "co_a", total: fromDollars("1130.00") }),
     quote({ id: "q2", companyId: "co_b", total: fromDollars("1000.00"), taxes: [] }),
-  ], nameOf, AT);
+  ], nameOf, AT, "zh");
 
   const warn = cmp.warnings.find((w) => w.code === "MIXED_TAX_BASIS");
   assert.ok(warn, "必须提示含税口径不一致");
@@ -72,7 +72,7 @@ test("口径一致时不报警告", () => {
   const cmp = buildComparison("cv_1", [
     quote({ id: "q1", companyId: "co_a", total: fromDollars("1130.00") }),
     quote({ id: "q2", companyId: "co_b", total: fromDollars("1300.00") }),
-  ], nameOf, AT);
+  ], nameOf, AT, "zh");
   assert.equal(cmp.warnings.length, 0);
   assert.equal(cmp.comparable, true);
 });
@@ -83,7 +83,7 @@ test("方案范围差异过大时提示总价不可直接比", () => {
       lineItems: [{ moduleId: "m", moduleCode: "B30", qty: 4, width: 30, height: 34.5, depth: 24, assembly: "RTA", unitListPrice: fromDollars("1"), modifiers: [], unitNetPrice: fromDollars("1"), lineSubtotal: fromDollars("4") }] }),
     quote({ id: "q2", companyId: "co_b", total: fromDollars("1300.00"),
       lineItems: [{ moduleId: "m", moduleCode: "B30", qty: 12, width: 30, height: 34.5, depth: 24, assembly: "RTA", unitListPrice: fromDollars("1"), modifiers: [], unitNetPrice: fromDollars("1"), lineSubtotal: fromDollars("12") }] }),
-  ], nameOf, AT);
+  ], nameOf, AT, "zh");
   assert.ok(cmp.warnings.some((w) => w.code === "DIFFERENT_SCOPE"));
 });
 
@@ -91,7 +91,7 @@ test("不同价格组时提示价差部分来自门板档次", () => {
   const cmp = buildComparison("cv_1", [
     quote({ id: "q1", companyId: "co_a", total: fromDollars("1000.00"), priceGroupId: "pg_a" }),
     quote({ id: "q2", companyId: "co_b", total: fromDollars("1800.00"), priceGroupId: "pg_premium" }),
-  ], nameOf, AT);
+  ], nameOf, AT, "zh");
   assert.ok(cmp.warnings.some((w) => w.code === "DIFFERENT_PRICE_GROUP"));
 });
 
@@ -99,7 +99,7 @@ test("过期报价被标出，但不影响其他行的可比性", () => {
   const cmp = buildComparison("cv_1", [
     quote({ id: "q1", companyId: "co_a", total: fromDollars("1130.00"), validUntil: "2026-05-01T00:00:00.000Z" }),
     quote({ id: "q2", companyId: "co_b", total: fromDollars("1300.00") }),
-  ], nameOf, AT);
+  ], nameOf, AT, "zh");
   assert.ok(cmp.warnings.some((w) => w.code === "EXPIRED_QUOTE"));
   assert.equal(cmp.comparable, true, "只有过期警告时仍算口径一致");
 });
@@ -108,7 +108,7 @@ test("草稿状态的报价也能参与对比（随时可拉草稿对比）", ()
   const cmp = buildComparison("cv_1", [
     quote({ id: "q1", companyId: "co_a", total: fromDollars("1130.00"), status: "draft" }),
     quote({ id: "q2", companyId: "co_b", total: fromDollars("1300.00"), status: "confirmed" }),
-  ], nameOf, AT);
+  ], nameOf, AT, "zh");
   assert.equal(cmp.rows.length, 2);
 });
 
@@ -116,7 +116,7 @@ test("只统计本会话的报价", () => {
   const cmp = buildComparison("cv_1", [
     quote({ id: "q1", conversationId: "cv_1", total: fromDollars("100.00") }),
     quote({ id: "q2", conversationId: "cv_other", total: fromDollars("200.00") }),
-  ], nameOf, AT);
+  ], nameOf, AT, "zh");
   assert.equal(cmp.rows.length, 1);
 });
 
@@ -124,9 +124,9 @@ test("文本与 HTML 呈现都注明只比价格不比图纸", () => {
   const cmp = buildComparison("cv_1", [
     quote({ id: "q1", companyId: "co_a", total: fromDollars("1130.00") }),
     quote({ id: "q2", companyId: "co_b", total: fromDollars("980.00") }),
-  ], nameOf, AT);
-  const text = renderComparisonText(cmp);
-  const html = renderComparisonHtml(cmp);
+  ], nameOf, AT, "zh");
+  const text = renderComparisonText(cmp, "zh");
+  const html = renderComparisonHtml(cmp, "zh");
   assert.match(text, /只比价格/);
   assert.match(html, /只比价格/);
   assert.match(text, /Lakeside/);
@@ -134,9 +134,9 @@ test("文本与 HTML 呈现都注明只比价格不比图纸", () => {
 });
 
 test("空对比表不崩", () => {
-  const cmp = buildComparison("cv_1", [], nameOf, AT);
+  const cmp = buildComparison("cv_1", [], nameOf, AT, "zh");
   assert.equal(cmp.rows.length, 0);
-  assert.match(renderComparisonText(cmp), /还没有/);
+  assert.match(renderComparisonText(cmp, "zh"), /还没有/);
 });
 
 // ── FR-7 HTML 邮件 ────────────────────────────────────────────────────────
@@ -168,12 +168,12 @@ test("HTML 邮件四层兜底齐备：内嵌图 + 表格 + 纯文本 + 附件", 
   assert.match(email.html, /NW-B30/);
   // 3. 纯文本兜底且内容完整（不是"请用 HTML 查看"）
   assert.match(email.text, /NW-B30/);
-  assert.match(email.text, /总计/);
+  assert.match(email.text, /Total|总计/);
   assert.ok(!/请用.*查看/.test(email.text));
   // 4. 附件兜底
   assert.equal(email.attachments.length, 4);
   assert.ok(email.attachments.every((a) => a.cid && a.contentType === "image/svg+xml"));
-  assert.match(email.html, /附件中包含同样的四张视图/);
+  assert.match(email.html, /attached|attachments|附件中包含同样的四张视图/i);
 });
 
 test("每段墙各出四张图", () => {
@@ -255,7 +255,7 @@ test("通用目录能转成可排布可渲染的伪型号", () => {
 test("含四视图的预估：有图、有区间、有双重免责声明", () => {
   const illustrated = buildIllustratedEstimate(genericCatalog, geometry, {
     conversationId: "cv_1", province: "ON", at: AT,
-  }, { taxRules: SEED_TAX_RULES });
+  }, { taxRules: SEED_TAX_RULES, language: "zh" });
 
   assert.equal(illustrated.viewsByRun.length, 1);
   for (const svg of Object.values(illustrated.viewsByRun[0]!.views)) {
@@ -356,7 +356,7 @@ test("两家公司的方案可以放进同一张对比表", () => {
       id: "q2", companyId: secondCompany.id, total: priced.total,
       subtotal: priced.subtotal, taxes: priced.taxes, shipping: priced.shipping,
     }),
-  ], (id) => (id === secondCompany.id ? secondCompany.name : names[id]), AT);
+  ], (id) => (id === secondCompany.id ? secondCompany.name : names[id]), AT, "zh");
 
   assert.equal(cmp.rows.length, 2);
   assert.ok(cmp.rows.some((r) => r.companyName === "Lakeside Kitchen Works"));

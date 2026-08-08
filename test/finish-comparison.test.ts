@@ -171,7 +171,7 @@ test("多个型号有空洞时全部列出来——客户要知道一共要调�
 // ── 呈现 ─────────────────────────────────────────────────────────────────
 
 test("文字版把「重算价」「哪些跟着换色」都说清楚", () => {
-  const text = renderFinishComparison(compareFinishes(args), format);
+  const text = renderFinishComparison(compareFinishes({ ...args, language: "zh" }), format, "zh");
   assert.match(text, /换一种门板花色/);
   assert.match(text, /重算价/);
   assert.match(text, /塑料地脚不换/);
@@ -183,13 +183,13 @@ test("文字版把「重算价」「哪些跟着换色」都说清楚", () => {
 
 test("只有一个花色时不出这一段——没有可比的对象", () => {
   const single = { ...ctx, doorStyles: [pilotDoorStyles[0]!] };
-  const text = renderFinishComparison(compareFinishes({ ...args, ctx: single }), format);
+  const text = renderFinishComparison(compareFinishes({ ...args, ctx: single, language: "zh" }), format, "zh");
   assert.equal(text, "");
 });
 
 test("金额格式与报价单一致，不另编一套", () => {
   const cmp = compareFinishes(args);
-  const text = renderFinishComparison(cmp, format);
+  const text = renderFinishComparison(cmp, format, "zh");
   assert.ok(text.includes(format(cmp.current!.total!)),
     "比价里的当前总价与报价单的写法不一致");
   assert.ok(fromDollars("0.00") === 0, "占位断言：金额单位是分");

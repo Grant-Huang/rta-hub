@@ -18,6 +18,7 @@
  * 见 `ergonomics.ts`。
  */
 import { PRECISION_INCHES } from "../floorplan/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 import { NARROW_THRESHOLD } from "./aesthetics.js";
 
 /** 行业惯例：单条填缝条最宽 6"，一段墙最多 2 条（规范文档第六节 WF3/WF6、BF3/BF6）。 */
@@ -56,9 +57,11 @@ export interface PackOptions {
   preferredSeams?: number[];
   /** 对齐奖励权重。 */
   seamWeight?: number;
+  /** 客户语言偏好；`reason` 跟它走，默认英文。 */
+  language?: UiLanguage;
 }
 
-const DEFAULTS: Required<Omit<PackOptions, "preferredSeams">> = {
+const DEFAULTS: Required<Omit<PackOptions, "preferredSeams" | "language">> = {
   rhythmWeight: 1.0,
   narrowWeight: 8.0,
   countWeight: 1.5,
@@ -117,6 +120,7 @@ export function packSegment(
   opts: PackOptions = {},
 ): PackResult {
   const o = { ...DEFAULTS, ...opts };
+  const lang = opts.language ?? DEFAULT_LANGUAGE;
   const zeroCost = { rhythm: 0, narrow: 0, count: 0, seam: 0, preference: 0, total: 0 };
   const L = toUnits(segmentLength);
   if (L <= 0) return { widths: [], leftover: 0, feasible: true, cost: zeroCost };
@@ -125,7 +129,9 @@ export function packSegment(
   if (usable.length === 0) {
     return {
       widths: [], leftover: segmentLength, feasible: false, cost: zeroCost,
-      reason: `没有宽度 ≤ ${segmentLength}" 的可用型号`,
+      reason: msg(lang,
+        `No module width ≤ ${segmentLength}" available`,
+        `没有宽度 ≤ ${segmentLength}" 的可用型号`),
     };
   }
 
@@ -199,7 +205,10 @@ export function packSegment(
     if (cell && (!final || better(cell, final))) { final = cell; finalIdx = k; }
   }
   if (!final) {
-    return { widths: [], leftover: segmentLength, feasible: false, cost: zeroCost, reason: "无解" };
+    return {
+      widths: [], leftover: segmentLength, feasible: false, cost: zeroCost,
+      reason: msg(lang, "No solution", "无解"),
+    };
   }
 
   // 回溯
@@ -224,7 +233,11 @@ export function packSegment(
     feasible: leftover <= MAX_FILLER_WIDTH * MAX_FILLERS_PER_SEGMENT,
     cost: explainCost(widths, usable, o, seamUnits),
     ...(leftover > MAX_FILLER_WIDTH * MAX_FILLERS_PER_SEGMENT
-      ? { reason: `剩余 ${leftover}" 超过 ${MAX_FILLERS_PER_SEGMENT} 条 ${MAX_FILLER_WIDTH}" 填缝条能吸收的范围` }
+      ? {
+          reason: msg(lang,
+            `Leftover ${leftover}" exceeds what ${MAX_FILLERS_PER_SEGMENT} × ${MAX_FILLER_WIDTH}" fillers can absorb`,
+            `剩余 ${leftover}" 超过 ${MAX_FILLERS_PER_SEGMENT} 条 ${MAX_FILLER_WIDTH}" 填缝条能吸收的范围`),
+        }
       : {}),
   };
 }
@@ -237,7 +250,7 @@ function better(a: Cell, b: Cell): boolean {
 function explainCost(
   widths: readonly number[],
   usable: readonly PackCandidate[],
-  o: Required<Omit<PackOptions, "preferredSeams">>,
+  o: Required<Omit<PackOptions, "preferredSeams" | "language">>,
   seamUnits: readonly number[],
 ): PackResult["cost"] {
   let rhythm = 0;

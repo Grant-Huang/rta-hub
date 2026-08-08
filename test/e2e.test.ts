@@ -54,7 +54,7 @@ test("完整链路：草稿 → 确认 → 发送 → 计费", () => {
   // 发送前披露
   const disclosure = buildSendDisclosure(quote, "Maple Cabinetry", {
     displayName: "Alex", email: "alex@example.com",
-  });
+  }, "zh");
   assert.equal(disclosure.companyName, "Maple Cabinetry");
   assert.ok(disclosure.items.some((i) => i.label === "你的邮箱"));
   assert.match(disclosure.notice, /Maple Cabinetry/);
@@ -112,7 +112,7 @@ test("LLM 编造价格：型号真实但价格被丢弃，最终金额来自规�
   assert.equal(r.quote.lineItems[0]!.unitListPrice, fromDollars("245.50"));
   assert.notEqual(r.quote.total, fromDollars("19.98"));
   // 模型试图报价这件事被记进审计
-  assert.match(r.events[0]!.details ?? "", /已丢弃模型输出中的价格字段/);
+  assert.match(r.events[0]!.details ?? "", /Discarded price fields from model output/);
 });
 
 test("校验失败：拒绝生成，写 validationRejected，不进入闸门", () => {
@@ -148,5 +148,5 @@ test("贸易账号拿到贸易折扣，且账号类型进快照", () => {
 
 test("跨租户上下文被拒绝", () => {
   const otherScope = new TenantScope("co_other");
-  assert.throws(() => createQuoteDraft(otherScope, ctx, selections, draftInput), /与作用域 co_other 不符/);
+  assert.throws(() => createQuoteDraft(otherScope, ctx, selections, draftInput), /scope is co_other/);
 });

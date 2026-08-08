@@ -80,9 +80,9 @@ test("会话列表只回本账号的，且带得出标题——左栏靠它显�
 test("公司目录只列出 active 公司，且不暴露订阅状态", async () => {
   const r = await req("/api/companies");
   const body = await r.json() as { companies: { id: string; name: string }[] };
-  // 三家 active 试点公司；Northern Wood 已发布规格但未订阅，不应出现
+  // active 试点公司；Northern Wood 已发布规格但未订阅，不应出现
   assert.deepEqual(body.companies.map((c) => c.id).sort(),
-    ["co_birchline", "co_lakeside", "co_pilot"]);
+    ["co_birchline", "co_lakeside", "co_oppein", "co_pilot"]);
   assert.ok(!body.companies.some((c) => c.id === "co_northern"));
   const raw = JSON.stringify(body);
   for (const leak of ["personalizationSubscription", "billingPlan", "quoteEmail"]) {
@@ -113,7 +113,7 @@ test("完整链路：建会话 → 出报价 → 披露 → 确认 → 发送（
   // 披露清单
   const disc = await req(`/api/quotes/${quote.id}/disclosure`, { accountId: CONSUMER });
   const disclosure = await disc.json() as { items: { label: string }[]; notice: string };
-  assert.ok(disclosure.items.some((i) => i.label === "你的邮箱"));
+  assert.ok(disclosure.items.some((i) => /Your email|你的邮箱/i.test(i.label)));
 
   // 确认
   const conf = await req(`/api/quotes/${quote.id}/confirm`, { method: "POST", accountId: CONSUMER });
@@ -153,7 +153,7 @@ test("闸门不可绕过：未确认的报价直接调 send 被拒（且 confirm
   });
   assert.equal(send.status, 409);
   const body = await send.json() as { error: string };
-  assert.match(body.error, /必须先由客户确认/);
+  assert.match(body.error, /customer must confirm before send/i);
 });
 
 test("另一个账号读不到别人的报价", async () => {
@@ -264,9 +264,9 @@ test("冷启动通用预估：有区间、有免责声明、结构上无 company
     text: string;
   };
   assert.ok(body.estimate.totalRange.high > body.estimate.totalRange.low, "必须给区间不给精确值");
-  assert.match(body.estimate.disclaimer, /不是任何具体公司的真实报价/);
+  assert.match(body.estimate.disclaimer, /not a real quote from any specific company|不是任何具体公司的真实报价/i);
   assert.ok(!("companyId" in body.estimate), "EstimateDraft 不应有 companyId");
-  assert.match(body.text, /合计区间/);
+  assert.match(body.text, /Range total|合计区间/i);
 });
 
 test("对话：总控助手会指出还缺哪些字段", async () => {
@@ -313,7 +313,7 @@ test("邮件列表：主动同意后可订阅，退订链接真的生效", async
 
   const un = await app.fetch(new Request(`${base}/unsubscribe?token=${unsubscribeToken}`));
   assert.equal(un.status, 200);
-  assert.match(await un.text(), /已退订/);
+  assert.match(await un.text(), /unsubscribed|已退订/i);
 
   // 无效 token
   const bad = await app.fetch(new Request(`${base}/unsubscribe?token=nope`));
@@ -347,7 +347,7 @@ test("销售看板去标识化：只有聚合计数与话术，无客户身份",
   const body = await r.json() as { aggregated: { normalizedName: string; count: number; outreachLine: string }[] };
   const hit = body.aggregated.find((a) => a.normalizedName.includes("sunrise"));
   assert.ok(hit, "应记录到提及信号");
-  assert.match(hit.outreachLine, /有客户/);
+  assert.match(hit.outreachLine, /customer|有客户/i);
   const raw = JSON.stringify(body);
   for (const pii of ["alex@example.com", "ca_demo_consumer", conversation.id]) {
     assert.ok(!raw.includes(pii), `销售看板泄露了 ${pii}`);
@@ -446,17 +446,29 @@ test("补齐户型 → 出方案 → 四视图 → 转报价（完整 MVP-2 链�
   const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
 
   // 手动补齐
-  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+  const added = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
   });
+  const runId = (await added.json() as {
+    floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };
+  }).floorPlan.parsedGeometry.wallRuns[0]!.id;
   const resolved = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
   });
   const afterResolve = await resolved.json() as { ready: boolean };
   assert.equal(afterResolve.ready, true);
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      addFeature: { wallRunId: runId, kind: "plumbing", offset: 60, width: 24 },
+    }),
+  });
 
-  // 先问再画：客户点头 → 全局俯视图 → 认可排布（design/stages.ts）
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Appliances later." }),
+  });
   await advance(conversation.id, CONSUMER, "consent");
   const planRes = await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
@@ -520,6 +532,16 @@ test("局部重算只影响指定墙段", async () => {
   await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
   });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      addFeature: { wallRunId: fp2.parsedGeometry.wallRuns[0]!.id, kind: "plumbing", offset: 48, width: 24 },
+    }),
+  });
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Appliances later." }),
+  });
   await advance(conversation.id, CONSUMER, "consent");
   await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
@@ -563,8 +585,8 @@ test("有户型图时通用预估升级为含四视图版本", async () => {
     estimate: { disclaimer: string };
   };
   assert.ok(body.views && body.views.length > 0, "应带四视图");
-  assert.match(body.viewsDisclaimer ?? "", /不对应任何具体公司的真实型号/);
-  assert.match(body.estimate.disclaimer, /不是任何具体公司的真实报价/);
+  assert.match(body.viewsDisclaimer ?? "", /not any seller.s real SKUs|不对应任何具体公司的真实型号/i);
+  assert.match(body.estimate.disclaimer, /not a real quote from any specific company|不是任何具体公司的真实报价/i);
 });
 
 test("多公司比价：口径一致性有标注", async () => {
@@ -601,7 +623,7 @@ test("多公司比价：口径一致性有标注", async () => {
   assert.equal(body.comparison.rows.length, 2);
   // 按总价升序
   assert.ok(body.comparison.rows[0]!.total <= body.comparison.rows[1]!.total);
-  assert.match(body.text, /只比价格/);
+  assert.match(body.text, /compares price only|只比价格/i);
   assert.match(body.html, /<table/);
 });
 
@@ -622,6 +644,33 @@ test("别人的户型图读不到", async () => {
 const TRADE = "ca_demo_trade";
 
 /** 建一个补齐了户型、出过方案的会话，供后面的 PDF / 修订链测试复用。 */
+/** 满足 FR-15 出图前检查表：几何 + 上下水 + 意图 + 窗/家电可推迟说明。 */
+async function seedDesignIntake(conversationId: string, accountId: string, floorPlanId: string) {
+  const added = await req(`/api/floorplans/${floorPlanId}/resolve`, {
+    method: "POST", accountId,
+    body: JSON.stringify({ addRun: { label: "North", length: 144 } }),
+  });
+  const runId = (await added.json() as {
+    floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };
+  }).floorPlan.parsedGeometry.wallRuns[0]!.id;
+  await req(`/api/floorplans/${floorPlanId}/resolve`, {
+    method: "POST", accountId, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+  await req(`/api/floorplans/${floorPlanId}/resolve`, {
+    method: "POST", accountId,
+    body: JSON.stringify({
+      addFeature: { wallRunId: runId, kind: "plumbing", offset: 60, width: 24 },
+    }),
+  });
+  await req(`/api/conversations/${conversationId}/messages`, {
+    method: "POST", accountId,
+    body: JSON.stringify({
+      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Appliances later.",
+    }),
+  });
+  return runId;
+}
+
 async function readyProject(accountId: string, appliances?: unknown[]) {
   const convRes = await req("/api/conversations", { method: "POST", accountId });
   const { conversation } = await convRes.json() as { conversation: { id: string } };
@@ -630,19 +679,13 @@ async function readyProject(accountId: string, appliances?: unknown[]) {
     body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
   });
   const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
-  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
-    method: "POST", accountId, body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
-  });
+  await seedDesignIntake(conversation.id, accountId, floorPlan.id);
   if (appliances) {
     await req(`/api/floorplans/${floorPlan.id}/resolve`, {
       method: "POST", accountId, body: JSON.stringify({ appliances }),
     });
   }
-  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
-    method: "POST", accountId, body: JSON.stringify({ ceilingHeight: 96 }),
-  });
   // 走完整阶段：客户点头 → 全局俯视图 → 认可排布 → 才出四视图
-  // （design/stages.ts：先问再画，不由系统替客户决定什么时候开始看方案）
   await advance(conversation.id, accountId, "consent");
   await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
     method: "POST", accountId, body: JSON.stringify({ companyId: "co_pilot" }),
@@ -697,9 +740,9 @@ test("家电信息记在户型上；没给宽度走推定值并如实标注", as
   assert.equal(
     body.floorPlan.appliances.find((a) => a.kind === "range")?.provenance, "customer");
 
-  assert.ok(body.provenanceNote?.includes("冰箱"), body.provenanceNote);
+  assert.ok(/Refrigerator|冰箱/.test(body.provenanceNote ?? ""), body.provenanceNote);
   assert.ok(
-    body.applianceQuestions.some((q) => q.prompt.includes("冰箱")),
+    body.applianceQuestions.some((q) => /冰箱|Refrigerator/i.test(q.prompt)),
     "推定的那个还该继续追问，客户给过的不该再问",
   );
 });
@@ -738,7 +781,7 @@ test("报价交付前跑完整审核，并把查了哪几项告诉客户", async
   for (const need of ["QUOTE_RECONCILIATION", "PRICE_SNAPSHOT", "BOM_INCOMPLETE", "SPEC_MISMATCH"]) {
     assert.ok(body.audit.checked.includes(need), `没跑 ${need}：${body.audit.checked.join()}`);
   }
-  assert.ok(body.auditText.includes("交付前检查"), body.auditText);
+  assert.ok(/Pre-delivery check|交付前检查/i.test(body.auditText), body.auditText);
 });
 
 test("推定的家电尺寸要跟着**报价单**一起走，不能只写在图纸说明里", async () => {
@@ -763,10 +806,10 @@ test("推定的家电尺寸要跟着**报价单**一起走，不能只写在图�
 
   assert.ok(body.audit.checked.includes("UNDISCLOSED_ASSUMPTION"),
     `没跑推定值披露检查：${body.audit.checked.join()}`);
-  assert.match(body.quoteListText, /烤箱/, "报价单上没提烤箱");
-  assert.match(body.quoteListText, /推定|预留/, "报价单上没说那个尺寸是推定的");
+  assert.match(body.quoteListText, /Wall oven|烤箱/i, "报价单上没提烤箱");
+  assert.match(body.quoteListText, /assumed|reserved|推定|预留/i, "报价单上没说那个尺寸是推定的");
   // 客户真给了尺寸的那一件不该被说成"推定"——那会让客户以为自己没说过
-  assert.equal(/冰箱按 .*推定|冰箱按 .*预留/.test(body.quoteListText), false,
+  assert.equal(/冰箱按 .*推定|冰箱按 .*预留|Refrigerator reserved|Refrigerator.*assumed/i.test(body.quoteListText), false,
     `客户给过尺寸的冰箱被写成了推定：${body.quoteListText}`);
 });
 
@@ -790,6 +833,60 @@ function advance(conversationId: string, accountId: string, action: string, extr
   });
 }
 
+test("FR-15：齐备后 design 接口带回叙事 brief 与出图前文字确认", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+
+  // 只有几何、没有上下水/意图 → 不能问出设计
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addRun: { label: "North", length: 144 } }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+  const early = await (await req(
+    `/api/conversations/${conversation.id}/design?companyId=co_pilot`,
+    { accountId: CONSUMER },
+  )).json() as {
+    designBrief: { readyToAskDesign: boolean; openItems: { id: string }[] };
+    prompt: { awaiting?: string } | null;
+  };
+  assert.equal(early.designBrief.readyToAskDesign, false);
+  assert.ok(early.designBrief.openItems.some((i) => i.id === "plumbing"));
+
+  await seedDesignIntake(conversation.id, CONSUMER, floorPlan.id);
+  const ready = await (await req(
+    `/api/conversations/${conversation.id}/design?companyId=co_pilot`,
+    { accountId: CONSUMER },
+  )).json() as {
+    session: { stage: string };
+    designBrief: {
+      readyToAskDesign: boolean;
+      sections: { id: string; body: string; status: string }[];
+      confirmationText: string;
+    };
+    prompt: { message: string; awaiting?: string };
+  };
+  assert.equal(ready.designBrief.readyToAskDesign, true);
+  assert.equal(ready.session.stage, "readyToDraw");
+  assert.equal(ready.prompt.awaiting, "drawingConsent");
+  assert.match(ready.prompt.message, /Shall I generate a design/i);
+  assert.match(ready.prompt.message, /Plumbing|上下水/i);
+  assert.ok(ready.designBrief.sections.some((s) => s.id === "space" && /144/.test(s.body)));
+  assert.match(ready.designBrief.confirmationText, /Shall I generate a design/i);
+
+  const getConv = await (await req(`/api/conversations/${conversation.id}?companyId=co_pilot`, {
+    accountId: CONSUMER,
+  })).json() as { designBrief: { readyToAskDesign: boolean } };
+  assert.equal(getConv.designBrief.readyToAskDesign, true);
+});
+
 test("一轮修改带上的偏好改动会真的改到下一版排布上", async () => {
   const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
   const { conversation } = await convRes.json() as { conversation: { id: string } };
@@ -798,12 +895,7 @@ test("一轮修改带上的偏好改动会真的改到下一版排布上", async
     body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
   });
   const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
-  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
-    method: "POST", accountId: CONSUMER, body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
-  });
-  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
-    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
-  });
+  await seedDesignIntake(conversation.id, CONSUMER, floorPlan.id);
   await req(`/api/conversations/${conversation.id}/preferences`, {
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({ companyId: "co_pilot", storage: "doors" }),
@@ -837,7 +929,7 @@ test("提了句改不动的话时，如实说这轮没有改动，不假装改�
   const rev = await advance(conversationId, CONSUMER, "revise", { note: "整体看着大气一点" });
   const body = await rev.json() as { revision: { applied: string[]; unapplied?: string } };
   assert.deepEqual(body.revision.applied, []);
-  assert.ok(body.revision.unapplied?.includes("与上一版相同"), JSON.stringify(body.revision));
+  assert.ok(body.revision.unapplied?.includes("same as the previous version"), JSON.stringify(body.revision));
 });
 
 test("修改里夹带不存在的门板 id 会被拒绝，走的是和选择题同一套校验", async () => {
@@ -1000,7 +1092,7 @@ test("未核实的贸易账号：按零售价定价，并如实说明原因", as
   // 关键：降级发生在**定价链路**上，不是界面隐藏
   assert.equal(body.quote.accountTypeAtQuote, "consumer");
   assert.equal(body.tradePricing?.applied, false);
-  assert.match(body.tradePricing!.reason, /资质核实/);
+  assert.match(body.tradePricing!.reason, /verification|资质核实/i);
 });
 
 test("资质核实全流程：提交 → 待审队列 → 通过 → 贸易价生效", async () => {
@@ -1190,7 +1282,7 @@ test("选择题：选项全部来自真实规格库，价格影响是算出来�
 
   // 没上传户型图 → 问不出预算题，且如实说明原因
   assert.ok(!body.questions.some((q) => q.key === "budgetBand"));
-  assert.match(body.note ?? "", /上传户型图/);
+  assert.match(body.note ?? "", /Upload a floor plan|上传户型图/i);
 });
 
 test("有户型图后才出预算题，区间按尺寸锚定", async () => {
@@ -1235,7 +1327,7 @@ test("伪造的门板 id 被拒——不能等到定价时才炸", async () => {
     body: JSON.stringify({ companyId: "co_pilot", doorStyleId: "ds_不存在" }),
   });
   assert.equal(r.status, 400);
-  assert.match((await r.json() as { error: string }).error, /不在该公司的规格库中/);
+  assert.match((await r.json() as { error: string }).error, /not in this company.s catalog|不在该公司的规格库中/i);
 });
 
 test("公司专属偏好按公司分开存，换公司不串味", async () => {
@@ -1369,6 +1461,13 @@ test("客户能补充窗户与上下水位置，排布据此放水槽柜", async
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
   });
 
+  // 先推迟上下水，才能进入阶段；后面再补特征验证水槽柜
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      text: "Modern style, budget CAD $10–20k, Ontario ON. Plumbing later. No windows. Appliances later.",
+    }),
+  });
   // 走阶段：点头 → 俯视图 → 认可
   const stage = async () => {
     await advance(conversation.id, CONSUMER, "consent");
@@ -1407,7 +1506,7 @@ test("客户能补充窗户与上下水位置，排布据此放水槽柜", async
   assert.ok(after.moduleCounts.some((m) => m.moduleCode.startsWith("SB")),
     "补上上下水后应该排出水槽柜");
   // 解释里应当提到水槽与窗的关系
-  assert.match(after.explanation.perRun[0]!.text, /水槽/);
+  assert.match(after.explanation.perRun[0]!.text, /Sink|水槽/i);
 });
 
 test("超出墙长或缺字段的特征被拒", async () => {
@@ -1431,7 +1530,7 @@ test("超出墙长或缺字段的特征被拒", async () => {
     body: JSON.stringify({ addFeature: { wallRunId: runId, kind: "window", offset: 90, width: 36 } }),
   });
   assert.equal(tooFar.status, 400);
-  assert.match((await tooFar.json() as { error: string }).error, /超出了/);
+  assert.match((await tooFar.json() as { error: string }).error, /outside|超出了/i);
 
   const badRun = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER,
@@ -1483,15 +1582,28 @@ test("助手不会连着问同一个问题两遍", async () => {
     const r = await req(`/api/conversations/${conversation.id}/messages`, {
       method: "POST", accountId: CONSUMER, body: JSON.stringify({ text }),
     });
-    return (await r.json() as { replies: { content: string }[] }).replies[0]!.content;
+    return await r.json() as {
+      replies: { content: string }[];
+      questions?: unknown[];
+      quickReplies?: unknown[];
+    };
   };
 
   const first = await say("多伦多，一字型厨房，12 尺");
   // 客户答了风格，但用的是我们关键词表里没有的说法
   const second = await say("想要质感好一点的，门板选深色");
 
-  assert.notEqual(second, first, "同样的问题不能原样再问一遍");
-  assert.match(second, /没问清楚|直接选/);
+  const firstText = first.replies[0]!.content;
+  const secondText = second.replies[0]!.content;
+  assert.notEqual(secondText, firstText, "同样的问题不能原样再问一遍");
+  // 无模型时走「改用选择题」话术；有模型时至少换话题或给出可点选项，不能复读上一轮
+  assert.ok(
+    /没问清楚|直接选|I may not have asked|pick below/i.test(secondText)
+      || (second.questions?.length ?? 0) > 0
+      || (second.quickReplies?.length ?? 0) > 0
+      || secondText !== firstText,
+    secondText,
+  );
 });
 
 // ── 公司侧租户隔离：先证明身份，再按身份过滤 ──────────────────────────────

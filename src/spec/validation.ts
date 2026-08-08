@@ -138,13 +138,13 @@ export function validateSelections(
     if (!box) {
       issues.push({
         code: "BOX_MATERIAL_NOT_IN_SPEC",
-        message: `箱体板材 ${boxMaterialId} 不属于该公司当前发布的规格版本`,
+        message: `Box material ${boxMaterialId} is not in this company's current published spec`,
       });
     }
   }
 
   if (selections.length === 0) {
-    issues.push({ code: "EMPTY_SELECTION", message: "报价至少需要一个型号" });
+    issues.push({ code: "EMPTY_SELECTION", message: "A quote requires at least one module" });
   }
 
   // 校验 3（上半）：门板必须属于该公司的这一版规格
@@ -154,7 +154,7 @@ export function validateSelections(
   if (!doorStyle) {
     issues.push({
       code: "DOOR_STYLE_NOT_IN_SPEC",
-      message: `门板样式 ${doorStyleId} 不属于该公司当前发布的规格版本`,
+      message: `Door style ${doorStyleId} is not in this company's current published spec`,
     });
   }
 
@@ -166,7 +166,7 @@ export function validateSelections(
     if (!mod) {
       issues.push({
         code: "MODULE_NOT_IN_PUBLISHED_SPEC",
-        message: `型号 ${sel.moduleId} 不存在于该公司当前发布的规格版本`,
+        message: `Module ${sel.moduleId} is not in this company's current published spec`,
         selectionIndex: i,
       });
       return; // 型号都不存在，后续校验无从谈起
@@ -174,14 +174,14 @@ export function validateSelections(
 
     // 校验 2：尺寸必须是候选集里的离散值
     for (const [dim, value, options] of [
-      ["宽", sel.width, mod.widthOptions],
-      ["高", sel.height, mod.heightOptions],
-      ["深", sel.depth, mod.depthOptions],
+      ["width", sel.width, mod.widthOptions],
+      ["height", sel.height, mod.heightOptions],
+      ["depth", sel.depth, mod.depthOptions],
     ] as const) {
       if (!options.includes(value)) {
         issues.push({
           code: "DIMENSION_NOT_IN_OPTIONS",
-          message: `型号 ${mod.code} 的${dim}度 ${value}" 不在候选集 [${options.join(", ")}] 内`,
+          message: `Module ${mod.code}: ${dim} ${value}" is not in options [${options.join(", ")}]`,
           selectionIndex: i,
         });
       }
@@ -190,7 +190,7 @@ export function validateSelections(
     if (!mod.assemblyOptions.includes(sel.assembly)) {
       issues.push({
         code: "ASSEMBLY_NOT_OFFERED",
-        message: `型号 ${mod.code} 不提供 ${sel.assembly} 形式`,
+        message: `Module ${mod.code} does not offer ${sel.assembly} assembly`,
         selectionIndex: i,
       });
     }
@@ -208,7 +208,7 @@ export function validateSelections(
       if (!entry) {
         issues.push({
           code: "PRICE_MATRIX_HOLE",
-          message: `型号 ${mod.code} 不供应门板 ${doorStyle.name} 所属的价格组`,
+          message: `Module ${mod.code} has no price for door style ${doorStyle.name}'s price group`,
           selectionIndex: i,
         });
       }
@@ -222,13 +222,13 @@ export function validateSelections(
       if (!hw) {
         issues.push({
           code: "OPTION_NOT_IN_SPEC",
-          message: `五金选项 ${hwId} 不属于该公司当前发布的规格版本`,
+          message: `Hardware option ${hwId} is not in this company's current published spec`,
           selectionIndex: i,
         });
       } else if (hw.appliesToModuleTypes && !hw.appliesToModuleTypes.includes(mod.type)) {
         issues.push({
           code: "OPTION_NOT_APPLICABLE",
-          message: `五金 ${hw.name} 不适用于 ${mod.type} 类型的 ${mod.code}`,
+          message: `Hardware ${hw.name} does not apply to ${mod.type} module ${mod.code}`,
           selectionIndex: i,
         });
       }
@@ -240,13 +240,13 @@ export function validateSelections(
       if (!ac) {
         issues.push({
           code: "OPTION_NOT_IN_SPEC",
-          message: `配件选项 ${acId} 不属于该公司当前发布的规格版本`,
+          message: `Accessory option ${acId} is not in this company's current published spec`,
           selectionIndex: i,
         });
       } else if (ac.appliesToModuleIds && !ac.appliesToModuleIds.includes(mod.id)) {
         issues.push({
           code: "OPTION_NOT_APPLICABLE",
-          message: `配件 ${ac.name} 不适用于型号 ${mod.code}`,
+          message: `Accessory ${ac.name} does not apply to module ${mod.code}`,
           selectionIndex: i,
         });
       }
@@ -264,7 +264,7 @@ export function validateSelections(
   if (!taxHit) {
     issues.push({
       code: "TAX_RULE_NOT_FOUND",
-      message: `未找到 ${province} 在 ${at} 生效的税率规则`,
+      message: `No tax rule found for ${province} effective at ${at}`,
     });
   }
 

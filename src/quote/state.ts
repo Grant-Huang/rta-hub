@@ -33,7 +33,7 @@ export function canTransition(from: QuoteStatus, to: QuoteStatus): boolean {
 
 export function assertTransition(from: QuoteStatus, to: QuoteStatus): void {
   if (!canTransition(from, to)) {
-    throw new QuoteStateError(`不允许的状态迁移：${from} → ${to}`, "ILLEGAL_TRANSITION");
+    throw new QuoteStateError(`Illegal status transition: ${from} → ${to}`, "ILLEGAL_TRANSITION");
   }
 }
 
@@ -93,7 +93,7 @@ export function confirmQuote(quote: Quote, at: string, actor: QuoteAuditEvent["a
   const next: Quote = { ...quote, status: "confirmed" };
   return {
     quote: next,
-    event: makeAuditEvent(next, "confirmed", actor, at, "客户在发送披露页确认"),
+    event: makeAuditEvent(next, "confirmed", actor, at, "Customer confirmed on the send-disclosure page"),
   };
 }
 
@@ -125,7 +125,7 @@ export function isExpired(quote: Quote, at: string): boolean {
 function assertNotExpired(quote: Quote, at: string): void {
   if (isExpired(quote, at)) {
     throw new QuoteStateError(
-      `报价已于 ${quote.validUntil} 过期，需重新生成`,
+      `Quote expired at ${quote.validUntil}; generate a new one`,
       "QUOTE_EXPIRED",
     );
   }
@@ -162,32 +162,32 @@ export function verifySnapshot(
       at,
     });
   } catch (e) {
-    return { ok: false, mismatches: [`复算失败：${e instanceof Error ? e.message : String(e)}`] };
+    return { ok: false, mismatches: [`Recompute failed: ${e instanceof Error ? e.message : String(e)}`] };
   }
 
   const mismatches: string[] = [];
   if (recomputed.subtotal !== quote.subtotal) {
-    mismatches.push(`subtotal 快照 ${quote.subtotal} ≠ 复算 ${recomputed.subtotal}`);
+    mismatches.push(`subtotal snapshot ${quote.subtotal} ≠ recomputed ${recomputed.subtotal}`);
   }
   if (recomputed.total !== quote.total) {
-    mismatches.push(`total 快照 ${quote.total} ≠ 复算 ${recomputed.total}`);
+    mismatches.push(`total snapshot ${quote.total} ≠ recomputed ${recomputed.total}`);
   }
   if (recomputed.lineItems.length !== quote.lineItems.length) {
-    mismatches.push(`行数 快照 ${quote.lineItems.length} ≠ 复算 ${recomputed.lineItems.length}`);
+    mismatches.push(`line count snapshot ${quote.lineItems.length} ≠ recomputed ${recomputed.lineItems.length}`);
   } else {
     recomputed.lineItems.forEach((line, i) => {
       const snap = quote.lineItems[i]!;
       if (line.unitListPrice !== snap.unitListPrice) {
-        mismatches.push(`第 ${i + 1} 行 unitListPrice 快照 ${snap.unitListPrice} ≠ 复算 ${line.unitListPrice}`);
+        mismatches.push(`line ${i + 1} unitListPrice snapshot ${snap.unitListPrice} ≠ recomputed ${line.unitListPrice}`);
       }
       if (line.lineSubtotal !== snap.lineSubtotal) {
-        mismatches.push(`第 ${i + 1} 行 lineSubtotal 快照 ${snap.lineSubtotal} ≠ 复算 ${line.lineSubtotal}`);
+        mismatches.push(`line ${i + 1} lineSubtotal snapshot ${snap.lineSubtotal} ≠ recomputed ${line.lineSubtotal}`);
       }
     });
   }
   const snapTax = quote.taxes.reduce((s, t) => s + t.amount, 0);
   if (recomputed.taxTotal !== snapTax) {
-    mismatches.push(`税额 快照 ${snapTax} ≠ 复算 ${recomputed.taxTotal}`);
+    mismatches.push(`tax snapshot ${snapTax} ≠ recomputed ${recomputed.taxTotal}`);
   }
 
   return mismatches.length === 0 ? { ok: true } : { ok: false, mismatches };

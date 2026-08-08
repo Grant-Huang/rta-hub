@@ -10,6 +10,8 @@
  * SVG 在邮件客户端里支持很差（Gmail/Outlook 基本不渲染），所以内嵌图统一转成
  * **PNG data URI 的替代方案不可行**（体积大且仍需转换）。这里的做法是：
  * SVG 作为附件保留，正文内嵌用 CID 引用同一份附件，由发信侧决定是否预转 PNG。
+ *
+ * 邮件默认英文（发给加拿大商家）。
  */
 import { format } from "../domain/money.js";
 import type { Quote } from "../domain/types.js";
@@ -46,10 +48,10 @@ export interface HtmlQuoteInput {
 }
 
 const VIEW_LABELS: Record<keyof FourViews, string> = {
-  front: "正视图",
-  topBase: "俯视图 · 地柜层",
-  topWall: "俯视图 · 吊柜层",
-  side: "侧视图",
+  front: "Front elevation",
+  topBase: "Plan · base",
+  topWall: "Plan · wall",
+  side: "Side section",
 };
 
 export function buildHtmlQuoteEmail(input: HtmlQuoteInput): HtmlQuoteEmail {
@@ -90,9 +92,9 @@ export function buildHtmlQuoteEmail(input: HtmlQuoteInput): HtmlQuoteEmail {
     </tr>`).join("");
 
   const summaryRows = [
-    ["小计", format(q.subtotal)],
+    ["Subtotal", format(q.subtotal)],
     ...q.discounts.map((d) => [d.description, `-${format(d.amount)}`] as [string, string]),
-    ["运费", format(q.shipping.amount)],
+    ["Shipping", format(q.shipping.amount)],
     ...q.taxes.map((t) => [`${t.name} ${t.ratePercent}%`, format(t.amount)] as [string, string]),
   ].map(([label, value]) => `
     <tr><td style="padding:3px 6px;text-align:right;color:#555">${escapeHtml(label ?? "")}</td>
@@ -100,22 +102,22 @@ export function buildHtmlQuoteEmail(input: HtmlQuoteInput): HtmlQuoteEmail {
 
   const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;color:#222">
-  <p>${escapeHtml(input.companyName)} 团队您好，</p>
-  <p>我们平台上的一位客户（${escapeHtml(input.customerName)}，${escapeHtml(q.province)}）完成了一版厨房橱柜设计，
-     并确认将报价请求发送给贵司。</p>
+  <p>Hello ${escapeHtml(input.companyName)} team,</p>
+  <p>A customer on our platform (${escapeHtml(input.customerName)}, ${escapeHtml(q.province)}) finished a kitchen cabinet design
+     and confirmed sending this quote request to you.</p>
 
-  <h2 style="font-size:15px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:24px">设计方案</h2>
+  <h2 style="font-size:15px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:24px">Design</h2>
   ${imageBlocks.join("")}
 
-  <h2 style="font-size:15px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:24px">价格明细</h2>
+  <h2 style="font-size:15px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:24px">Price details</h2>
   <table style="width:100%;border-collapse:collapse;font-size:13px">
     <thead><tr style="border-bottom:2px solid #ddd">
-      <th style="text-align:left;padding:6px">型号</th>
-      <th style="text-align:left;padding:6px">规格</th>
-      <th style="text-align:right;padding:6px">数量</th>
-      <th style="text-align:right;padding:6px">标价</th>
-      <th style="text-align:right;padding:6px">折后单价</th>
-      <th style="text-align:right;padding:6px">小计</th>
+      <th style="text-align:left;padding:6px">SKU</th>
+      <th style="text-align:left;padding:6px">Size</th>
+      <th style="text-align:right;padding:6px">Qty</th>
+      <th style="text-align:right;padding:6px">List</th>
+      <th style="text-align:right;padding:6px">Net</th>
+      <th style="text-align:right;padding:6px">Line</th>
     </tr></thead>
     <tbody>${lineRows}</tbody>
   </table>
@@ -123,26 +125,26 @@ export function buildHtmlQuoteEmail(input: HtmlQuoteInput): HtmlQuoteEmail {
   <table style="margin-left:auto;margin-top:12px;font-size:13px">
     ${summaryRows}
     <tr style="border-top:2px solid #333">
-      <td style="padding:7px 6px;text-align:right;font-weight:600">总计（${escapeHtml(q.currency)}）</td>
+      <td style="padding:7px 6px;text-align:right;font-weight:600">Total (${escapeHtml(q.currency)})</td>
       <td style="padding:7px 6px;text-align:right;font-weight:600;font-size:15px">${format(q.total)}</td>
     </tr>
   </table>
 
-  <p style="font-size:12px;color:#777">门板样式 ${escapeHtml(q.doorStyleId)} · 报价有效期至 ${escapeHtml(q.validUntil.slice(0, 10))}</p>
+  <p style="font-size:12px;color:#777">Door style ${escapeHtml(q.doorStyleId)} · Valid until ${escapeHtml(q.validUntil.slice(0, 10))}</p>
 
-  <h2 style="font-size:15px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:24px">客户联系方式</h2>
+  <h2 style="font-size:15px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:24px">Customer contact</h2>
   <p>${escapeHtml(input.customerName)} &lt;${escapeHtml(input.customerEmail)}&gt;<br/>
-     报价单编号：${escapeHtml(q.id)}</p>
+     Quote ID: ${escapeHtml(q.id)}</p>
 
   <p style="font-size:12px;color:#777;margin-top:24px;border-top:1px solid #eee;padding-top:10px">
-    这是客户本人确认后发出的一次性询价，不是营销邮件。<br/>
+    This is a one-time inquiry the customer confirmed — not a marketing message.<br/>
     ${escapeHtml(input.senderName)}${input.senderContact ? ` · ${escapeHtml(input.senderContact)}` : ""}<br/>
-    若图片未显示，本邮件附件中包含同样的四张视图。
+    If images do not display, the same four views are attached to this email.
   </p>
 </div>`.trim();
 
   return {
-    subject: `[询价] 厨房橱柜报价请求 · ${q.id}`,
+    subject: `[Quote request] Kitchen cabinets · ${q.id}`,
     html,
     text: buildPlainText(input),
     attachments,
@@ -162,36 +164,37 @@ function buildPlainText(input: HtmlQuoteInput): string {
     `${format(l.unitNetPrice).padStart(10)}  ${format(l.lineSubtotal).padStart(11)}`);
 
   return [
-    `${input.companyName} 团队您好，`,
+    `Hello ${input.companyName} team,`,
     "",
-    `我们平台上的一位客户（${input.customerName}，${q.province}）完成了一版厨房橱柜设计，`,
-    "并确认将报价请求发送给贵司。",
+    `A customer on our platform (${input.customerName}, ${q.province}) finished a kitchen cabinet design`,
+    "and confirmed sending this quote request to you.",
     "",
-    "【设计方案】",
-    ...input.viewsByRun.map((r) => `  ${r.runLabel}：正视图/俯视图(地柜层)/俯视图(吊柜层)/侧视图，见邮件附件`),
+    "[Design]",
+    ...input.viewsByRun.map((r) =>
+      `  ${r.runLabel}: front / plan·base / plan·wall / side — see attachments`),
     "",
-    "【价格明细】",
-    "  型号        规格                数量        单价          小计",
+    "[Price details]",
+    "  SKU         Size                Qty         Net           Line",
     "  " + "-".repeat(62),
     ...lines,
     "  " + "-".repeat(62),
-    `  小计: ${format(q.subtotal)}`,
+    `  Subtotal: ${format(q.subtotal)}`,
     ...q.discounts.map((d) => `  ${d.description}: -${format(d.amount)}`),
-    `  运费: ${format(q.shipping.amount)}`,
+    `  Shipping: ${format(q.shipping.amount)}`,
     ...q.taxes.map((t) => `  ${t.name} ${t.ratePercent}%: ${format(t.amount)}`),
-    `  总计（${q.currency}）: ${format(q.total)}`,
+    `  Total (${q.currency}): ${format(q.total)}`,
     "",
-    `  报价有效期至 ${q.validUntil.slice(0, 10)}`,
+    `  Valid until ${q.validUntil.slice(0, 10)}`,
     "",
-    "【客户联系方式】",
+    "[Customer contact]",
     `  ${input.customerName} <${input.customerEmail}>`,
-    `  报价单编号：${q.id}`,
+    `  Quote ID: ${q.id}`,
     "",
-    "这是客户本人确认后发出的一次性询价，不是营销邮件。",
+    "This is a one-time inquiry the customer confirmed — not a marketing message.",
     "",
     "———",
     input.senderName,
-    input.senderContact ? `联系方式：${input.senderContact}` : "",
+    input.senderContact ? `Contact: ${input.senderContact}` : "",
   ].filter((l) => l !== "").join("\n");
 }
 

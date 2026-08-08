@@ -64,12 +64,12 @@ export function authorizeCompany(input: CompanyAuthInput): CompanyAuthResult {
       && safeEqual(input.adminPresented, input.adminExpected)) {
     return input.company
       ? { ok: true, via: "admin" }
-      : { ok: false, status: 404, error: "公司不存在" };
+      : { ok: false, status: 404, error: "Company not found" };
   }
 
   const denied: CompanyAuthResult = {
     ok: false, status: 401,
-    error: "未授权：需要与该公司匹配的 X-Company-Token",
+    error: "Unauthorized: matching X-Company-Token required",
   };
 
   if (!input.company) return denied;
@@ -77,7 +77,7 @@ export function authorizeCompany(input: CompanyAuthInput): CompanyAuthResult {
   if (!expected) {
     return {
       ok: false, status: 401,
-      error: "该公司尚未配置访问令牌，请联系平台运营开通",
+      error: "This company has no access token yet — contact platform ops",
     };
   }
   if (!input.presented || !safeEqual(input.presented, expected)) return denied;

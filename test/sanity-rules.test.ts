@@ -58,7 +58,10 @@ test("编号不重复，每条都写清了判据与为什么", () => {
 
 test("ruleFor 取不到就炸，不静默返回 undefined", () => {
   assert.equal(ruleFor("SR-G3").severity, "blocking");
-  assert.throws(() => ruleFor("SR-NOPE" as SanityRuleId));
+  assert.throws(
+    () => ruleFor("SR-NOPE" as SanityRuleId),
+    /Sanity rule SR-NOPE is not in SANITY_RULES/,
+  );
 });
 
 // ── 文档是规则表的视图 ────────────────────────────────────────────────────
@@ -119,7 +122,10 @@ test("全部通过时报出的是「按规范跑了几条」，不是一句空�
     layout, wallRuns: geometry.wallRuns,
   });
   assert.equal(report.ok, true, report.blockers.map((b) => b.message).join(" / "));
-  assert.match(renderAuditText(report), /按《合理性审查规范》跑了 \d+ 条/);
+  assert.match(
+    renderAuditText(report),
+    /Ran \d+ rules from the Sanity Review Spec|按《合理性审查规范》跑了 \d+ 条/,
+  );
 });
 
 // ── 新加的两条真的会拦人 ──────────────────────────────────────────────────

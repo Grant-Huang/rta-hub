@@ -133,7 +133,7 @@ export function importSpecTemplates(
   pgRows.forEach((row, i) => {
     const code = pick(row, "code", "priceGroup", "group");
     if (!code) {
-      unresolved.push({ sheet: "priceGroups", rowNumber: i + 2, field: "code", reason: "缺少价格组代码" });
+      unresolved.push({ sheet: "priceGroups", rowNumber: i + 2, field: "code", reason: "Missing price group code" });
       return;
     }
     const pg: PriceGroup = {
@@ -153,14 +153,14 @@ export function importSpecTemplates(
     const name = pick(row, "name", "doorStyle", "style");
     const groupCode = pick(row, "priceGroup", "group", "code");
     if (!name) {
-      unresolved.push({ sheet: "doorStyles", rowNumber: i + 2, field: "name", reason: "缺少门板名称" });
+      unresolved.push({ sheet: "doorStyles", rowNumber: i + 2, field: "name", reason: "Missing door style name" });
       return;
     }
     const pg = pgByCode.get(groupCode.toUpperCase());
     if (!pg) {
       unresolved.push({
         sheet: "doorStyles", rowNumber: i + 2, field: "priceGroup",
-        reason: `价格组 "${groupCode}" 未在价格组表中定义`, raw: groupCode,
+        reason: `Price group "${groupCode}" is not defined in the price groups sheet`, raw: groupCode,
       });
       return;
     }
@@ -183,7 +183,7 @@ export function importSpecTemplates(
     const codeRaw = pick(row, "code", "kind", "type");
     const code = BOX_MATERIAL_CODES.find((c) => c.toLowerCase() === codeRaw.toLowerCase().replace(/[\s_-]/g, ""));
     if (!name) {
-      unresolved.push({ sheet: "boxMaterials", rowNumber, field: "name", reason: "缺少板材名称" });
+      unresolved.push({ sheet: "boxMaterials", rowNumber, field: "name", reason: "Missing box material name" });
       return;
     }
     if (!code) {
@@ -192,8 +192,8 @@ export function importSpecTemplates(
       unresolved.push({
         sheet: "boxMaterials", rowNumber, field: "code",
         reason: codeRaw
-          ? `无法识别的板材类别 "${codeRaw}"（应为 particleBoard / plywood / solidWood）`
-          : "缺少板材类别", raw: codeRaw,
+          ? `Unrecognized box material kind "${codeRaw}" (expected particleBoard / plywood / solidWood)`
+          : "Missing box material kind", raw: codeRaw,
       });
       return;
     }
@@ -201,7 +201,7 @@ export function importSpecTemplates(
     if (!upcharge) {
       unresolved.push({
         sheet: "boxMaterials", rowNumber, field: "upcharge",
-        reason: "加价无法解析（写成 18% 或 120.00）", raw: pick(row, "upcharge"),
+        reason: "Could not parse upcharge (use 18% or 120.00)", raw: pick(row, "upcharge"),
       });
       return;
     }
@@ -226,7 +226,7 @@ export function importSpecTemplates(
     const rowNumber = i + 2;
     const code = pick(row, "code", "sku", "model");
     if (!code) {
-      unresolved.push({ sheet: "modules", rowNumber, field: "code", reason: "缺少型号码" });
+      unresolved.push({ sheet: "modules", rowNumber, field: "code", reason: "Missing module code" });
       return;
     }
 
@@ -235,7 +235,7 @@ export function importSpecTemplates(
     if (!type) {
       unresolved.push({
         sheet: "modules", rowNumber, field: "type",
-        reason: typeRaw ? `无法识别的柜体类型 "${typeRaw}"` : "缺少柜体类型", raw: typeRaw,
+        reason: typeRaw ? `Unrecognized cabinet type "${typeRaw}"` : "Missing cabinet type", raw: typeRaw,
       });
       return;
     }
@@ -245,7 +245,7 @@ export function importSpecTemplates(
     const depths = parseNumberList(pick(row, "depths", "depth", "depthOptions"));
     for (const [field, list] of [["widths", widths], ["heights", heights], ["depths", depths]] as const) {
       if (list.length === 0) {
-        unresolved.push({ sheet: "modules", rowNumber, field, reason: `${field} 为空或无法解析` });
+        unresolved.push({ sheet: "modules", rowNumber, field, reason: `${field} is empty or could not be parsed` });
       }
     }
     if (widths.length === 0 || heights.length === 0 || depths.length === 0) return;
@@ -275,7 +275,7 @@ export function importSpecTemplates(
       } else {
         unresolved.push({
           sheet: "modules", rowNumber, field: "faceTemplate",
-          reason: `型号 ${code} 未能按命名规则判定脸型，需人工指定`, raw: code,
+          reason: `Module ${code} could not be matched to a face template by naming rules; specify manually`, raw: code,
         });
       }
     }
@@ -311,7 +311,7 @@ export function importSpecTemplates(
     if (!mod) {
       unresolved.push({
         sheet: "priceMatrix", rowNumber, field: "moduleCode",
-        reason: `型号 "${code}" 未在型号表中定义`, raw: code,
+        reason: `Module "${code}" is not defined in the modules sheet`, raw: code,
       });
       return;
     }
@@ -319,7 +319,7 @@ export function importSpecTemplates(
     if (!pg) {
       unresolved.push({
         sheet: "priceMatrix", rowNumber, field: "priceGroup",
-        reason: `价格组 "${groupCode}" 未在价格组表中定义`, raw: groupCode,
+        reason: `Price group "${groupCode}" is not defined in the price groups sheet`, raw: groupCode,
       });
       return;
     }
@@ -327,7 +327,7 @@ export function importSpecTemplates(
     if (listPrice === undefined) {
       unresolved.push({
         sheet: "priceMatrix", rowNumber, field: "listPrice",
-        reason: priceRaw ? `无法解析价格 "${priceRaw}"` : "缺少价格", raw: priceRaw,
+        reason: priceRaw ? `Could not parse price "${priceRaw}"` : "Missing price", raw: priceRaw,
       });
       return;
     }
@@ -337,7 +337,7 @@ export function importSpecTemplates(
     if (tradeRaw && tradePrice === undefined) {
       unresolved.push({
         sheet: "priceMatrix", rowNumber, field: "tradePrice",
-        reason: `无法解析贸易价 "${tradeRaw}"`, raw: tradeRaw,
+        reason: `Could not parse trade price "${tradeRaw}"`, raw: tradeRaw,
       });
       return;
     }
@@ -347,7 +347,7 @@ export function importSpecTemplates(
     if (upchargeRaw && !assembledUpcharge) {
       unresolved.push({
         sheet: "priceMatrix", rowNumber, field: "assembledUpcharge",
-        reason: `无法解析组装加价 "${upchargeRaw}"`, raw: upchargeRaw,
+        reason: `Could not parse assembled upcharge "${upchargeRaw}"`, raw: upchargeRaw,
       });
       return;
     }
@@ -410,7 +410,7 @@ export function blankTemplates(): ImportSources {
     modules: "code,type,widths,heights,depths,assembly,faceTemplate\nB30,base,30,34-1/2,24,RTA|assembled,\nW3030,wall,30,30|36|42,12,RTA,\n",
     priceMatrix: "moduleCode,priceGroup,listPrice,tradePrice,assembledUpcharge\nB30,A,245.50,,15%\nB30,B,398.75,,15%\n",
     boxMaterials: "code,name,upcharge,default,note\n" +
-      "particleBoard,Particle board box,0%,yes,标价默认按这一档\n" +
-      "plywood,All-plywood box,18%,,1/2\" 夹板箱体\n",
+      "particleBoard,Particle board box,0%,yes,List prices assume this tier\n" +
+      "plywood,All-plywood box,18%,,1/2\" plywood box\n",
   };
 }

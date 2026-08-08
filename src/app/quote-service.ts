@@ -19,6 +19,7 @@ import {
 } from "../quote/state.js";
 import { recordLeadBilling } from "../billing/lead-events.js";
 import { TenantScope } from "../tenancy/scoped-repo.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export interface QuoteDraftInput {
   quoteId: string;
@@ -66,7 +67,7 @@ export function createQuoteDraft(
   strippedPaths: string[] = [],
 ): CreateQuoteResult {
   if (ctx.companyId !== scope.companyId) {
-    throw new Error(`定价上下文属于 ${ctx.companyId}，与作用域 ${scope.companyId} 不符`);
+    throw new Error(`Pricing context belongs to ${ctx.companyId}, but scope is ${scope.companyId}`);
   }
   const events: QuoteAuditEvent[] = [];
 
@@ -139,14 +140,14 @@ export function createQuoteDraft(
     status: "draft",
   };
 
-  scope.assertOwned(quote, "报价单");
+  scope.assertOwned(quote, "quote");
 
   // 步骤 4：复算自检（FR-8 校验第 6 项）
   const check = verifySnapshot(quote, ctx, input.at);
   if (!check.ok) {
     events.push(makeAuditEvent(
       quote, "validationRejected", "system", input.at,
-      `快照复算不一致：${check.mismatches.join("; ")}`,
+      `Snapshot recompute mismatch: ${check.mismatches.join("; ")}`,
     ));
     return {
       ok: false,
@@ -156,7 +157,7 @@ export function createQuoteDraft(
   }
 
   const detail = strippedPaths.length
-    ? `已丢弃模型输出中的价格字段：${strippedPaths.join(", ")}`
+    ? `Discarded price fields from model output: ${strippedPaths.join(", ")}`
     : undefined;
   events.push(makeAuditEvent(quote, "created", "system", input.at, detail));
   return { ok: true, quote, events };
@@ -192,7 +193,7 @@ export function recordSendResult(
   at: string,
 ): SendOutcome {
   if (!outcome.delivered) {
-    const f = markSendFailed(quote, at, outcome.error ?? "未知错误");
+    const f = markSendFailed(quote, at, outcome.error ?? "Unknown error");
     return { quote: f.quote, events: [f.event], billingSuppressed: false };
   }
 
@@ -203,7 +204,7 @@ export function recordSendResult(
   if (billing.kind === "suppressedDuplicate") {
     events.push(makeAuditEvent(
       s.quote, "suppressedDuplicateBilling", "system", at,
-      `命中去重窗口，沿用计费事件 ${billing.existing.id}`,
+      `Hit dedupe window; reusing billing event ${billing.existing.id}`,
     ));
     return { quote: s.quote, events, billingSuppressed: true };
   }
@@ -225,20 +226,36 @@ export function buildSendDisclosure(
   quote: Quote,
   companyName: string,
   customer: { displayName: string; email: string },
+  language: UiLanguage = DEFAULT_LANGUAGE,
 ): { companyName: string; items: DisclosureItem[]; notice: string } {
+  const lang = language;
+  const n = quote.lineItems.length;
   return {
     companyName,
     items: [
-      { label: "设计方案", value: `${quote.lineItems.length} 项柜体的四视图与尺寸` },
-      { label: "型号与数量", value: quote.lineItems.map((l) => `${l.moduleCode}×${l.qty}`).join("、") },
-      { label: "报价总额", value: `${quote.currency} ${(quote.total / 100).toFixed(2)}` },
-      { label: "你的姓名", value: customer.displayName },
-      { label: "你的邮箱", value: customer.email },
-      { label: "项目所在省份", value: quote.province },
+      {
+        label: msg(lang, "Design package", "设计方案"),
+        value: msg(lang,
+          `Four views and dimensions for ${n} cabinet line${n === 1 ? "" : "s"}`,
+          `${n} 项柜体的四视图与尺寸`),
+      },
+      {
+        label: msg(lang, "SKUs & quantities", "型号与数量"),
+        value: quote.lineItems.map((l) => `${l.moduleCode}×${l.qty}`).join(msg(lang, ", ", "、")),
+      },
+      {
+        label: msg(lang, "Quote total", "报价总额"),
+        value: `${quote.currency} ${(quote.total / 100).toFixed(2)}`,
+      },
+      { label: msg(lang, "Your name", "你的姓名"), value: customer.displayName },
+      { label: msg(lang, "Your email", "你的邮箱"), value: customer.email },
+      { label: msg(lang, "Project province", "项目所在省份"), value: quote.province },
     ],
-    notice:
+    notice: msg(lang,
+      `The above will be sent to "${companyName}", which will then be able to contact you. ` +
+        `After you confirm, we keep this inquiry on your project — you can review or request deletion anytime in account settings.`,
       `以上内容将发送给「${companyName}」，该公司会因此获得联系你的能力。` +
-      `确认发送后，我们会把这条询价记录在你的项目里，你可以随时在账号设置中查看或要求删除。`,
+        `确认发送后，我们会把这条询价记录在你的项目里，你可以随时在账号设置中查看或要求删除。`),
   };
 }
 

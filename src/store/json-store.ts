@@ -113,7 +113,7 @@ export class JsonCollection<T extends Identified> implements Collection<T> {
   update(id: string, patch: Partial<T>): Promise<T> {
     return this.enqueue(() => {
       const idx = this.items.findIndex((i) => i.id === id);
-      if (idx < 0) throw new Error(`未找到 id=${id} 的记录`);
+      if (idx < 0) throw new Error(`No record found with id=${id}`);
       const merged = { ...this.items[idx]!, ...patch } as T;
       this.assertUnique(merged, id);
       this.items[idx] = merged;
@@ -152,7 +152,7 @@ export class UniqueConstraintError extends Error {
     readonly constraintName: string,
     readonly value: string,
   ) {
-    super(`唯一约束冲突（${constraintName}）：${value}`);
+    super(`Unique constraint violation (${constraintName}): ${value}`);
     this.name = "UniqueConstraintError";
   }
 }

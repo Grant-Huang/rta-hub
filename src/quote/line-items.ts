@@ -26,16 +26,33 @@ import type {
 } from "../domain/types.js";
 import type { BomCategory, BomLine } from "../layout/bom.js";
 import { matchFaceTemplate } from "../render/templates.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export type QuoteCategory = "cabinet" | "door" | "hardware" | "accessory" | "trim";
 
+/** @deprecated 用 `categoryLabel(cat, lang)`；保留英文默认以兼容旧引用。 */
 export const CATEGORY_LABEL: Record<QuoteCategory, string> = {
-  cabinet: "柜体",
-  door: "门板与抽屉面",
-  hardware: "五金",
-  accessory: "功能配件",
-  trim: "填缝与收口件",
+  cabinet: "Cabinets",
+  door: "Doors & drawer fronts",
+  hardware: "Hardware",
+  accessory: "Functional accessories",
+  trim: "Fillers & trim",
 };
+
+export function categoryLabel(
+  cat: QuoteCategory,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const en = CATEGORY_LABEL[cat];
+  const zh: Record<QuoteCategory, string> = {
+    cabinet: "柜体",
+    door: "门板与抽屉面",
+    hardware: "五金",
+    accessory: "功能配件",
+    trim: "填缝与收口件",
+  };
+  return msg(lang, en, zh[cat]);
+}
 
 /** 一行商品。字段就是客户要看的那五项。 */
 export interface QuoteListRow {
@@ -107,6 +124,8 @@ export interface BuildListInput {
   bomLines?: readonly BomLine[];
   /** 该公司的箱体板材档位，用来把 `quote.boxMaterialId` 翻成客户看得懂的名字。 */
   boxMaterials?: readonly BoxMaterialOption[];
+  /** 客户可见文案语言；默认英文。 */
+  language?: UiLanguage;
 }
 
 const BOM_TO_QUOTE: Record<BomCategory, QuoteCategory> = {
@@ -114,6 +133,7 @@ const BOM_TO_QUOTE: Record<BomCategory, QuoteCategory> = {
 };
 
 export function buildQuoteList(input: BuildListInput): QuoteList {
+  const lang = input.language ?? DEFAULT_LANGUAGE;
   const { quote } = input;
   const doorStyle = input.doorStyles.find((d) => d.id === quote.doorStyleId);
   const byModule = new Map(input.modules.map((m) => [m.id, m]));
@@ -132,7 +152,7 @@ export function buildQuoteList(input: BuildListInput): QuoteList {
 
     const row: QuoteListRow = {
       code: line.moduleCode,
-      name: moduleName(line.moduleCode, spec),
+      name: moduleName(line.moduleCode, spec, lang),
       qty: line.qty,
       unitPrice: line.unitNetPrice,
       lineTotal: line.lineSubtotal,
@@ -149,8 +169,10 @@ export function buildQuoteList(input: BuildListInput): QuoteList {
         styleName: doorStyle?.name ?? quote.doorStyleId,
         doors: face.doors,
         drawerFronts: face.drawerFronts,
-        description: faceDescription(face, doorStyle?.name ?? quote.doorStyleId, line.qty),
-        includedNote: "已含在柜体价内（RTA 柜体按「型号 × 门板价格组」定价，门板不单独计价）",
+        description: faceDescription(face, doorStyle?.name ?? quote.doorStyleId, line.qty, lang),
+        includedNote: msg(lang,
+          "Included in cabinet price (RTA cabinets are priced as SKU × door price group; doors are not priced separately)",
+          "已含在柜体价内（RTA 柜体按「型号 × 门板价格组」定价，门板不单独计价）"),
       },
       modifiers: line.modifiers.map((m) => ({
         code: m.refId,
@@ -163,7 +185,7 @@ export function buildQuoteList(input: BuildListInput): QuoteList {
     });
   }
 
-  const subtotals = buildSubtotals(cabinets, trim, doorStyle?.name);
+  const subtotals = buildSubtotals(cabinets, trim, doorStyle?.name, lang);
   const itemsTotal = (cabinets.reduce((s, g) => s + g.groupTotal, 0)
     + trim.reduce((s, r) => s + r.lineTotal, 0)) as Money;
 
@@ -194,6 +216,7 @@ function buildSubtotals(
   cabinets: readonly CabinetGroup[],
   trim: readonly QuoteListRow[],
   doorStyleName: string | undefined,
+  lang: UiLanguage,
 ): CategorySubtotal[] {
   const cabinetBase = cabinets.reduce(
     (s, g) => s + g.cabinet.lineTotal - g.modifiers.reduce((t, m) => t + m.lineTotal, 0), 0);
@@ -201,37 +224,40 @@ function buildSubtotals(
   const hardware = cabinets.flatMap((g) => g.modifiers.filter((m) => isHardware(m.code)));
   const accessory = cabinets.flatMap((g) => g.modifiers.filter((m) => !isHardware(m.code)));
 
+  const style = doorStyleName ?? msg(lang, "Selected doors", "所选门板");
   const out: CategorySubtotal[] = [
     {
-      category: "cabinet", label: CATEGORY_LABEL.cabinet,
+      category: "cabinet", label: categoryLabel("cabinet", lang),
       itemCount: cabinets.reduce((n, g) => n + g.cabinet.qty, 0),
       amount: cabinetBase as Money,
     },
     {
-      category: "door", label: CATEGORY_LABEL.door,
+      category: "door", label: categoryLabel("door", lang),
       itemCount: cabinets.reduce((n, g) => n + (g.door.doors + g.door.drawerFronts) * g.cabinet.qty, 0),
       amount: 0 as Money,
-      includedIn: `${doorStyleName ?? "所选门板"}已含在柜体价内，不单独计价`,
+      includedIn: msg(lang,
+        `${style} included in cabinet price — not priced separately`,
+        `${style}已含在柜体价内，不单独计价`),
     },
   ];
 
   if (hardware.length > 0) {
     out.push({
-      category: "hardware", label: CATEGORY_LABEL.hardware,
+      category: "hardware", label: categoryLabel("hardware", lang),
       itemCount: hardware.reduce((n, m) => n + m.qty, 0),
       amount: hardware.reduce((s, m) => s + m.lineTotal, 0) as Money,
     });
   }
   if (accessory.length > 0) {
     out.push({
-      category: "accessory", label: CATEGORY_LABEL.accessory,
+      category: "accessory", label: categoryLabel("accessory", lang),
       itemCount: accessory.reduce((n, m) => n + m.qty, 0),
       amount: accessory.reduce((s, m) => s + m.lineTotal, 0) as Money,
     });
   }
   if (trim.length > 0) {
     out.push({
-      category: "trim", label: CATEGORY_LABEL.trim,
+      category: "trim", label: categoryLabel("trim", lang),
       itemCount: trim.reduce((n, r) => n + r.qty, 0),
       amount: trim.reduce((s, r) => s + r.lineTotal, 0) as Money,
     });
@@ -291,19 +317,39 @@ function faceDescription(
   face: { doors: number; drawerFronts: number },
   styleName: string,
   qty: number,
+  lang: UiLanguage,
 ): string {
   const parts: string[] = [];
-  if (face.doors > 0) parts.push(`${face.doors * qty} 扇门`);
-  if (face.drawerFronts > 0) parts.push(`${face.drawerFronts * qty} 个抽屉面`);
-  if (parts.length === 0) return `${styleName}（此型号无门板）`;
-  return `${styleName}　${parts.join(" + ")}`;
+  if (face.doors > 0) {
+    parts.push(msg(lang,
+      `${face.doors * qty} door${face.doors * qty === 1 ? "" : "s"}`,
+      `${face.doors * qty} 扇门`));
+  }
+  if (face.drawerFronts > 0) {
+    parts.push(msg(lang,
+      `${face.drawerFronts * qty} drawer front${face.drawerFronts * qty === 1 ? "" : "s"}`,
+      `${face.drawerFronts * qty} 个抽屉面`));
+  }
+  if (parts.length === 0) {
+    return msg(lang,
+      `${styleName} (this SKU has no doors)`,
+      `${styleName}（此型号无门板）`);
+  }
+  return msg(lang,
+    `${styleName} — ${parts.join(" + ")}`,
+    `${styleName}　${parts.join(" + ")}`);
 }
 
-function moduleName(code: string, spec: ModuleSpec | undefined): string {
-  const typeName: Partial<Record<ModuleSpec["type"], string>> = {
-    base: "地柜", wall: "吊柜", tall: "高柜", corner: "转角柜", sinkBase: "水槽柜",
-    filler: "填缝条", panel: "收口板", toeKick: "踢脚板", crown: "顶线", leg: "可调地脚",
-  };
+function moduleName(code: string, spec: ModuleSpec | undefined, lang: UiLanguage): string {
+  const typeName: Partial<Record<ModuleSpec["type"], string>> = lang === "zh"
+    ? {
+      base: "地柜", wall: "吊柜", tall: "高柜", corner: "转角柜", sinkBase: "水槽柜",
+      filler: "填缝条", panel: "收口板", toeKick: "踢脚板", crown: "顶线", leg: "可调地脚",
+    }
+    : {
+      base: "Base", wall: "Wall", tall: "Tall", corner: "Corner", sinkBase: "Sink base",
+      filler: "Filler", panel: "Panel", toeKick: "Toe kick", crown: "Crown", leg: "Adjustable leg",
+    };
   const t = spec ? typeName[spec.type] : undefined;
   return t ? `${t} ${code}` : code;
 }
@@ -318,43 +364,60 @@ function fmt(n: number): string {
 
 // ── 呈现 ──────────────────────────────────────────────────────────────────
 
-export function renderQuoteListText(list: QuoteList): string {
+export function renderQuoteListText(
+  list: QuoteList,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const lang = language;
   const out: string[] = [];
   const W = { code: 10, name: 22, qty: 5, unit: 11, total: 12 };
-  const head = "代码".padEnd(W.code) + "名称".padEnd(W.name) +
-    "数量".padStart(W.qty) + "单价".padStart(W.unit) + "总价".padStart(W.total);
+  const head = msg(lang, "Code", "代码").padEnd(W.code)
+    + msg(lang, "Name", "名称").padEnd(W.name)
+    + msg(lang, "Qty", "数量").padStart(W.qty)
+    + msg(lang, "Unit", "单价").padStart(W.unit)
+    + msg(lang, "Total", "总价").padStart(W.total);
 
   if (list.boxMaterial) {
     // 摆在最前面，跟门板样式一样是"这份价对的是什么产品"的一部分
-    out.push(`【箱体板材】${list.boxMaterial.name}` +
-      (list.boxMaterial.chosen ? "（你选的）" : "（你没选，按该商家的基础档算的）"));
+    out.push(msg(lang,
+      `[Box material] ${list.boxMaterial.name}`
+        + (list.boxMaterial.chosen
+          ? " (your choice)"
+          : " (you didn't choose — priced at this seller's base grade)"),
+      `【箱体板材】${list.boxMaterial.name}`
+        + (list.boxMaterial.chosen ? "（你选的）" : "（你没选，按该商家的基础档算的）")));
     if (list.boxMaterial.note) out.push(`  ${list.boxMaterial.note}`);
     out.push("");
   }
-  out.push("【柜体（含门板）】", head, "─".repeat(62));
+  out.push(msg(lang, "[Cabinets (doors included)]", "【柜体（含门板）】"), head, "─".repeat(62));
   for (const g of list.cabinets) {
     out.push(row(g.cabinet, W));
-    out.push(`  └ 门板：${g.door.description}　${g.door.includedNote}`);
+    out.push(msg(lang,
+      `  └ Doors: ${g.door.description}  ${g.door.includedNote}`,
+      `  └ 门板：${g.door.description}　${g.door.includedNote}`));
     for (const m of g.modifiers) out.push("  " + row(m, W));
   }
 
   if (list.trim.length > 0) {
-    out.push("", "【填缝与收口件】", head, "─".repeat(62));
+    out.push("", msg(lang, "[Fillers & trim]", "【填缝与收口件】"), head, "─".repeat(62));
     for (const r of list.trim) {
       out.push(row(r, W));
       if (r.note) out.push(`  └ ${r.note}`);
     }
   }
 
-  out.push("", "【分类汇总】");
+  out.push("", msg(lang, "[Category subtotals]", "【分类汇总】"));
   for (const s of list.subtotals) {
-    out.push(`  ${s.label.padEnd(14)}${String(s.itemCount).padStart(4)} 件  ` +
-      (s.includedIn ? `—　${s.includedIn}` : format(s.amount).padStart(12)));
+    out.push(`  ${s.label.padEnd(14)}${String(s.itemCount).padStart(4)} `
+      + msg(lang, "pcs  ", " 件  ")
+      + (s.includedIn ? `—  ${s.includedIn}` : format(s.amount).padStart(12)));
   }
   out.push("  " + "─".repeat(44));
-  out.push(`  ${"逐行合计".padEnd(14)}${" ".repeat(9)}${format(list.itemsTotal).padStart(12)}`);
+  out.push(`  ${msg(lang, "Line-item total", "逐行合计").padEnd(14)}${" ".repeat(9)}${format(list.itemsTotal).padStart(12)}`);
   if (list.reconciliationDelta !== 0) {
-    out.push(`  ⚠ 与报价单小计差 ${format(list.reconciliationDelta)} —— 清单可能有遗漏项`);
+    out.push(msg(lang,
+      `  ⚠ Differs from quote subtotal by ${format(list.reconciliationDelta)} — the list may be missing items`,
+      `  ⚠ 与报价单小计差 ${format(list.reconciliationDelta)} —— 清单可能有遗漏项`));
   }
   return out.join("\n");
 }
@@ -367,7 +430,11 @@ function row(r: QuoteListRow, W: { code: number; name: number; qty: number; unit
     format(r.lineTotal).padStart(W.total);
 }
 
-export function renderQuoteListHtml(list: QuoteList): string {
+export function renderQuoteListHtml(
+  list: QuoteList,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const lang = language;
   const rows = (r: QuoteListRow, cls = "") =>
     `<tr class="${cls}"><td><code>${esc(r.code)}</code></td><td>${esc(r.name)}` +
     (r.spec ? `<span class="ql-spec">${esc(r.spec)}</span>` : "") +
@@ -377,38 +444,44 @@ export function renderQuoteListHtml(list: QuoteList): string {
 
   const cabinetRows = list.cabinets.map((g) => [
     rows(g.cabinet),
-    `<tr class="ql-door"><td></td><td colspan="4">└ 门板：${esc(g.door.description)}` +
+    `<tr class="ql-door"><td></td><td colspan="4">└ ${msg(lang, "Doors: ", "门板：")}${esc(g.door.description)}` +
     `<span class="ql-note">${esc(g.door.includedNote)}</span></td></tr>`,
     ...g.modifiers.map((m) => rows(m, "ql-mod")),
   ].join("")).join("");
 
-  const head = `<thead><tr><th>代码</th><th>名称</th><th class="num">数量</th>` +
-    `<th class="num">单价</th><th class="num">总价</th></tr></thead>`;
+  const head = `<thead><tr><th>${msg(lang, "Code", "代码")}</th><th>${msg(lang, "Name", "名称")}</th>`
+    + `<th class="num">${msg(lang, "Qty", "数量")}</th>`
+    + `<th class="num">${msg(lang, "Unit", "单价")}</th>`
+    + `<th class="num">${msg(lang, "Total", "总价")}</th></tr></thead>`;
 
   const subtotalRows = list.subtotals.map((s) =>
-    `<tr><td>${esc(s.label)}</td><td class="num">${s.itemCount} 件</td>` +
+    `<tr><td>${esc(s.label)}</td><td class="num">${s.itemCount} ${msg(lang, "pcs", "件")}</td>` +
     `<td class="num">${s.includedIn ? `<span class="ql-note">${esc(s.includedIn)}</span>` : format(s.amount)}</td></tr>`,
   ).join("");
 
   const boxLine = list.boxMaterial
-    ? `<p class="ql-box"><b>箱体板材：</b>${esc(list.boxMaterial.name)}` +
-      (list.boxMaterial.chosen ? "（你选的）" : "（你没选，按该商家的基础档算的）") +
+    ? `<p class="ql-box"><b>${msg(lang, "Box material: ", "箱体板材：")}</b>${esc(list.boxMaterial.name)}` +
+      (list.boxMaterial.chosen
+        ? msg(lang, " (your choice)", "（你选的）")
+        : msg(lang, " (you didn't choose — priced at this seller's base grade)", "（你没选，按该商家的基础档算的）")) +
       (list.boxMaterial.note ? `<span class="ql-note">${esc(list.boxMaterial.note)}</span>` : "") +
       "</p>"
     : "";
 
   return `<div class="quote-list">
     ${boxLine}
-    <h4>柜体（含门板）</h4>
+    <h4>${msg(lang, "Cabinets (doors included)", "柜体（含门板）")}</h4>
     <table class="ql">${head}<tbody>${cabinetRows}</tbody></table>
-    ${list.trim.length ? `<h4>填缝与收口件</h4>
+    ${list.trim.length ? `<h4>${msg(lang, "Fillers & trim", "填缝与收口件")}</h4>
       <table class="ql">${head}<tbody>${list.trim.map((r) => rows(r)).join("")}</tbody></table>` : ""}
-    <h4>分类汇总</h4>
+    <h4>${msg(lang, "Category subtotals", "分类汇总")}</h4>
     <table class="ql ql-sum"><tbody>${subtotalRows}
-      <tr class="ql-total"><td>逐行合计</td><td></td><td class="num">${format(list.itemsTotal)}</td></tr>
+      <tr class="ql-total"><td>${msg(lang, "Line-item total", "逐行合计")}</td><td></td><td class="num">${format(list.itemsTotal)}</td></tr>
     </tbody></table>
     ${list.reconciliationDelta !== 0
-      ? `<p class="ql-warn">与报价单小计差 ${format(list.reconciliationDelta)} —— 清单可能有遗漏项</p>` : ""}
+      ? `<p class="ql-warn">${msg(lang,
+        `Differs from quote subtotal by ${format(list.reconciliationDelta)} — the list may be missing items`,
+        `与报价单小计差 ${format(list.reconciliationDelta)} —— 清单可能有遗漏项`)}</p>` : ""}
   </div>`;
 }
 

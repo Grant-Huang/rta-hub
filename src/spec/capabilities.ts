@@ -140,7 +140,7 @@ export function inferCapabilities(spec: ModuleSpec): CapabilityResolution {
     return {
       capabilities: { roles: ["trim"] },
       confidence: "high",
-      reason: `type=${spec.type} 属于配件类，不承载储物功能`,
+      reason: `type=${spec.type} is trim/accessory and does not carry storage roles`,
     };
   }
 
@@ -153,7 +153,7 @@ export function inferCapabilities(spec: ModuleSpec): CapabilityResolution {
     return {
       capabilities: { roles: spec.type === "sinkBase" ? ["sinkBase"] : ["doorStorage"] },
       confidence: "low",
-      reason: `型号 ${spec.code} 匹配不到脸型模板，只能按 type=${spec.type} 给最保守的角色`,
+      reason: `Module ${spec.code} matched no face template; using most conservative roles for type=${spec.type}`,
     };
   }
 
@@ -183,15 +183,15 @@ export function inferCapabilities(spec: ModuleSpec): CapabilityResolution {
     return {
       capabilities,
       confidence: "low",
-      reason: `型号 ${spec.code} 是家电柜，但配哪种家电推不出来` +
-        `（烤箱塔与微波柜的开洞高度、周边配件都不同）`,
+      reason: `Module ${spec.code} is an appliance cabinet, but which appliance it serves could not be inferred` +
+        ` (oven towers and microwave cabinets differ in cutout height and surrounding trim)`,
     };
   }
 
   return {
     capabilities,
     confidence: "high",
-    reason: `由脸型模板 ${face} 与 type=${spec.type} 推出`,
+    reason: `Inferred from face template ${face} and type=${spec.type}`,
   };
 }
 
@@ -238,7 +238,7 @@ export function capabilitiesFor(spec: ModuleSpec): CapabilityResolution {
     return {
       capabilities: spec.capabilities,
       confidence: "declared",
-      reason: "商家在规格里直接声明",
+      reason: "Declared directly in the company spec",
     };
   }
   return inferCapabilities(spec);

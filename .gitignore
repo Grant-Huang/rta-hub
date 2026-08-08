@@ -10,3 +10,5 @@ data/
 sim-out/
 ci-sim-out/
 sim-supply-out/
+# Cloudflare 隧道配置（包含凭证）
+.cloudflared/

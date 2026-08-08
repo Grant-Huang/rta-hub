@@ -72,7 +72,7 @@ test("拼不上的墙段如实标注为示意排列，不假装知道方位", ()
   };
   const plan = buildKitchenPlan(loose);
   assert.equal(plan.connected, false);
-  assert.match(plan.note ?? "", /示意排列/);
+  assert.match(plan.note ?? "", /schematic|示意排列/i);
 });
 
 // ── 墙角 ─────────────────────────────────────────────────────────────────

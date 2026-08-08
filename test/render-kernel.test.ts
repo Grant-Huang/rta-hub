@@ -101,13 +101,13 @@ test("水槽在正视图、单墙俯视图、全局俯视图上都标了字", ()
   const top = renderTopView(wall, layout.placements, "base");
   const front = renderFrontElevation(wall, layout.placements);
   for (const [name, svg] of Object.entries({ front, top, plan })) {
-    assert.ok(svg.includes("水槽"), `${name} 上没有标出水槽`);
+    assert.ok(svg.includes("Sink"), `${name} 上没有标出水槽`);
   }
 });
 
 test("家电位标出的是家电名与尺寸，不是空白方块", () => {
-  assert.ok(plan.includes("冰箱"), "全局俯视图没标冰箱");
-  assert.ok(renderFrontElevation(wall, layout.placements).includes("冰箱"), "正视图没标冰箱");
+  assert.ok(plan.includes("Refrigerator"), "全局俯视图没标冰箱");
+  assert.ok(renderFrontElevation(wall, layout.placements).includes("Refrigerator"), "正视图没标冰箱");
 });
 
 test("推定的尺寸在图上就标明是推定的", () => {
@@ -117,7 +117,7 @@ test("推定的尺寸在图上就标明是推定的", () => {
     appliances: [applianceFrom({ kind: "refrigerator" })],
   });
   const svg = renderPlanView(geometry, guessed.placements, "base");
-  assert.ok(svg.includes("推定"),
+  assert.ok(svg.includes("assumed"),
     "按常见款猜的尺寸必须在图上说明——等到装不进去才发现就晚了");
 });
 
@@ -164,7 +164,7 @@ test("水槽柜、配套柜、普通柜体各归各的类", () => {
   const sink = layout.placements.find((p) => p.label === "sink")!;
   assert.equal(elementKindOf(sink), "sinkBase");
 
-  const over = layout.placements.find((p) => p.label === "冰箱上柜");
+  const over = layout.placements.find((p) => p.label === "Fridge upper");
   assert.ok(over, "这条断言的前提：这一版排出了冰箱上柜");
   assert.equal(elementKindOf(over), "applianceCabinet");
 

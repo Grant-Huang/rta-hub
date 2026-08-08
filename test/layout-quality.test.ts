@@ -120,7 +120,7 @@ test("凑数的窄柜被扣分，有功能的不扣", () => {
     run: run(), placements: [cab(0, 36), cab(36, 9), cab(45, 36)],
   });
   assert.ok(padded.breakdown.narrowPenalty < 1);
-  assert.ok(padded.notes.some((n) => n.includes("窄柜")));
+  assert.ok(padded.notes.some((n) => /narrow cabinet|窄柜/i.test(n)));
 
   const functional = scoreAesthetics({
     run: run(), placements: [cab(0, 36), cab(36, 9, { moduleCode: "BPO09" }), cab(45, 36)],
@@ -143,7 +143,7 @@ test("填缝条在墙角得满分，在中间被扣分", () => {
     placements: [cab(0, 36), { ...cab(36, 3), kind: "filler" }, cab(39, 36)],
   });
   assert.equal(inMiddle.breakdown.fillerPlacement, 0);
-  assert.ok(inMiddle.notes.some((n) => n.includes("打断门缝节奏")));
+  assert.ok(inMiddle.notes.some((n) => /reveal rhythm|打断门缝节奏/i.test(n)));
 });
 
 test("吊柜与地柜柜缝对齐得高分", () => {
@@ -174,7 +174,7 @@ test("水槽应对齐窗中心，偏了扣分", () => {
   });
   assert.equal(centered.breakdown.symmetry, 1);
   assert.ok(offset.breakdown.symmetry < 1);
-  assert.ok(offset.notes.some((n) => n.includes("偏离窗中心")));
+  assert.ok(offset.notes.some((n) => /window center|偏离窗中心/i.test(n)));
 });
 
 test("没有对称参照物时不强求对称", () => {
@@ -221,8 +221,16 @@ test("灶具两侧落台区不足 → blocking（安全要求）", () => {
   const hit = v.find((x) => x.code === "COOKTOP_LANDING");
   assert.ok(hit, "灶具一侧没有落台区应被拦下");
   assert.equal(hit.severity, "blocking");
-  assert.match(hit.message, /热锅/);
+  assert.match(hit.message, /hot pan|热锅/i);
   assert.equal(hasBlockingViolation(v), true);
+
+  const zh = checkErgonomics({
+    run: run({ length: 120 }),
+    placements: [appliance(0, 30, "range"), cab(30, 36), cab(66, 36)],
+    language: "zh",
+  }).find((x) => x.code === "COOKTOP_LANDING");
+  assert.ok(zh);
+  assert.match(zh.message, /热锅/);
 });
 
 test("灶具两侧落台区充足 → 通过", () => {
@@ -290,7 +298,7 @@ test("盲角柜给出可达性提醒（advisory，不否决）", () => {
   const hit = v.find((x) => x.code === "UNREACHABLE_BLIND_CORNER");
   assert.ok(hit);
   assert.equal(hit.severity, "advisory");
-  assert.match(hit.message, /拉篮|转角柜/);
+  assert.match(hit.message, /pull-out|corner|拉篮|转角柜/i);
 });
 
 test("工作三角：三点不全时不判定", () => {

@@ -75,11 +75,35 @@ export const COMMON_WIDTHS: Partial<Record<ApplianceKind, number[]>> = {
   dishwasher: [18, 24],
 };
 
-export const APPLIANCE_LABEL: Record<ApplianceKind, string> = {
+export const APPLIANCE_LABEL_EN: Record<ApplianceKind, string> = {
+  refrigerator: "Refrigerator", range: "Range", cooktop: "Cooktop",
+  wallOven: "Wall oven", rangeHood: "Range hood",
+  microwave: "Microwave", dishwasher: "Dishwasher",
+};
+
+export const APPLIANCE_LABEL_ZH: Record<ApplianceKind, string> = {
   refrigerator: "冰箱", range: "灶具", cooktop: "灶台",
   wallOven: "烤箱", rangeHood: "抽油烟机",
   microwave: "微波炉", dishwasher: "洗碗机",
 };
+
+/**
+ * 客户可见的家电名。问答跟语言偏好；**图纸标注一律用英文**
+ * （见 `applianceLabelForDrawing`）。
+ */
+export const APPLIANCE_LABEL = APPLIANCE_LABEL_EN;
+
+/** 图纸上的家电名——固定英文，无视客户语言偏好。 */
+export function applianceLabelForDrawing(kind: ApplianceKind): string {
+  return APPLIANCE_LABEL_EN[kind];
+}
+
+export function applianceLabel(
+  kind: ApplianceKind,
+  lang: "en" | "zh" = "en",
+): string {
+  return lang === "zh" ? APPLIANCE_LABEL_ZH[kind] : APPLIANCE_LABEL_EN[kind];
+}
 
 /** 尺寸边界：小于最窄的家用款、大于最宽的商用款都当输入错误处理。 */
 const MIN_WIDTH = 12;
@@ -144,13 +168,21 @@ export function assumedOnes(appliances: readonly ApplianceSpec[]): ApplianceSpec
  * 只在**真的有推定值**时返回内容——与 `explain.ts` 同一条原则：
  * 说的每一句都要对应实际存在的东西。
  */
-export function provenanceNote(appliances: readonly ApplianceSpec[]): string | undefined {
+export function provenanceNote(
+  appliances: readonly ApplianceSpec[],
+  language: "en" | "zh" = "en",
+): string | undefined {
   const assumed = assumedOnes(appliances);
   if (assumed.length === 0) return undefined;
-  const parts = assumed.map(
-    (a) => `${APPLIANCE_LABEL[a.kind]}按 ${a.width}" 预留`);
-  return `以下尺寸是按常见款推定的（你还没提供实际尺寸）：${parts.join("、")}。` +
-    `如果你的实际尺寸不同，这一版要重排。`;
+  const parts = assumed.map((a) => language === "zh"
+    ? `${APPLIANCE_LABEL_ZH[a.kind]}按 ${a.width}" 预留`
+    : `${APPLIANCE_LABEL_EN[a.kind]} reserved at ${a.width}"`);
+  if (language === "zh") {
+    return `以下尺寸是按常见款推定的（你还没提供实际尺寸）：${parts.join("、")}。` +
+      `如果你的实际尺寸不同，这一版要重排。`;
+  }
+  return `These sizes are assumed from common models (you haven't given actual sizes yet): ${parts.join(", ")}. ` +
+    `If your actual sizes differ, this layout needs to be redone.`;
 }
 
 /**
@@ -159,11 +191,18 @@ export function provenanceNote(appliances: readonly ApplianceSpec[]): string | u
  * **推定值导致的否决必须说明它是推定的**，否则客户会以为自己的厨房真的排不下，
  * 而事实可能只是我们猜的尺寸偏大。
  */
-export function violationCaveat(appliances: readonly ApplianceSpec[]): string | undefined {
+export function violationCaveat(
+  appliances: readonly ApplianceSpec[],
+  language: "en" | "zh" = "en",
+): string | undefined {
   const assumed = assumedOnes(appliances);
   if (assumed.length === 0) return undefined;
-  return `注意：${assumed.map((a) => `${APPLIANCE_LABEL[a.kind]}宽度按 ${a.width}" 推定`).join("、")}。` +
-    `如果实际尺寸更小，上面这条可能并不成立——把准确尺寸告诉我，我重排一版。`;
+  if (language === "zh") {
+    return `注意：${assumed.map((a) => `${APPLIANCE_LABEL_ZH[a.kind]}宽度按 ${a.width}" 推定`).join("、")}。` +
+      `如果实际尺寸更小，上面这条可能并不成立——把准确尺寸告诉我，我重排一版。`;
+  }
+  return `Note: ${assumed.map((a) => `${APPLIANCE_LABEL_EN[a.kind]} width assumed at ${a.width}"`).join(", ")}. ` +
+    `If the real size is smaller, the issue above may not apply — tell me the exact size and I'll re-layout.`;
 }
 
 /** 归一化并去重（同一种家电只留一台）。 */

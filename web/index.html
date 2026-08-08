@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>RTA-Hub · 橱柜设计与报价</title>
+<title>RTA-Hub · Cabinet design & quotes</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   :root { color-scheme: light dark; }
@@ -20,20 +20,24 @@
   .gutter::after { content:""; position:absolute; inset:0 -4px; }
   .gutter:hover, .gutter.dragging { background:#3a4250; }
 
-  /* 左栏：历史会话 */
+  /* 左栏：历史会话。拖窄时标题必须截断，不能撑出栏宽。 */
   .rail { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
-  .rail-head { padding:10px 12px; border-bottom:1px solid #262b33; display:flex; gap:8px; align-items:center; }
-  .rail-head h2 { font-size:12px; margin:0; color:#9aa4b2; font-weight:500; flex:1; }
-  .rail-list { flex:1; min-height:0; overflow-y:auto; padding:6px; }
-  .conv { display:block; width:100%; text-align:left; background:none; border:1px solid transparent;
-          border-radius:8px; padding:8px 10px; margin-bottom:3px; cursor:pointer; color:inherit; }
+  .rail-head { padding:10px 12px; border-bottom:1px solid #262b33; display:flex; gap:8px; align-items:center; min-width:0; }
+  .rail-head h2 { font-size:12px; margin:0; color:#9aa4b2; font-weight:500; flex:1; min-width:0;
+                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rail-head .ghost { flex:0 0 auto; }
+  .rail-list { flex:1; min-height:0; overflow-x:hidden; overflow-y:auto; padding:6px; }
+  .conv { display:block; width:100%; max-width:100%; text-align:left; background:none;
+          border:1px solid transparent; border-radius:8px; padding:8px 10px; margin-bottom:3px;
+          cursor:pointer; color:inherit; overflow:hidden; min-width:0; }
   .conv:hover { background:#1c2129; }
   .conv.active { background:#1e3566; border-color:#4d7bd7; }
-  .conv .ct { font-size:12.5px; line-height:1.45; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .conv .cm { font-size:11px; color:#6a7382; margin-top:2px; }
+  .conv .ct { display:block; font-size:12.5px; line-height:1.45; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  .conv .cm { display:block; font-size:11px; color:#6a7382; margin-top:2px; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
 
-  /* 中栏：主会话。`min-height:0` 不可省——flex 子项默认 min-height:auto，
-     内容一长就把容器撑开，滚动条不出现、输入框被挤出可视区。 */
+  /* 中栏：主会话。输入区带 + / @ / 补全，无顶部硬按钮栏。 */
   .chat { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
   .chat-log { flex:1; min-height:0; overflow-y:auto; padding:14px 14px 4px;
               display:flex; flex-direction:column; gap:9px; }
@@ -41,27 +45,63 @@
   .msg.user { align-self:flex-end; background:#2a5bd7; color:#fff; }
   .msg.assistant { align-self:flex-start; background:#1c2129; }
   .msg.system { align-self:center; background:#2b2416; color:#d8c37b; font-size:12px; }
-  /* 输入框贴着会话栏底部，不随消息流走 */
-  .chat-input { display:flex; gap:8px; padding:11px; border-top:1px solid #262b33;
-                background:#0f1216; flex:0 0 auto; }
-  .chat-input input { flex:1; background:#1c2129; border:1px solid #262b33; color:inherit;
-                      padding:8px 10px; border-radius:8px; font-size:13px; }
+  .msg.interactive { max-width:100%; white-space:normal; align-self:flex-start; background:#1c2129; }
+  .chat-input { padding:10px 12px; border-top:1px solid #262b33; background:#0f1216; flex:0 0 auto; }
+  .composer { display:flex; gap:8px; align-items:flex-end; position:relative; }
+  .composer .icon-btn { flex:0 0 auto; width:36px; height:36px; padding:0; border-radius:8px;
+                        background:#262b33; font-size:20px; line-height:1; color:#e6e8eb; }
+  .composer .icon-btn:hover { background:#3a4250; }
+  .composer-field { flex:1; min-width:0; position:relative; }
+  .composer-field input { width:100%; background:#1c2129; border:1px solid #262b33; color:inherit;
+                          padding:8px 10px; border-radius:8px; font-size:13px; }
+  .suggest-pop { position:absolute; left:0; right:0; bottom:calc(100% + 6px);
+                 background:#151a22; border:1px solid #3a4250; border-radius:10px;
+                 box-shadow:0 8px 24px rgba(0,0,0,.45); z-index:20; overflow:hidden; }
+  .suggest-pop[hidden] { display:none; }
+  .suggest-head { padding:7px 10px; font-size:11px; color:#8b94a3; border-bottom:1px solid #262b33; }
+  .suggest-list { max-height:calc(6 * 36px); overflow-y:auto; }
+  .suggest-item { display:flex; flex-direction:column; gap:1px; width:100%; text-align:left;
+                  background:none; border:none; border-radius:0; padding:8px 10px; color:#e6e8eb;
+                  font-size:12.5px; cursor:pointer; }
+  .suggest-item:hover, .suggest-item.active { background:#1e3566; }
+  .suggest-item .si-main { font-weight:500; }
+  .suggest-item .si-sub { font-size:11px; color:#8b94a3; }
+  .composer button[type=submit] { flex:0 0 auto; height:36px; }
   button { background:#2a5bd7; border:none; color:#fff; padding:7px 13px; border-radius:8px;
            font-size:13px; cursor:pointer; }
   button:disabled { opacity:.45; cursor:not-allowed; }
   button.ghost { background:#262b33; }
+  /* 右栏：已确认信息 / 输出物预览（只读汇总 + 产出，不含逐步提问） */
   .panel { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .panel-tabs { display:flex; gap:0; border-bottom:1px solid #262b33; flex:0 0 auto; }
+  .panel-tab { flex:1; background:transparent; color:#8b94a3; border:none; border-radius:0;
+               border-bottom:2px solid transparent; padding:10px 12px; font-size:12.5px; }
+  .panel-tab:hover { color:#e6e8eb; background:#1c2129; }
+  .panel-tab.active { color:#e6e8eb; border-bottom-color:#4d7bd7; background:#151a22; }
+  .pane { display:none; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
+  .pane.active { display:flex; }
+  .confirmed { flex:1; min-height:0; overflow-y:auto; padding:14px 16px; }
+  .confirmed .kv { display:grid; grid-template-columns:110px 1fr; gap:4px 10px; font-size:12.5px; margin:0 0 12px; }
+  .confirmed .kv dt { color:#8b94a3; margin:0; }
+  .confirmed .kv dd { margin:0; color:#e6e8eb; word-break:break-word; }
+  .confirmed .kv dd.tbd, .confirmed .tbd { color:#8b94a3; font-style:italic; }
+  .confirmed h3 { margin:0 0 8px; font-size:12.5px; color:#9aa4b2; font-weight:600; }
+  .brief-card { margin:0 0 12px; padding:10px 0; border-bottom:1px solid #1c2129; }
+  .brief-card:last-child { border-bottom:none; }
+  .brief-head { display:flex; justify-content:space-between; gap:8px; align-items:baseline; margin-bottom:4px; }
+  .brief-title { font-size:12.5px; font-weight:600; color:#e6e8eb; }
+  .brief-status { font-size:10.5px; color:#8b94a3; }
+  .brief-card.status-clarify .brief-status { color:#d8c37b; }
+  .brief-card.status-untouched .brief-status { color:#6a7382; }
+  .brief-card.status-locked .brief-status { color:#7bd88f; }
+  .brief-body { font-size:12.5px; line-height:1.55; color:#c6cdd6; white-space:pre-wrap; }
   .steps { display:flex; gap:6px; padding:10px 16px; border-bottom:1px solid #262b33; flex-wrap:wrap; align-items:center; }
   .step { font-size:11px; padding:3px 9px; border-radius:10px; background:#1c2129; color:#6a7382; }
   .step.done { background:#1c3a2b; color:#7bd88f; }
   .step.active { background:#2a5bd7; color:#fff; }
-  .toolbar { display:flex; align-items:center; gap:8px; padding:10px 16px;
+  .toolbar { display:flex; align-items:center; gap:8px; padding:8px 16px;
              border-bottom:1px solid #262b33; flex-wrap:wrap; }
   .content { flex:1; min-height:0; overflow-y:auto; padding:16px; }
-  /* 「② 还不能点，因为……」 */
-  .gatebar { font-size:11.5px; color:#8b94a3; padding:0 16px; line-height:1.6; }
-  .gatebar:not(:empty) { padding:7px 16px; border-bottom:1px solid #262b33; }
-  .gatebar b { color:#d8c37b; font-weight:600; }
   /* 产出物下载条 */
   .downloads { display:flex; flex-wrap:wrap; gap:6px; padding:8px 16px; border-bottom:1px solid #262b33; }
   .dl { font-size:11.5px; padding:3px 9px; border-radius:8px; background:#262b33; color:#9aa4b2;
@@ -139,65 +179,287 @@
 </head>
 <body>
 <header>
-  <h1>RTA-Hub · 橱柜设计与报价</h1>
-  <select id="acctSel" title="演示用账号切换">
-    <option value="ca_demo_consumer">消费者账号</option>
-    <option value="ca_demo_trade">建商账号（trade）</option>
+  <h1 data-i18n="title">RTA-Hub · Cabinet design & quotes</h1>
+  <select id="acctSel" data-i18n-title="acctTitle" title="Demo account switch">
+    <option value="ca_demo_consumer" data-i18n="acctConsumer">Consumer account</option>
+    <option value="ca_demo_trade" data-i18n="acctTrade">Trade account (builder)</option>
   </select>
   <span class="badge" id="acctBadge">consumer</span>
   <span style="flex:1"></span>
-  <button class="ghost" id="projBtn" style="display:none">我的项目</button>
-  <span class="badge" id="sendBadge">预览模式</span>
+  <button class="ghost" id="projBtn" style="display:none" data-i18n="myProjects">My projects</button>
+  <span class="badge" id="sendBadge" data-i18n="previewMode">Preview mode</span>
 </header>
 <main>
   <aside class="rail">
     <div class="rail-head">
-      <h2>历史会话</h2>
-      <button class="ghost" id="newConvBtn" title="开一段新会话">＋ 新建</button>
+      <h2 data-i18n="history">Conversations</h2>
+      <button class="ghost" id="newConvBtn" data-i18n="newChat" data-i18n-title="newChatTitle" title="Start a new conversation">＋ New</button>
     </div>
-    <div class="rail-list" id="convList"><p class="hint" style="padding:8px">还没有会话。</p></div>
+    <div class="rail-list" id="convList"><p class="hint" style="padding:8px" data-i18n="noConversations">No conversations yet.</p></div>
   </aside>
-  <div class="gutter" id="gutterL" title="拖动调整宽度"></div>
+  <div class="gutter" id="gutterL" title="Drag to resize"></div>
 
   <section class="chat">
     <div class="chat-log" id="chatLog"></div>
-    <form class="chat-input" id="chatForm">
-      <input id="chatInput" placeholder="说说你的需求，或 @某家公司…" autocomplete="off" />
-      <button type="submit">发送</button>
+    <form class="chat-input" id="chatForm" autocomplete="off">
+      <div class="composer">
+        <button type="button" class="icon-btn" id="attachBtn" title="Upload file" data-i18n-title="attachTitle">+</button>
+        <div class="composer-field">
+          <div id="suggestPop" class="suggest-pop" hidden></div>
+          <input id="chatInput" placeholder="Tell us your needs — @company · /doorStyle · +" autocomplete="off" />
+        </div>
+        <button type="submit">Send</button>
+        <span class="status-pill" id="quoteStatus" style="display:none;align-self:center"></span>
+      </div>
     </form>
   </section>
-  <div class="gutter" id="gutterR" title="拖动调整宽度"></div>
+  <div class="gutter" id="gutterR" title="Drag to resize"></div>
 
   <section class="panel">
-    <div class="warn">报价发送前会列出将要提供给该公司的全部信息，需你确认后才会发出。系统不会自动发送。</div>
-    <div class="steps" id="steps"></div>
-    <div class="downloads" id="downloads"><span class="hint">产出物会出现在这里，可单独下载。</span></div>
-    <div class="toolbar">
-      <button id="uploadBtn" class="ghost">① 上传户型图</button>
-      <select id="companySel"></select>
-      <select id="doorSel"></select>
-      <button id="layoutBtn" disabled>② 生成方案</button>
-      <button id="quoteBtn" disabled>③ 出报价</button>
-      <button id="prefBtn" class="ghost">偏好与预算</button>
-      <button id="cmpBtn" class="ghost">比价</button>
-      <span style="flex:1"></span>
-      <span class="status-pill" id="quoteStatus" style="display:none"></span>
+    <div class="panel-tabs" role="tablist">
+      <button type="button" class="panel-tab active" data-tab="confirmed" id="tabConfirmedBtn" data-i18n="tabConfirmed">Confirmed</button>
+      <button type="button" class="panel-tab" data-tab="outputs" id="tabOutputsBtn" data-i18n="tabOutputs">Outputs</button>
     </div>
-    <!-- 禁用的按钮必须说清它在等什么。「灰着」本身不是信息——
-         客户看到的是"这个功能坏了"，而不是"我还差一步没做"。 -->
-    <div class="gatebar" id="gatebar"></div>
-    <div class="content" id="content">
-      <p class="hint">流程：上传户型图 → 补齐尺寸 → 自动排布出四视图 → 生成报价 → 确认发送。<br/>
-        没有配置视觉模型时，上传后会引导你手动录入墙段尺寸。</p>
+    <div class="pane active" id="paneConfirmed" role="tabpanel">
+      <div class="confirmed" id="confirmedPane">
+        <p class="hint" data-i18n="confirmedEmpty">Confirmed choices appear here — finishes, materials, sizes, and preferences that drive the design.</p>
+      </div>
+    </div>
+    <div class="pane" id="paneOutputs" role="tabpanel">
+      <div class="warn" data-i18n="warnSend">Before a quote is sent, you'll see every piece of information that will go to the company — and must confirm. Nothing is sent automatically.</div>
+      <div class="steps" id="steps"></div>
+      <div class="downloads" id="downloads"><span class="hint" data-i18n="artifactsHint">Downloads appear here — each file can be saved on its own.</span></div>
+      <div class="content" id="content">
+        <p class="hint" data-i18n-html="flowHint">Flow: upload a floor plan → fill in sizes → auto layout with four views → quote → confirm send.<br/>
+          Without a vision model configured, you'll be guided to enter wall lengths by hand after upload.</p>
+      </div>
     </div>
   </section>
 </main>
 
+<script src="/ui-i18n.js"></script>
 <script>
 let ACCOUNT = 'ca_demo_consumer';
 const $ = (id) => document.getElementById(id);
 let conversationId = null, floorPlanId = null, layout = null, currentQuote = null, spec = null;
 let profile = null;
+let uiLang = 'en';
+/** 当前选中的公司 / 门板（不再用顶部下拉硬编码）。 */
+let companiesList = [];
+let selectedCompanyId = null;
+let selectedDoorStyleId = null;
+/** 户型尺寸补录卡：挂在主会话里，不进右栏。 */
+let fpBlock = null;
+/** 设计依据：已确认信息（右栏 Tab1 只读汇总）。 */
+let confirmed = {
+  companyId: null, companyName: null,
+  doorStyleId: null, doorStyleName: null,
+  prefs: null,
+  floorPlan: null,
+  layoutNote: null,
+  requirements: '',
+  missingFields: [],
+  briefSections: null,
+  openItems: [],
+  readyToAskDesign: false,
+  confirmationText: '',
+};
+
+function t(key, ...args) {
+  const pack = (window.RTA_UI && (window.RTA_UI[uiLang] || window.RTA_UI.en)) || {};
+  const v = pack[key] ?? (window.RTA_UI?.en?.[key]) ?? key;
+  return typeof v === 'function' ? v(...args) : v;
+}
+
+function setUiLang(lang) {
+  const next = lang === 'zh' ? 'zh' : 'en';
+  if (next === uiLang && document.documentElement.lang === (next === 'zh' ? 'zh-CN' : 'en')) return;
+  uiLang = next;
+  document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
+  applyChrome();
+  renderSteps();
+  refreshGates();
+  renderConfirmed();
+}
+
+function applyChrome() {
+  document.title = t('title');
+  document.querySelectorAll('[data-i18n]').forEach((el) => {
+    const key = el.getAttribute('data-i18n');
+    if (!key) return;
+    el.textContent = t(key);
+  });
+  document.querySelectorAll('[data-i18n-html]').forEach((el) => {
+    const key = el.getAttribute('data-i18n-html');
+    if (!key) return;
+    el.innerHTML = t(key);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+    const key = el.getAttribute('data-i18n-title');
+    if (!key) return;
+    el.title = t(key);
+  });
+  const input = $('chatInput');
+  if (input) input.placeholder = uiLang === 'zh'
+    ? '说说需求 — @厂商 · /doorStyle · +上传'
+    : 'Tell us your needs — @company · /doorStyle · +';
+  const sendBtn = document.querySelector('#chatForm button[type="submit"]');
+  if (sendBtn) sendBtn.textContent = uiLang === 'zh' ? '发送' : 'Send';
+  const attach = $('attachBtn');
+  if (attach) attach.title = t('attachTitle');
+}
+
+/** 右栏 Tab：confirmed | outputs */
+function switchPanelTab(name) {
+  document.querySelectorAll('.panel-tab').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === name);
+  });
+  document.querySelectorAll('.pane').forEach((p) => {
+    p.classList.toggle('active', p.id === (name === 'confirmed' ? 'paneConfirmed' : 'paneOutputs'));
+  });
+}
+
+document.querySelector('.panel-tabs')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.panel-tab');
+  if (btn?.dataset.tab) switchPanelTab(btn.dataset.tab);
+});
+
+function showOutputs() { switchPanelTab('outputs'); }
+
+function resetConfirmed() {
+  confirmed = {
+    companyId: null, companyName: null,
+    doorStyleId: null, doorStyleName: null,
+    prefs: null, floorPlan: null, layoutNote: null,
+    requirements: '', missingFields: [],
+    briefSections: null, openItems: [], readyToAskDesign: false, confirmationText: '',
+  };
+  renderConfirmed();
+}
+
+function tbd() { return t('tbd'); }
+
+function displayOrTbd(value) {
+  if (value == null || value === '' || value === '—') return tbd();
+  return value;
+}
+
+function prefLabel(map, id) {
+  if (id == null || id === '') return tbd();
+  if (Array.isArray(id)) return id.length ? id.join(', ') : tbd();
+  return map?.[id] ?? String(id);
+}
+
+function intakeSnippet(field) {
+  const text = (confirmed.requirements || '').toLowerCase();
+  const checks = {
+    'kitchen size': /(\d+\s*(尺|米|m|ft|英尺|feet|'|″|inch|寸|sq\.?\s*ft))|尺寸|面积|平米|平方|one wall|two walls|kitchen\s*~/i,
+    layout: /布局|l\s*[- ]?shape|u\s*[- ]?shape|i\s*[- ]?shape|l\s*型|u\s*型|一字|岛台|island|galley|with island/i,
+    style: /风格|现代|传统|简约|极简|北欧|轻奢|工业风|日式|中式|田园|复古|shaker|modern|classic|nordic|farmhouse|transitional|traditional|欧式|美式/i,
+    budget: /预算|budget|万|\$|加币|cad|not decided/i,
+    province: /\b(on|bc|ab|qc|mb|sk|ns|nb|nl|pe|yt|nt|nu)\b|ontario|british columbia|alberta|quebec|安大略|不列颠|阿尔伯塔|魁北克/i,
+  };
+  const re = checks[field];
+  if (!re || !re.test(text)) return tbd();
+  // 有命中就标「已记录」——原文在会话里，这里只作状态
+  return t('recorded');
+}
+
+function renderConfirmed() {
+  const el = $('confirmedPane');
+  if (!el) return;
+
+  // 优先用服务端 designBrief 叙事（FR-15）；否则本地拼一版简报
+  if (confirmed.briefSections?.length) {
+    const open = (confirmed.openItems || [])
+      .filter((i) => i.status === 'missing' || i.status === 'needs_confirm');
+    const openHint = open.length
+      ? `<p class="hint" style="margin-bottom:12px">${t('stillNeed')}: ${esc(open.map((i) => i.askHint || i.brief).slice(0, 3).join(uiLang === 'zh' ? '；' : '; '))}</p>`
+      : (confirmed.readyToAskDesign
+        ? `<p class="hint" style="margin-bottom:12px">${t('intakeReady')}</p>`
+        : '');
+    const statusLabel = {
+      locked: t('briefLocked'),
+      provisional: t('briefProvisional'),
+      untouched: t('briefUntouched'),
+      clarify: t('briefClarify'),
+    };
+    el.innerHTML = `
+      ${openHint}
+      <h3>${t('confirmedBasis')}</h3>
+      ${confirmed.briefSections.map((s) => `
+        <div class="brief-card status-${esc(s.status)}">
+          <div class="brief-head">
+            <span class="brief-title">${esc(s.title)}</span>
+            <span class="brief-status">${esc(statusLabel[s.status] || s.status)}</span>
+          </div>
+          <div class="brief-body">${esc(s.body)}</div>
+        </div>`).join('')}
+      ${confirmed.layoutNote ? `<div class="brief-card"><div class="brief-head"><span class="brief-title">${t('layoutResult')}</span></div><div class="brief-body">${esc(confirmed.layoutNote)}</div></div>` : ''}
+    `;
+    return;
+  }
+
+  // 回退：尚无 brief 时用轻量提示
+  el.innerHTML = `<p class="hint">${t('confirmedEmpty')}</p>`;
+}
+
+function applyDesignBrief(brief) {
+  if (!brief) return;
+  confirmed.briefSections = brief.sections || [];
+  confirmed.openItems = brief.openItems || [];
+  confirmed.readyToAskDesign = !!brief.readyToAskDesign;
+  confirmed.confirmationText = brief.confirmationText || '';
+  renderConfirmed();
+}
+
+function currentCompanyId() {
+  return confirmed.companyId || selectedCompanyId || companiesList[0]?.id || null;
+}
+
+function currentCompanyName() {
+  const id = currentCompanyId();
+  return companiesList.find((c) => c.id === id)?.name
+    || confirmed.companyName
+    || id
+    || null;
+}
+
+function currentDoorStyleId() {
+  return selectedDoorStyleId
+    || confirmed.doorStyleId
+    || confirmed.prefs?.byCompany?.[currentCompanyId()]?.doorStyleId
+    || spec?.doorStyles?.[0]?.id
+    || null;
+}
+
+function syncCompanyConfirmed() {
+  const id = currentCompanyId();
+  if (id) {
+    confirmed.companyId = id;
+    confirmed.companyName = currentCompanyName();
+  }
+  const doorId = currentDoorStyleId();
+  if (doorId) {
+    confirmed.doorStyleId = doorId;
+    confirmed.doorStyleName =
+      (spec?.doorStyles || []).find((d) => d.id === doorId)?.name || doorId;
+  }
+  renderConfirmed();
+}
+
+async function selectCompany(companyId, { announce = true } = {}) {
+  if (!companyId) return;
+  selectedCompanyId = companyId;
+  layout = null;
+  gates.layoutOk = false; gates.layoutBlocked = false; refreshGates();
+  await loadSpec(companyId);
+  syncCompanyConfirmed();
+  if (announce) {
+    addMsg('system', t('companySelected', currentCompanyName()));
+  }
+}
+
 
 const api = async (path, opts = {}) => {
   const res = await fetch(path, {
@@ -211,42 +473,17 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 const money = (c) => '$' + (c / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\.))/g, ',');
 
-// ── ② / ③ 两个按钮的闸门 ─────────────────────────────────────────────────
-//
-// 这两个按钮各自有前置条件，条件不满足时不能点。**但"灰着"本身不是信息**：
-// 客户看到的是"这个功能坏了"，不是"我还差一步没做"。所以闸门状态与它的
-// 理由由同一个函数产出——两处各写一份的话，迟早出现"按钮亮着但点了报错"、
-// 或者"按钮灰着而理由那一行说一切就绪"。
+// ── 流程闸门（无硬按钮；只维护内部状态，提示走会话）──────────────────────
 const gates = { fpReady: false, layoutOk: false, layoutBlocked: false };
 
 function refreshGates() {
-  const why = [];
-
-  const canLayout = gates.fpReady;
-  $('layoutBtn').disabled = !canLayout;
-  if (!canLayout) {
-    why.push(floorPlanId
-      ? '<b>② 生成方案</b>还差户型尺寸：在右边把每段墙的长度和层高填完，填齐了这个按钮自动亮。'
-      : '<b>② 生成方案</b>要先有户型：点<b>① 上传户型图</b>；没有图也可以，上传后按提示一段墙一段墙地录尺寸。');
-  }
-
-  const canQuote = gates.layoutOk;
-  $('quoteBtn').disabled = !canQuote;
-  if (!canQuote) {
-    why.push(gates.layoutBlocked
-      ? '<b>③ 出报价</b>被人体工程检查拦住了：先按上面的提示调整方案，通不过的方案不出报价。'
-      : '<b>③ 出报价</b>要先有一版方案：把上一步做完。');
-  }
-
-  $('layoutBtn').title = canLayout ? '' : why[0]?.replace(/<[^>]+>/g, '') ?? '';
-  $('quoteBtn').title = canQuote ? '' : why[why.length - 1]?.replace(/<[^>]+>/g, '') ?? '';
-  $('gatebar').innerHTML = why.join('<br/>');
+  // 顶部硬按钮已去掉：闸门只更新内部状态，进度看右栏「已确认」与会话引导。
 }
 
-const STEPS = ['户型图', '尺寸补齐', '方案与四视图', '报价', '确认发送'];
 let stepIndex = 0;
 function renderSteps() {
-  $('steps').innerHTML = STEPS.map((s, i) =>
+  const steps = t('steps');
+  $('steps').innerHTML = steps.map((s, i) =>
     `<span class="step ${i < stepIndex ? 'done' : i === stepIndex ? 'active' : ''}">${i + 1}. ${esc(s)}</span>`
   ).join('');
 }
@@ -296,7 +533,7 @@ function renderQuickReplies(quick) {
   box.addEventListener('click', (e) => {
     const chip = e.target.closest('[data-send]');
     if (chip) { sendChat(chip.dataset.send); return; }
-    if (e.target.closest('[data-upload]')) $('uploadBtn').click();
+    if (e.target.closest('[data-upload]')) triggerUpload();
   });
   $('chatLog').appendChild(box);
   quickBlock = box;
@@ -327,7 +564,7 @@ function registerArtifact(name, mime, source) {
 function renderDownloads() {
   const box = $('downloads');
   if (artifacts.length === 0) {
-    box.innerHTML = '<span class="hint">产出物会出现在这里，可单独下载。</span>';
+    box.innerHTML = `<span class="hint">${t('artifactsHint')}</span>`;
     return;
   }
   box.innerHTML = artifacts
@@ -346,7 +583,7 @@ $('downloads').addEventListener('click', async (e) => {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       $('content').insertAdjacentHTML('afterbegin',
-        `<div class="err">${esc(body.error || '下载失败')}</div>`);
+        `<div class="err">${esc(body.error || t('downloadFail'))}</div>`);
       return;
     }
     blob = await res.blob();
@@ -401,13 +638,13 @@ async function refreshConversations() {
   const { body } = await api('/api/conversations');
   const list = body.conversations || [];
   if (list.length === 0) {
-    $('convList').innerHTML = '<p class="hint" style="padding:8px">还没有会话。</p>';
+    $('convList').innerHTML = `<p class="hint" style="padding:8px">${t('noConversations')}</p>`;
     return;
   }
   $('convList').innerHTML = list.map((v) => `
     <button class="conv ${v.id === conversationId ? 'active' : ''}" data-conv="${esc(v.id)}">
       <span class="ct">${esc(v.title)}</span>
-      <span class="cm">${v.messageCount} 条${v.quoteCount ? ` · ${v.quoteCount} 份报价` : ''}</span>
+      <span class="cm">${t('msgCount', v.messageCount, v.quoteCount || 0)}</span>
     </button>`).join('');
 }
 
@@ -419,30 +656,43 @@ $('convList').addEventListener('click', async (e) => {
 
 /** 切到另一段会话：重放它的消息，产出物栏清空（那是上一段会话的东西）。 */
 async function openConversation(id) {
-  const { ok, body } = await api(`/api/conversations/${id}`);
+  const companyQ = currentCompanyId()
+    ? `?companyId=${encodeURIComponent(currentCompanyId())}` : '';
+  const { ok, body } = await api(`/api/conversations/${id}${companyQ}`);
   if (!ok) return;
   conversationId = id;
   floorPlanId = null; layout = null; currentQuote = null;
   stepIndex = 0; renderSteps();
   clearArtifacts();
   quickBlock = null;
+  if (fpBlock) { fpBlock.remove(); fpBlock = null; }
   gates.fpReady = false; gates.layoutOk = false; gates.layoutBlocked = false; refreshGates();
   const history = body.conversation.messages || [];
+  setUiLang(body.language || body.conversation?.preferences?.shared?.language || 'en');
+  resetConfirmed();
+  confirmed.prefs = body.conversation.preferences || null;
+  confirmed.requirements = body.conversation.designRequirements || '';
+  syncCompanyConfirmed();
+  if (body.designBrief) applyDesignBrief(body.designBrief);
+  if (designConsentBlock) { designConsentBlock.remove(); designConsentBlock = null; }
   $('content').innerHTML = history.length
-    ? '<p class="hint">已切到这段会话。产出物需要重新生成——图纸与报价都带着时间戳，不能跨会话复用。</p>'
-    : '<p class="hint">流程：上传户型图 → 补齐尺寸 → 自动排布出四视图 → 生成报价 → 确认发送。</p>';
+    ? `<p class="hint">${t('switchedConv')}</p>`
+    : `<p class="hint">${t('flowHint')}</p>`;
   $('chatLog').innerHTML = '';
   // 「这里卖的是 RTA」**每段会话都摆在最前面**，不只是新会话。
-  // 只在第一次说，回头再来的客户就再也看不到了——而他正是最可能
-  // 按定制的预期下单的那个人。措辞由服务端给（`/api/me/profile` 的
-  // rtaIntro），与助手在对话里说的、报价单末尾写的是同一份。
-  if (profile?.rtaIntro) addMsg('system', profile.rtaIntro);
+  // 措辞由服务端按会话语言给（`rtaIntro`），与助手在对话里说的、报价单末尾写的是同一份。
+  if (body.rtaIntro) addMsg('system', body.rtaIntro);
+  else if (profile?.rtaIntroByLang?.[uiLang]) addMsg('system', profile.rtaIntroByLang[uiLang]);
+  else if (profile?.rtaIntro) addMsg('system', profile.rtaIntro);
   if (history.length === 0) {
-    addMsg('assistant', '你好，我是橱柜设计顾问。先聊聊你的项目——厨房大概多大？喜欢什么风格？预算范围？所在省份？\n\n想问某家公司的具体细节，用 @公司名 点名（例如 @枫岭橱柜 / @湖畔厨柜）。');
+    addMsg('assistant', body.welcome ||
+      "Hi — I'm your cabinet design assistant. To get started: roughly how big is the kitchen, what style do you like, what's your budget range, and which province are you in?\n\nFor a specific seller, @ the company name (e.g. @MapleRidgeCabinets).");
   }
   for (const m of history) addMsg(m.role, m.content);
   await refreshConversations();
   scrollChatToBottom();
+  switchPanelTab('confirmed');
+  await maybeOfferDesign({ allowWithoutFloor: true });
 }
 
 /**
@@ -461,13 +711,16 @@ async function startNewConversation() {
 $('newConvBtn').addEventListener('click', startNewConversation);
 
 async function boot() {
+  applyChrome();
   renderSteps();
-  refreshGates();  // 一进来就把「② 还不能点，因为……」写出来
+  refreshGates();
+  renderConfirmed();
   await loadProfile();
   const { body } = await api('/api/companies');
-  $('companySel').innerHTML = (body.companies || [])
-    .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
-  if (body.companies?.length) await loadSpec(body.companies[0].id);
+  companiesList = body.companies || [];
+  if (companiesList.length) await selectCompany(companiesList[0].id, { announce: false });
+  else syncCompanyConfirmed();
+  setupComposer();
   await resumeOrCreateConversation();
 }
 
@@ -496,7 +749,7 @@ async function loadProfile() {
   const { body } = await api('/api/me/profile');
   profile = body;
   const eff = body.effectiveAccountType || 'consumer';
-  $('acctBadge').textContent = body.accountType === eff ? eff : `${body.accountType} → 按 ${eff} 定价`;
+  $('acctBadge').textContent = body.accountType === eff ? eff : t('pricingAs', body.accountType, eff);
   $('projBtn').style.display = body.accountType === 'trade' ? '' : 'none';
 }
 
@@ -506,7 +759,8 @@ $('acctSel').addEventListener('change', async (e) => {
   stepIndex = 0; renderSteps();
   $('quoteStatus').style.display = 'none';
   gates.fpReady = false; gates.layoutOk = false; gates.layoutBlocked = false; refreshGates();
-  $('content').innerHTML = '<p class="hint">已切换账号，会话已重建。</p>';
+  resetConfirmed();
+  $('content').innerHTML = `<p class="hint">${t('switchedAcct')}</p>`;
   await loadProfile();
   clearArtifacts();
   $('chatLog').innerHTML = '';
@@ -516,10 +770,13 @@ $('acctSel').addEventListener('change', async (e) => {
 // ── 建商：项目列表与资质核实 ──
 $('projBtn').addEventListener('click', renderProjects);
 
-const PROJECT_STATUS = {
-  collecting: '收集需求', designing: '已出方案', quoted: '已报价',
-  sent: '已发送', dormant: '沉寂',
-};
+function projectStatusLabel(s) {
+  const map = {
+    collecting: t('statusCollecting'), designing: t('statusDesigning'), quoted: t('statusQuoted'),
+    sent: t('statusSent'), dormant: t('statusDormant'),
+  };
+  return map[s] || s;
+}
 
 async function renderProjects() {
   const { body } = await api('/api/me/projects');
@@ -528,7 +785,7 @@ async function renderProjects() {
 
   const rows = projects.map((x) => `<tr>
     <td>${esc(x.title)}</td>
-    <td><span class="status-pill ${x.status === 'sent' ? 'sent' : x.status === 'dormant' ? 'failed' : ''}">${esc(PROJECT_STATUS[x.status] || x.status)}</span></td>
+    <td><span class="status-pill ${x.status === 'sent' ? 'sent' : x.status === 'dormant' ? 'failed' : ''}">${esc(projectStatusLabel(x.status))}</span></td>
     <td class="num">${x.companyCount}</td>
     <td class="num">${x.quoteCount}</td>
     <td class="num">${x.lowestQuote ? esc(x.lowestQuote.formatted) : '—'}</td>
@@ -537,14 +794,15 @@ async function renderProjects() {
   const dormant = (p.dormant || []).length;
   $('content').innerHTML = `
     <div class="card">
-      <h3>我的项目（${projects.length}）</h3>
-      ${projects.length ? `<table><thead><tr><th>项目</th><th>状态</th><th class="num">公司数</th>
-        <th class="num">报价数</th><th class="num">最低报价</th><th class="num">闲置天数</th></tr></thead>
-        <tbody>${rows}</tbody></table>` : '<p class="hint">还没有项目。在左侧开始一段对话即可。</p>'}
-      ${dormant ? `<p class="hint" style="margin-top:10px">有 ${dormant} 个项目超过 30 天没有动静，可能需要跟进。</p>` : ''}
-      <p class="hint" style="margin-top:10px">已发送报价合计：${esc(body.portfolioFormatted || '—')}</p>
+      <h3>${t('projectsTitle', projects.length)}</h3>
+      ${projects.length ? `<table><thead><tr><th>${t('project')}</th><th>${t('status')}</th><th class="num">${t('companies')}</th>
+        <th class="num">${t('quotes')}</th><th class="num">${t('lowestQuote')}</th><th class="num">${t('idleDays')}</th></tr></thead>
+        <tbody>${rows}</tbody></table>` : `<p class="hint">${t('noProjects')}</p>`}
+      ${dormant ? `<p class="hint" style="margin-top:10px">${t('dormantHint', dormant)}</p>` : ''}
+      <p class="hint" style="margin-top:10px">${t('portfolio', esc(body.portfolioFormatted || '—'))}</p>
     </div>
     ${renderTradeGate()}`;
+  showOutputs();
   const btn = $('verifyBtn');
   if (btn) btn.addEventListener('click', submitVerification);
 }
@@ -554,18 +812,17 @@ function renderTradeGate() {
   if (!profile || profile.accountType !== 'trade') return '';
   const gate = profile.tradePricing || {};
   if (gate.allowed) {
-    return `<div class="card"><h3>贸易价已生效</h3>
-      <p class="hint">资质已通过审核，订阅有效。报价按贸易价计算，折扣明细会逐项列出。</p></div>`;
+    return `<div class="card"><h3>${t('tradeOkTitle')}</h3>
+      <p class="hint">${t('tradeOkBody')}</p></div>`;
   }
   const form = gate.nextStep === 'submitVerification' || gate.nextStep === 'resubmit'
-    ? `<div class="q"><input id="legalName" placeholder="公司注册名称" style="width:200px" /></div>
-       <div class="q"><input id="bizNumber" placeholder="营业执照号 / GST 号" style="width:200px" /></div>
-       <button id="verifyBtn">提交资质核实</button>
-       <p class="hint" style="margin-top:8px">只需要编号与注册名，<b>不需要上传证件影像</b>——
-       核实只需一个可查证的号码，留存影像会平白扩大泄露面。</p>`
+    ? `<div class="q"><input id="legalName" placeholder="${t('legalName')}" style="width:200px" /></div>
+       <div class="q"><input id="bizNumber" placeholder="${t('bizNumber')}" style="width:200px" /></div>
+       <button id="verifyBtn">${t('submitVerify')}</button>
+       <p class="hint" style="margin-top:8px">${t('verifyHint')}</p>`
     : '';
   return `<div class="card">
-    <h3>当前按零售价报价</h3>
+    <h3>${t('retailTitle')}</h3>
     <p class="hint">${esc(gate.reason || '')}</p>
     ${form}</div>`;
 }
@@ -584,19 +841,17 @@ async function submitVerification() {
 }
 
 async function loadSpec(companyId) {
+  if (!companyId) { spec = null; return; }
   const { body } = await api(`/api/companies/${companyId}/spec`);
   spec = body;
-  $('doorSel').innerHTML = (body.doorStyles || [])
-    .map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join('');
+  if (!selectedDoorStyleId && body.doorStyles?.[0]) {
+    selectedDoorStyleId = body.doorStyles[0].id;
+  }
 }
-$('companySel').addEventListener('change', (e) => {
-  // 换了公司，上一版方案是上一家的型号排出来的，不能拿它去这一家出报价
-  loadSpec(e.target.value); layout = null;
-  gates.layoutOk = false; gates.layoutBlocked = false; refreshGates();
-});
 
 $('chatForm').addEventListener('submit', (e) => {
   e.preventDefault();
+  hideSuggest();
   const text = $('chatInput').value.trim();
   $('chatInput').value = '';
   sendChat(text);
@@ -610,11 +865,128 @@ async function sendChat(text) {
   const { body } = await api(`/api/conversations/${conversationId}/messages`, {
     method: 'POST', body: JSON.stringify({ text }),
   });
+  if (body.language) setUiLang(body.language);
   for (const r of body.replies || []) addMsg('assistant', r.content);
-  if (!body.replies?.length) addMsg('assistant', body.error || '（无响应）');
+  if (!body.replies?.length) addMsg('assistant', body.error || t('noResponse'));
+  if (body.requirements != null) confirmed.requirements = body.requirements;
+  if (body.missingFields) confirmed.missingFields = body.missingFields;
+  if (body.designBrief) applyDesignBrief(body.designBrief);
+  else renderConfirmed();
   renderQuickReplies(body.quickReplies || []);
-  renderQuestions(body.questions || [], body.questionCompanyId || $('companySel').value);
+  renderQuestions(body.questions || [], body.questionCompanyId || currentCompanyId());
+  if (body.designPrompt) renderDesignConsent(body.designPrompt);
+  else await maybeOfferDesign();
   refreshConversations();
+}
+
+/** 出图确认卡：资料齐后主动问「要不要根据需求出设计」。 */
+let designConsentBlock = null;
+
+function renderDesignConsent(prompt) {
+  if (!prompt || prompt.awaiting !== 'drawingConsent') return;
+  if (designConsentBlock) { designConsentBlock.remove(); designConsentBlock = null; }
+  const box = document.createElement('div');
+  box.className = 'msg interactive';
+  box.innerHTML = `
+    <div class="qcard">
+      <div class="qp">${esc(prompt.message).replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')}</div>
+      <div class="opts" style="margin-top:8px">
+        ${(prompt.actions || []).map((a) =>
+          `<button type="button" class="opt" data-design-action="${esc(a.id)}"><span class="ol">${esc(a.label)}</span></button>`
+        ).join('')}
+      </div>
+    </div>`;
+  box.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-design-action]');
+    if (!btn) return;
+    const action = btn.dataset.designAction;
+    if (action === 'yes') await acceptDesignConsent();
+    else if (action === 'notYet') await deferDesignConsent();
+  });
+  $('chatLog').appendChild(box);
+  designConsentBlock = box;
+  scrollChatToBottom();
+  switchPanelTab('confirmed');
+}
+
+async function maybeOfferDesign(opts = {}) {
+  const companyId = currentCompanyId();
+  if (!conversationId || !companyId) return;
+  // 户型未齐也可拉 designBrief 刷新 Tab1；出图确认仍要等几何就绪
+  if (!gates.fpReady && !opts.allowWithoutFloor) return;
+  const { ok, body } = await api(
+    `/api/conversations/${conversationId}/design?companyId=${encodeURIComponent(companyId)}`);
+  if (!ok) return;
+  if (body.missingFields) {
+    confirmed.missingFields = body.missingFields;
+  }
+  if (body.designBrief) applyDesignBrief(body.designBrief);
+  else renderConfirmed();
+  if (gates.fpReady && body.prompt?.awaiting === 'drawingConsent') {
+    renderDesignConsent(body.prompt);
+  }
+}
+
+async function acceptDesignConsent() {
+  const companyId = currentCompanyId();
+  const { ok, body } = await api(`/api/conversations/${conversationId}/design/advance`, {
+    method: 'POST',
+    body: JSON.stringify({ companyId, action: 'consent' }),
+  });
+  if (!ok) {
+    addMsg('system', body.error || t('submitFail'));
+    return;
+  }
+  if (designConsentBlock) {
+    designConsentBlock.innerHTML = `<div class="qw">${t('designStarting')}</div>`;
+    designConsentBlock = null;
+  }
+  addMsg('assistant', body.prompt?.message || t('designStarting'));
+
+  if (!floorPlanId) {
+    addMsg('system', t('gateNeedFloor').replace(/<[^>]+>/g, ''));
+    return;
+  }
+  const pv = await api(`/api/floorplans/${floorPlanId}/plan-view`, {
+    method: 'POST', body: JSON.stringify({ companyId }),
+  });
+  if (!pv.ok) {
+    addMsg('system', pv.body.error || t('submitFail'));
+    return;
+  }
+  $('content').innerHTML = `
+    <div class="card">
+      <h3>${t('planViewTitle')}</h3>
+      <div class="views">
+        <div class="view">${pv.body.planViews?.base || ''}<div class="cap">${t('viewTopBase')}</div></div>
+        <div class="view">${pv.body.planViews?.wall || ''}<div class="cap">${t('viewTopWall')}</div></div>
+      </div>
+      <p class="hint" style="margin-top:8px">${t('planViewHint')}</p>
+      <button type="button" id="approvePlanBtn">${t('approvePlan')}</button>
+      <button type="button" class="ghost" id="fullLayoutBtn">${t('genLayout')}</button>
+    </div>`;
+  showOutputs();
+  $('approvePlanBtn')?.addEventListener('click', async () => {
+    await api(`/api/conversations/${conversationId}/design/advance`, {
+      method: 'POST', body: JSON.stringify({ companyId, action: 'approvePlan' }),
+    });
+    addMsg('assistant', t('planApproved'));
+    await runGenerateLayout();
+  });
+  $('fullLayoutBtn')?.addEventListener('click', () => runGenerateLayout());
+}
+
+async function deferDesignConsent() {
+  const companyId = currentCompanyId();
+  await api(`/api/conversations/${conversationId}/design/advance`, {
+    method: 'POST',
+    body: JSON.stringify({ companyId, action: 'defer' }),
+  });
+  if (designConsentBlock) {
+    designConsentBlock.innerHTML = `<div class="qw">${t('designDeferred')}</div>`;
+    designConsentBlock = null;
+  }
+  addMsg('assistant', t('designDeferred'));
 }
 
 // ── 价格与偏好的选择题 ────────────────────────────────────────────────────
@@ -656,12 +1028,12 @@ function renderQuestions(questions, companyId) {
       <div class="qw">${esc(q.why)}</div>
       <div class="opts">${q.options.map((o, oi) => `
         <button class="opt" data-o="${oi}">
-          <span class="ol">${esc(o.label)}${o.recommended ? ' <span class="rec">· 常见选择</span>' : ''}</span>
+          <span class="ol">${esc(o.label)}${o.recommended ? ` <span class="rec">${t('popular')}</span>` : ''}</span>
           ${o.detail ? `<span class="od">${esc(o.detail)}</span>` : ''}
           <span class="op">${esc(o.priceNote)}</span>
         </button>`).join('')}</div>
-      ${q.multiSelect ? '<button class="qskip" data-done="1">选好了 / 都不需要</button>'
-                      : q.skippable ? '<button class="qskip" data-skip="1">跳过这一题</button>' : ''}
+      ${q.multiSelect ? `<button class="qskip" data-done="1">${t('doneNone')}</button>`
+                      : q.skippable ? `<button class="qskip" data-skip="1">${t('skipQ')}</button>` : ''}
     </div>`).join('');
 
   // 数据与卡片绑在一起
@@ -698,7 +1070,7 @@ function submitMulti(card) {
   const q = card._q;
   const picked = [...card.querySelectorAll('.opt.sel')].map((b) => q.options[Number(b.dataset.o)]);
   savePreference(q.key, picked.map((o) => o.id), card._companyId, card,
-    picked.length ? picked.map((o) => o.label).join('、') : '都不需要');
+    picked.length ? picked.map((o) => o.label).join(', ') : 'None needed');
 }
 
 /** 偏好 key → 请求体字段。多选题传数组。 */
@@ -716,7 +1088,7 @@ async function savePreference(key, value, companyId, card, label) {
   const field = PREF_FIELD[key];
   if (!field) {
     card.insertAdjacentHTML('beforeend',
-      `<div class="err">这一题（${esc(key)}）暂时记不下来，请直接在对话里说一句，我来记。</div>`);
+      `<div class="err">${esc(t('cantSave', key))}</div>`);
     return;
   }
   let ok, body;
@@ -728,138 +1100,275 @@ async function savePreference(key, value, companyId, card, label) {
   } catch (err) {
     // 网络断了而按钮毫无反应，看起来就是"按钮坏了"——把真正的原因说出来
     card.insertAdjacentHTML('beforeend',
-      `<div class="err">没能提交（${esc(err.message || err)}），请重试。</div>`);
+      `<div class="err">${esc(t('networkFail', err.message || err))}</div>`);
     return;
   }
   if (!ok) {
-    card.insertAdjacentHTML('beforeend', `<div class="err">${esc(body.error || '提交失败')}</div>`);
+    card.insertAdjacentHTML('beforeend', `<div class="err">${esc(body.error || t('submitFail'))}</div>`);
     return;
   }
-  card.innerHTML = `<div class="qw">已记录：<b style="color:#e6e8eb">${esc(label)}</b>` +
-    (body.layoutAffected ? '　<span style="color:#d8c37b">（会改变排布，重新生成方案后生效）</span>' : '') +
+  card.innerHTML = `<div class="qw">${t('saved')} <b style="color:#e6e8eb">${esc(label)}</b>` +
+    (body.layoutAffected ? `　<span style="color:#d8c37b">${t('layoutAffected')}</span>` : '') +
     '</div>';
   // 门板一旦选定，下游的报价就用它——顺手同步到下拉框，免得两处不一致
-  if (key === 'doorStyle') $('doorSel').value = value;
+  if (key === 'doorStyle') {
+    selectedDoorStyleId = value;
+    confirmed.doorStyleId = value;
+    confirmed.doorStyleName = label;
+  }
+  // 服务端返回的是展平的 prefsFor，本地维护嵌套结构供右栏汇总
+  const cid = companyId || currentCompanyId();
+  const prefs = confirmed.prefs || { shared: {}, byCompany: {} };
+  const sharedKeys = new Set(['budgetBand', 'storage', 'tradeoff', 'assembly']);
+  if (sharedKeys.has(field)) {
+    prefs.shared = { ...(prefs.shared || {}), [field]: value };
+  } else if (cid) {
+    prefs.byCompany = prefs.byCompany || {};
+    prefs.byCompany[cid] = { ...(prefs.byCompany[cid] || {}), [field]: value };
+  }
+  confirmed.prefs = prefs;
+  renderConfirmed();
+  switchPanelTab('confirmed');
 }
 
-// ── ① 上传户型图 ──
-/** 超过这个大小就不往上传了——base64 会再涨三分之一，请求体会大得离谱。 */
+// ── ① 上传户型图（输入框 +）──
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 const readAsDataUrl = (file) => new Promise((resolve, reject) => {
   const r = new FileReader();
   r.onload = () => resolve(String(r.result));
-  r.onerror = () => reject(r.error ?? new Error('读不出这个文件'));
+  r.onerror = () => reject(r.error ?? new Error(t('fileReadFail')));
   r.readAsDataURL(file);
 });
 
-$('uploadBtn').addEventListener('click', async () => {
+function triggerUpload() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*,.pdf';
   input.addEventListener('change', async () => {
     const file = input.files?.[0];
+    if (!file || !conversationId) return;
 
-    // **图片内容必须真的传上去。**
-    //
-    // 这里以前只传文件名、类型和大小——服务端收到的 `image` 永远是 undefined，
-    // 于是视觉抽取那条路一次都没走过：配没配模型、端点对不对，从界面上完全
-    // 试不出来，每次上传都直接落到"请手动录入尺寸"。
     let image;
-    if (file) {
-      if (file.size > MAX_UPLOAD_BYTES) {
-        addMsg('system', `这张图 ${(file.size / 1048576).toFixed(1)}MB，超过 8MB 上传上限。` +
-          '压缩一下再传，或者直接手动录入尺寸。');
-      } else {
-        try { image = await readAsDataUrl(file); }
-        catch (err) {
-          addMsg('system', `没能读取这个文件（${err.message || err}），可以先手动录入尺寸。`);
-        }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      addMsg('system', t('tooBig', (file.size / 1048576).toFixed(1)));
+    } else {
+      try { image = await readAsDataUrl(file); }
+      catch (err) {
+        addMsg('system', t('readFailHint', err.message || err));
       }
     }
 
+    addMsg('user', t('uploadedFile', file.name));
     const { body } = await api(`/api/conversations/${conversationId}/floorplan`, {
       method: 'POST',
       body: JSON.stringify({
-        fileName: file?.name ?? 'floorplan.png',
-        mimeType: file?.type ?? 'image/png',
-        sizeBytes: file?.size ?? 0,
+        fileName: file.name,
+        mimeType: file.type || 'image/png',
+        sizeBytes: file.size,
         ...(image ? { image } : {}),
       }),
     });
     floorPlanId = body.floorPlan?.id;
     stepIndex = 1; renderSteps();
-    // 「为什么没读出东西」要说出来：没配模型 / 没收到图 / 模型报错 / 图太糊，
-    // 四种情况看起来一样，但要做的事完全不同
     if (body.extractionNote) addMsg('system', body.extractionNote);
-    renderFloorPlan(body);
+    await renderFloorPlan(body);
   });
   input.click();
-});
+}
 
-function renderFloorPlan(body) {
+/** 户型尺寸补录：交互在主会话，右栏 Outputs 只读摘要。 */
+async function renderFloorPlan(body) {
   const questions = body.questions || [];
   const runs = body.floorPlan?.parsedGeometry?.wallRuns || [];
-  const runRows = runs.map((r) => `<tr><td>${esc(r.label)}</td><td class="num">${r.length}"</td></tr>`).join('');
+  const ceilingHeight = body.floorPlan?.parsedGeometry?.ceilingHeight;
 
+  confirmed.floorPlan = {
+    ready: !!body.ready,
+    wallRuns: runs,
+    ceilingHeight: body.floorPlan?.parsedGeometry?.ceilingHeight,
+  };
+  renderConfirmed();
+
+  // 右栏 Outputs：只读摘要（不含输入控件）
+  const runRows = runs.map((r) => `<tr><td>${esc(r.label)}</td><td class="num">${r.length}"</td></tr>`).join('');
   $('content').innerHTML = `
     <div class="card">
-      <h3>户型信息 ${body.ready ? '<span class="status-pill sent">已就绪</span>' : '<span class="status-pill">待补齐</span>'}</h3>
-      ${runs.length ? `<table><thead><tr><th>墙段</th><th class="num">长度</th></tr></thead><tbody>${runRows}</tbody></table>` : ''}
-      ${questions.length ? `
-        <p class="hint" style="margin-top:10px">系统对拿不准的地方逐条追问，不会静默跳过任何一段墙：</p>
-        ${questions.map((q) => `<div class="q">· ${esc(q.question)}</div>`).join('')}
-        <div class="q" style="margin-top:10px">
-          <span>加一段墙：</span>
-          <input id="runLabel" placeholder="如 北墙" style="width:110px" />
-          <input id="runLen" type="number" placeholder="英寸" />
-          <button id="addRunBtn">添加</button>
-        </div>
-        <div class="q">
-          <span>天花板高度：</span>
-          <input id="ceil" type="number" value="96" />
-          <button id="ceilBtn">确认</button>
-        </div>` : ''}
+      <h3>${t('fpHeading')} ${body.ready
+        ? `<span class="status-pill sent">${t('ready')}</span>`
+        : `<span class="status-pill">${t('pending')}</span>`}</h3>
+      ${runs.length
+        ? `<table><thead><tr><th>${t('wallCol')}</th><th class="num">${t('lenCol')}</th></tr></thead><tbody>${runRows}</tbody></table>`
+        : `<p class="hint">${t('noWallsYet')}</p>`}
+      <p class="hint" style="margin-top:8px">${t('ceiling')}: ${ceilingHeight != null ? `${ceilingHeight}"` : '—'}</p>
+      ${!body.ready ? `<p class="hint" style="margin-top:8px">${t('fpAskInChat')}</p>` : ''}
     </div>`;
 
-  if ($('addRunBtn')) {
-    $('addRunBtn').addEventListener('click', () => resolveFp({
-      addRun: { label: $('runLabel').value || '墙段', length: Number($('runLen').value) || 0 },
+  // 主会话：需要确认/录入时弹出交互卡
+  if (fpBlock) { fpBlock.remove(); fpBlock = null; }
+  if (!body.ready || questions.length) {
+    const box = document.createElement('div');
+    box.className = 'msg interactive';
+    box.innerHTML = `
+      <div class="qcard">
+        <div class="qp">${t('fpHeading')} ${body.ready
+          ? `<span class="status-pill sent">${t('ready')}</span>`
+          : `<span class="status-pill">${t('pending')}</span>`}</div>
+        ${questions.length ? `
+          <div class="qw">${t('askHint')}</div>
+          ${questions.map((q) => `<div class="hint">· ${esc(q.question)}</div>`).join('')}
+        ` : `<div class="qw">${t('askHint')}</div>`}
+        <div class="q" style="margin-top:10px;flex-wrap:wrap">
+          <span>${t('addWall')}</span>
+          <input id="runLabel" placeholder="${t('phWall')}" style="width:110px" />
+          <input id="runLen" type="number" placeholder="${t('phInches')}" />
+          <button type="button" id="addRunBtn">${t('add')}</button>
+        </div>
+        <div class="q" style="flex-wrap:wrap">
+          <span>${t('ceiling')}</span>
+          <input id="ceil" type="number" value="${ceilingHeight != null ? ceilingHeight : 96}" />
+          <button type="button" id="ceilBtn">${t('confirm')}</button>
+        </div>
+      </div>`;
+    $('chatLog').appendChild(box);
+    fpBlock = box;
+    $('addRunBtn')?.addEventListener('click', () => resolveFp({
+      addRun: { label: $('runLabel').value || t('defaultWall'), length: Number($('runLen').value) || 0 },
     }));
-    $('ceilBtn').addEventListener('click', () => resolveFp({ ceilingHeight: Number($('ceil').value) }));
+    $('ceilBtn')?.addEventListener('click', () => resolveFp({ ceilingHeight: Number($('ceil').value) }));
+    scrollChatToBottom();
   }
+
   gates.fpReady = !!body.ready; refreshGates();
-  if (body.ready) { stepIndex = 2; renderSteps(); }
+  if (body.ready) { stepIndex = 2; renderSteps(); await maybeOfferDesign(); }
+  else {
+    await maybeOfferDesign({ allowWithoutFloor: true });
+    showOutputs();
+  }
 }
 
 async function resolveFp(patch) {
   const { body } = await api(`/api/floorplans/${floorPlanId}/resolve`, {
     method: 'POST', body: JSON.stringify(patch),
   });
-  renderFloorPlan(body);
+  await renderFloorPlan(body);
+  if (body.ready) switchPanelTab('confirmed');
 }
 
-// ── ② 生成方案 ──
-$('layoutBtn').addEventListener('click', async () => {
+// ── 生成方案 / 报价（由会话确认或 / 命令触发，无顶部硬按钮）──
+async function runGenerateLayout() {
+  if (!floorPlanId) {
+    addMsg('system', t('gateNeedFloor').replace(/<[^>]+>/g, ''));
+    return;
+  }
+  if (!gates.fpReady) {
+    addMsg('system', t('gateNeedSizes').replace(/<[^>]+>/g, ''));
+    return;
+  }
+  const companyId = currentCompanyId();
   const { ok, body } = await api(`/api/floorplans/${floorPlanId}/layout`, {
-    method: 'POST', body: JSON.stringify({ companyId: $('companySel').value }),
+    method: 'POST', body: JSON.stringify({ companyId }),
   });
   if (!ok) {
-    // 服务端拒绝时把理由摆在闸门那一行，别只在正文里一闪而过
+    addMsg('system', body.error || t('submitFail'));
     $('content').innerHTML = `<div class="err">${esc(body.error)}</div>`;
     gates.layoutOk = false; refreshGates();
+    showOutputs();
     return;
   }
   layout = body;
   stepIndex = 3; renderSteps();
   renderLayout(body);
-});
+  addMsg('assistant', t('layoutReadyChat'));
+}
 
-const VIEW_NAMES = { front: '正视图', topBase: '俯视图 · 地柜层', topWall: '俯视图 · 吊柜层', side: '侧视图' };
+async function runGetQuote() {
+  if (!layout) {
+    addMsg('system', t('gateNeedLayout').replace(/<[^>]+>/g, ''));
+    return;
+  }
+  if (!gates.layoutOk) {
+    addMsg('system', (gates.layoutBlocked ? t('gateErgo') : t('gateNeedLayout')).replace(/<[^>]+>/g, ''));
+    return;
+  }
+  const { ok, body } = await api('/api/quotes', {
+    method: 'POST',
+    body: JSON.stringify({
+      companyId: currentCompanyId(), conversationId,
+      doorStyleId: currentDoorStyleId(), selections: layout.selections,
+    }),
+  });
+  if (!ok) {
+    const detail = (body.issues || []).map((i) => `${i.code}: ${i.message}`)
+      .concat((body.ergonomics || []).map((v) => v.message))
+      .join('\n');
+    addMsg('system', `${t('quoteRejected')}\n${detail || body.error}`);
+    $('content').innerHTML = `<div class="err">${t('quoteRejected')}\n${esc(detail || body.error)}</div>`;
+    showOutputs();
+    return;
+  }
+  currentQuote = body.quote;
+  lastTradeNotice = body.tradePricing || null;
+  lastFinishes = body.finishComparison || null;
+  stepIndex = 4; renderSteps();
+  renderQuote();
+  registerArtifact(t('quotePdf', currentQuote.id), 'application/pdf',
+    { url: `/api/quotes/${currentQuote.id}/pdf` });
+  addMsg('assistant', t('quoteReadyChat'));
+}
+
+async function runCompare() {
+  const { body } = await api(`/api/conversations/${conversationId}/comparison`);
+  const cmp = body.comparison;
+  if (!cmp || cmp.rows.length === 0) {
+    addMsg('system', t('noCompare'));
+    $('content').innerHTML = `<p class="hint">${t('noCompare')}</p>`;
+    showOutputs();
+    return;
+  }
+  const rows = cmp.rows.map((r, i) => `<tr>
+    <td>${esc(r.companyName)}${i === 0 ? ` <span class="cmp-lowest">${t('lowest')}</span>` : ''}</td>
+    <td class="num">${money(r.netBeforeTax)}</td>
+    <td class="num">${money(r.shipping)}</td>
+    <td class="num">${money(r.taxTotal)}</td>
+    <td class="num">${money(r.total)}</td>
+    <td class="num">${r.deltaFromLowest === 0 ? '—' : '+' + money(r.deltaFromLowest)}</td></tr>`).join('');
+  const warns = (cmp.warnings || []).map((w) => `<div class="err">· ${esc(w.message)}</div>`).join('');
+  $('content').innerHTML = `
+    <div class="card">
+      <h3>${t('multiCompare')}</h3>
+      <table><thead><tr><th>${t('company')}</th><th class="num">${t('pretax')}</th><th class="num">${t('shipping')}</th>
+        <th class="num">${t('tax')}</th><th class="num">${t('total')}</th><th class="num">${t('delta')}</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      ${warns}
+      <p class="hint" style="margin-top:10px">${t('compareHint')}</p>
+    </div>`;
+  showOutputs();
+  addMsg('assistant', t('compareReadyChat'));
+}
+
+async function pullPreferenceQuestions() {
+  const companyId = currentCompanyId();
+  if (!companyId) {
+    addMsg('system', t('needCompanyFirst'));
+    return;
+  }
+  const { body } = await api(
+    `/api/conversations/${conversationId}/questions?companyId=${encodeURIComponent(companyId)}`);
+  if (!body.questions?.length) {
+    addMsg('system', t('noPrefsLeft'));
+    if (body.note) addMsg('system', body.note);
+    return;
+  }
+  if (body.note) addMsg('system', body.note);
+  renderQuestions(body.questions, companyId);
+}
+
+const VIEW_NAMES = () => ({ front: t('viewFront'), topBase: t('viewTopBase'), topWall: t('viewTopWall'), side: t('viewSide') });
 
 const SCORE_LABELS = {
-  widthRhythm: '宽度节奏', narrowPenalty: '避免窄柜',
-  seamAlignment: '上下对缝', symmetry: '对称性', fillerPlacement: '填缝条位置',
+  widthRhythm: t('scoreRhythm'), narrowPenalty: t('scoreNarrow'),
+  seamAlignment: t('scoreSeam'), symmetry: t('scoreSym'), fillerPlacement: t('scoreFiller'),
 };
 
 function renderLayout(body) {
@@ -872,13 +1381,13 @@ function renderLayout(body) {
   const advisory = (body.ergonomics || []).filter((v) => v.severity === 'advisory');
   const ergoBlock = blocking.length ? `
     <div class="card" style="border-color:#7a3a3a">
-      <h3>⛔ 这版方案用起来有问题，需要先调整</h3>
+      <h3>${t('blockedTitle')}</h3>
       ${blocking.map((v) => `<div class="err">· ${esc(v.message)}</div>`).join('')}
-      <p class="hint">这些是安全与使用便利的底线（依据北美 NKBA 厨房规划指南），不是省钱与否的取舍，所以暂时不能出报价。</p>
+      <p class="hint">${t('blockedHint')}</p>
     </div>` : '';
   const advisoryBlock = advisory.length ? `
     <div class="card">
-      <h3>建议</h3>
+      <h3>${t('advice')}</h3>
       ${advisory.map((v) => `<div class="hint">· ${esc(v.message)}</div>`).join('')}
     </div>` : '';
 
@@ -895,9 +1404,9 @@ function renderLayout(body) {
     }).join('');
     const notes = (a.score.notes || []).map((n) => `<div class="hint">· ${esc(n)}</div>`).join('');
     return `<div class="card">
-      <h3>排布质量 <span class="status-pill">${a.score.total} / 100</span></h3>
+      <h3>${t('quality')} <span class="status-pill">${a.score.total} / 100</span></h3>
       ${bars}${notes ? `<div style="margin-top:8px">${notes}</div>` : ''}
-      <p class="hint" style="margin-top:8px">评分只影响观感，不影响能否下单；上面的 ⛔ 项才是硬性要求。</p>
+      <p class="hint" style="margin-top:8px">${t('qualityHint')}</p>
     </div>`;
   }).join('');
   // 图纸解释：这是什么图（全局一份）+ 为什么这么排（每段墙一份）。
@@ -911,7 +1420,7 @@ function renderLayout(body) {
   for (const r of body.views) {
     for (const k of ['front', 'topBase', 'topWall', 'side']) {
       const svg = r.views[k];
-      if (svg) registerArtifact(`${r.runLabel}-${VIEW_NAMES[k]}.svg`, 'image/svg+xml', svg);
+      if (svg) registerArtifact(`${r.runLabel}-${VIEW_NAMES()[k]}.svg`, 'image/svg+xml', svg);
     }
   }
 
@@ -920,18 +1429,18 @@ function renderLayout(body) {
       <h3>${esc(r.runLabel)}</h3>
       <div class="views">
         ${['front','topBase','topWall','side'].map((k) => `
-          <div class="view">${r.views[k]}<div class="cap">${VIEW_NAMES[k]}</div></div>`).join('')}
+          <div class="view">${r.views[k]}<div class="cap">${VIEW_NAMES()[k]}</div></div>`).join('')}
       </div>
       ${rationaleOf(r.runId)}
       <div style="margin-top:8px">
-        <button class="ghost" data-run="${esc(r.runId)}" onclick="regen(this.dataset.run)">重新排布这段墙</button>
+        <button class="ghost" data-run="${esc(r.runId)}" onclick="regen(this.dataset.run)">${t('regenWall')}</button>
       </div>
     </div>`).join('');
 
   // 「怎么看这几张图」默认折叠——第一次看的人需要，看过的人不需要每次都看
   const guideBlock = exp.viewGuideHtml
     ? `<div class="card"><details class="x-more" open>
-         <summary>第一次看这几张图？点开有说明</summary>
+         <summary>${t('firstLook')}</summary>
          ${exp.viewGuideHtml}
        </details></div>`
     : '';
@@ -939,8 +1448,8 @@ function renderLayout(body) {
   $('content').innerHTML = `
     ${ergoBlock}
     <div class="card">
-      <h3>排布结果（按该公司真实型号与离散尺寸）</h3>
-      <table><thead><tr><th>型号</th><th>规格</th><th class="num">数量</th></tr></thead><tbody>${counts}</tbody></table>
+      <h3>${t('layoutResult')}</h3>
+      <table><thead><tr><th>${t('sku')}</th><th>${t('spec')}</th><th class="num">${t('qty')}</th></tr></thead><tbody>${counts}</tbody></table>
       ${warns}
     </div>
     ${scoreBlock}
@@ -952,43 +1461,37 @@ function renderLayout(body) {
   gates.layoutBlocked = body.acceptable === false;
   gates.layoutOk = body.acceptable !== false;
   refreshGates();
+
+  const totalCabinets = (body.moduleCounts || []).reduce((n, m) => n + m.qty, 0);
+  confirmed.layoutNote = t('layoutSummary', totalCabinets, (body.views || []).length);
+  renderConfirmed();
+  showOutputs();
+
+  if (gates.layoutOk) {
+    const box = document.createElement('div');
+    box.className = 'msg interactive';
+    box.innerHTML = `
+      <div class="qcard">
+        <div class="qp">${t('layoutReadyChat')}</div>
+        <div class="opts" style="margin-top:8px">
+          <button type="button" class="opt" data-go-quote="1"><span class="ol">${t('slashQuote')}</span></button>
+        </div>
+      </div>`;
+    box.addEventListener('click', (e) => {
+      if (e.target.closest('[data-go-quote]')) runGetQuote();
+    });
+    $('chatLog').appendChild(box);
+    scrollChatToBottom();
+  }
 }
 
 window.regen = async (wallRunId) => {
   const { body } = await api(`/api/floorplans/${floorPlanId}/layout/regenerate`, {
-    method: 'POST', body: JSON.stringify({ companyId: $('companySel').value, wallRunId }),
+    method: 'POST', body: JSON.stringify({ companyId: currentCompanyId(), wallRunId }),
   });
   layout = body;
   renderLayout(body);
 };
-
-// ── ③ 出报价 ──
-$('quoteBtn').addEventListener('click', async () => {
-  if (!layout) return;
-  const { ok, body } = await api('/api/quotes', {
-    method: 'POST',
-    body: JSON.stringify({
-      companyId: $('companySel').value, conversationId,
-      doorStyleId: $('doorSel').value, selections: layout.selections,
-    }),
-  });
-  if (!ok) {
-    const detail = (body.issues || []).map((i) => `${i.code}: ${i.message}`)
-      .concat((body.ergonomics || []).map((v) => v.message))
-      .join('\n');
-    $('content').innerHTML = `<div class="err">报价被拒绝：\n${esc(detail || body.error)}</div>`;
-    return;
-  }
-  currentQuote = body.quote;
-  lastTradeNotice = body.tradePricing || null;
-  lastFinishes = body.finishComparison || null;
-  stepIndex = 4; renderSteps();
-  renderQuote();
-  // 正式报价单进产出物栏。走服务端的 PDF 端点，与邮件附件是同一份——
-  // 前端另拼一份的话，"客户下载的"和"公司收到的"会是两个文件。
-  registerArtifact(`报价单-${currentQuote.id}.pdf`, 'application/pdf',
-    { url: `/api/quotes/${currentQuote.id}/pdf` });
-});
 
 let lastTradeNotice = null;
 /** 换花色比价（FR-6.3）。同一套方案换门板后的**重算价**，不是总价乘系数。 */
@@ -1004,15 +1507,15 @@ function renderFinishComparison() {
   if (!lastFinishes || (lastFinishes.options || []).length <= 1) return '';
   const rows = lastFinishes.options.map((o) => {
     if (o.current) {
-      return `<tr><td><b>${esc(o.doorStyleName)}</b> <span class="hint">当前</span></td>
+      return `<tr><td><b>${esc(o.doorStyleName)}</b> <span class="hint">${t('current')}</span></td>
         <td class="num">${money(o.total)}</td><td class="num hint">—</td></tr>`;
     }
     if (o.unavailable) {
       return `<tr><td>${esc(o.doorStyleName)}</td>
         <td colspan="2" class="ql-warn">${esc(o.unavailable.reason)}</td></tr>`;
     }
-    const pct = o.deltaPercent === 0 ? '同价'
-      : o.deltaPercent > 0 ? `贵 ${o.deltaPercent}%` : `便宜 ${-o.deltaPercent}%`;
+    const pct = o.deltaPercent === 0 ? t('samePrice')
+      : o.deltaPercent > 0 ? t('morePct', o.deltaPercent) : t('lessPct', -o.deltaPercent);
     const sign = o.delta > 0 ? '+' : o.delta < 0 ? '−' : '±';
     return `<tr><td>${esc(o.doorStyleName)} <span class="hint">${pct}</span></td>
       <td class="num">${money(o.total)}</td>
@@ -1020,12 +1523,10 @@ function renderFinishComparison() {
   }).join('');
 
   return `<div class="card" style="margin-top:14px">
-    <h3>换一种门板花色</h3>
-    <table><thead><tr><th>花色</th><th class="num">总价</th><th class="num">差额</th></tr></thead>
+    <h3>${t('finishCompare')}</h3>
+    <table><thead><tr><th>${t('finish')}</th><th class="num">${t('total')}</th><th class="num">${t('delta')}</th></tr></thead>
       <tbody>${rows}</tbody></table>
-    <p class="hint" style="margin-top:8px">同一套方案换门板后的<b>重算价</b>，柜体数量与排布完全不变。
-      逐行重算，不是给总价乘一个系数——同一个价格组里各型号的涨幅并不一致，折扣与税也一并重算。<br/>
-      填缝条、收口板、踢脚板跟着换色；<b>塑料地脚不换</b>——它藏在踢脚板后面，一个价。</p>
+    <p class="hint" style="margin-top:8px">${t('finishHint')}</p>
   </div>`;
 }
 
@@ -1045,29 +1546,30 @@ function renderQuote() {
 
   $('content').innerHTML = `
     <table>
-      <thead><tr><th>型号</th><th>规格</th><th class="num">数量</th>
-        <th class="num">标价</th><th class="num">折后单价</th><th class="num">小计</th></tr></thead>
+      <thead><tr><th>${t('sku')}</th><th>${t('spec')}</th><th class="num">${t('qty')}</th>
+        <th class="num">${t('listPrice')}</th><th class="num">${t('unitAfter')}</th><th class="num">${t('lineSub')}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="totals">
-      <div><span>小计</span><span>${money(q.subtotal)}</span></div>
+      <div><span>${t('subtotal')}</span><span>${money(q.subtotal)}</span></div>
       ${q.discounts.map((d) => `<div><span>${esc(d.description)}</span><span>-${money(d.amount)}</span></div>`).join('')}
-      <div><span>运费</span><span>${money(q.shipping.amount)}</span></div>
-      ${q.taxes.map((t) => `<div><span>${esc(t.name)} ${t.ratePercent}%</span><span>${money(t.amount)}</span></div>`).join('')}
-      <div class="grand"><span>总计（${esc(q.currency)}）</span><span>${money(q.total)}</span></div>
-      <div class="hint" style="justify-content:flex-end">有效期至 ${esc(q.validUntil.slice(0,10))}</div>
+      <div><span>${t('shipping')}</span><span>${money(q.shipping.amount)}</span></div>
+      ${q.taxes.map((tx) => `<div><span>${esc(tx.name)} ${tx.ratePercent}%</span><span>${money(tx.amount)}</span></div>`).join('')}
+      <div class="grand"><span>${t('grandTotal', esc(q.currency))}</span><span>${money(q.total)}</span></div>
+      <div class="hint" style="justify-content:flex-end">${t('validUntil', esc(q.validUntil.slice(0,10)))}</div>
     </div>
     ${lastTradeNotice && !lastTradeNotice.applied ? `<div class="card" style="margin-top:14px">
-      <h3>本单按零售价计算</h3>
+      <h3>${t('retailNote')}</h3>
       <p class="hint">${esc(lastTradeNotice.reason)}</p></div>` : ''}
     ${renderFinishComparison()}
     <div style="margin-top:18px">
-      <button id="discBtn">下一步：查看将发送的内容</button>
-      <button class="ghost" id="pdfBtn">下载 PDF 报价单</button>
+      <button id="discBtn">${t('nextDisclose')}</button>
+      <button class="ghost" id="pdfBtn">${t('downloadPdf')}</button>
     </div>
     <div id="discBox"></div>`;
   $('discBtn').addEventListener('click', showDisclosure);
   $('pdfBtn').addEventListener('click', downloadPdf);
+  showOutputs();
 }
 
 /**
@@ -1078,7 +1580,7 @@ async function downloadPdf() {
   const res = await fetch(`/api/quotes/${currentQuote.id}/pdf`, { headers: { 'x-account-id': ACCOUNT } });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    $('discBox').innerHTML = `<div class="err">${esc(body.error || '生成 PDF 失败')}</div>`;
+    addMsg('system', body.error || t('downloadFail'));
     return;
   }
   const blob = await res.blob();
@@ -1092,78 +1594,317 @@ async function downloadPdf() {
 
 async function showDisclosure() {
   const { body } = await api(`/api/quotes/${currentQuote.id}/disclosure`);
-  $('discBox').innerHTML = `
-    <div class="card" style="margin-top:14px">
-      <h3>以下内容将发送给「${esc(body.companyName)}」</h3>
-      <ul class="hint" style="line-height:1.7">${body.items.map((i) => `<li>${esc(i.label)}：${esc(i.value)}</li>`).join('')}</ul>
-      <p class="hint">${esc(body.notice)}</p>
-      <button id="confirmBtn">我已阅读，确认发送</button>
-      <button class="ghost" id="cancelBtn">取消</button>
+  // 发送确认放在主会话：需要用户明确确认，不是右栏预览
+  const box = document.createElement('div');
+  box.className = 'msg interactive';
+  box.innerHTML = `
+    <div class="qcard">
+      <div class="qp">${t('discloseTitle', esc(body.companyName))}</div>
+      <ul class="hint" style="line-height:1.7;margin:6px 0">${body.items.map((i) => `<li>${esc(i.label)}: ${esc(i.value)}</li>`).join('')}</ul>
+      <p class="qw">${esc(body.notice)}</p>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" id="confirmBtn">${t('confirmSend')}</button>
+        <button type="button" class="ghost" id="cancelBtn">${t('cancel')}</button>
+      </div>
+      <div id="discResult"></div>
     </div>`;
-  $('cancelBtn').addEventListener('click', () => { $('discBox').innerHTML = ''; });
-  $('confirmBtn').addEventListener('click', doConfirmAndSend);
+  $('chatLog').appendChild(box);
+  scrollChatToBottom();
+  box.querySelector('#cancelBtn')?.addEventListener('click', () => box.remove());
+  box.querySelector('#confirmBtn')?.addEventListener('click', () => doConfirmAndSend(box));
+
+  // 右栏也留一份只读副本
+  $('content').insertAdjacentHTML('beforeend', `
+    <div class="card" style="margin-top:14px">
+      <h3>${t('discloseTitle', esc(body.companyName))}</h3>
+      <ul class="hint" style="line-height:1.7">${body.items.map((i) => `<li>${esc(i.label)}: ${esc(i.value)}</li>`).join('')}</ul>
+      <p class="hint">${esc(body.notice)}</p>
+      <p class="hint">${t('confirmInChat')}</p>
+    </div>`);
+  showOutputs();
 }
 
-async function doConfirmAndSend() {
+async function doConfirmAndSend(chatBox) {
+  const resultEl = chatBox?.querySelector('#discResult') || $('discBox');
   const c = await api(`/api/quotes/${currentQuote.id}/confirm`, { method: 'POST' });
-  if (!c.ok) { $('discBox').innerHTML = `<div class="err">${esc(c.body.error)}</div>`; return; }
+  if (!c.ok) {
+    if (resultEl) resultEl.innerHTML = `<div class="err">${esc(c.body.error)}</div>`;
+    return;
+  }
   currentQuote = c.body.quote;
   const s = await api(`/api/quotes/${currentQuote.id}/send`, { method: 'POST' });
   currentQuote = s.body.quote || currentQuote;
   $('quoteStatus').className = 'status-pill ' + currentQuote.status;
   $('quoteStatus').textContent = currentQuote.status;
-  $('discBox').innerHTML = `<div class="card">
-    <h3>${s.body.dryRun ? '预览模式：未真正发出邮件' : '已发送'}</h3>
-    <p class="hint">${s.body.dryRun
-      ? '未配置 SMTP 凭据，系统不会发起任何网络请求。这是发送闸门的第二道防线（第一道是服务端状态机）。'
-      : '报价已作为 HTML 邮件发送到该公司报价邮箱，四视图以 CID 内嵌，并附带纯文本与图片附件兜底。'}</p>
-    ${s.body.billingEventId ? `<p class="hint">已记录计费事件 ${esc(s.body.billingEventId)}</p>` : ''}
-    ${s.body.billingSuppressed ? '<p class="hint">命中 30 天去重窗口：邮件照发，但不重复计费。</p>' : ''}
-    ${s.body.attachedPdf ? '<p class="hint">正式报价单 PDF 已作为附件一并发出。</p>' : ''}
-    ${(s.body.pdfWarnings || []).map((w) => `<p class="err">${esc(w)}</p>`).join('')}
+  const html = `<div class="qw" style="margin-top:8px">
+    <b>${s.body.dryRun ? t('dryRunTitle') : t('sentTitle')}</b><br/>
+    ${s.body.dryRun ? t('dryRunBody') : t('sentBody')}
+    ${s.body.billingEventId ? `<br/>${t('billingEvent', esc(s.body.billingEventId))}` : ''}
+    ${s.body.billingSuppressed ? `<br/>${t('billingSuppressed')}` : ''}
+    ${s.body.attachedPdf ? `<br/>${t('pdfAttached')}` : ''}
+    ${(s.body.pdfWarnings || []).map((w) => `<br/><span class="err">${esc(w)}</span>`).join('')}
   </div>`;
+  if (resultEl) resultEl.innerHTML = html;
+  const confirmBtn = chatBox?.querySelector('#confirmBtn');
+  if (confirmBtn) confirmBtn.disabled = true;
+  showOutputs();
 }
 
-// ── 主动拉取选择题 ──
-$('prefBtn').addEventListener('click', async () => {
-  const companyId = $('companySel').value;
-  const { body } = await api(
-    `/api/conversations/${conversationId}/questions?companyId=${encodeURIComponent(companyId)}`);
-  if (!body.questions?.length) {
-    addMsg('system', '价格与偏好方面暂时没有需要你选的了。');
-    if (body.note) addMsg('system', body.note);
-    return;
-  }
-  if (body.note) addMsg('system', body.note);
-  renderQuestions(body.questions, companyId);
-});
+// ── 输入框：+ 上传 · @ 提及 · / 命令补全 ──────────────────────────────────
 
-// ── 比价 ──
-$('cmpBtn').addEventListener('click', async () => {
-  const { body } = await api(`/api/conversations/${conversationId}/comparison`);
-  const cmp = body.comparison;
-  if (!cmp || cmp.rows.length === 0) {
-    $('content').innerHTML = '<p class="hint">还没有可对比的报价。先为不同公司各出一版方案与报价。</p>';
+/** 可用的 / 命令。选型类从当前公司规格库取；动作类直接触发。 */
+const SLASH_DEFS = () => [
+  { id: 'doorStyle', aliases: ['doorStyle', 'finish', 'door'],
+    label: () => t('slashDoor'), hint: () => t('slashDoorHint'), kind: 'catalog', prefKey: 'doorStyle' },
+  { id: 'boxMaterial', aliases: ['boxMaterial', 'box', 'material'],
+    label: () => t('slashBox'), hint: () => t('slashBoxHint'), kind: 'catalog', prefKey: 'boxMaterial' },
+  { id: 'hardware', aliases: ['hardware'],
+    label: () => t('slashHardware'), hint: () => t('slashHardwareHint'), kind: 'catalog', prefKey: 'hardware' },
+  { id: 'accessories', aliases: ['accessories', 'accessory'],
+    label: () => t('slashAccessories'), hint: () => t('slashAccessoriesHint'), kind: 'catalog', prefKey: 'accessories' },
+  { id: 'compare', aliases: ['compare'],
+    label: () => t('slashCompare'), hint: () => t('slashCompareHint'), kind: 'action' },
+  { id: 'layout', aliases: ['layout', 'design'],
+    label: () => t('slashLayout'), hint: () => t('slashLayoutHint'), kind: 'action' },
+  { id: 'quote', aliases: ['quote'],
+    label: () => t('slashQuote'), hint: () => t('slashQuoteHint'), kind: 'action' },
+  { id: 'help', aliases: ['help'],
+    label: () => t('slashHelp'), hint: () => t('slashHelpHint'), kind: 'action' },
+];
+
+let suggestState = { mode: null, items: [], index: 0, cmd: null, tokenStart: -1 };
+
+function hideSuggest() {
+  const pop = $('suggestPop');
+  if (pop) { pop.hidden = true; pop.innerHTML = ''; }
+  suggestState = { mode: null, items: [], index: 0, cmd: null, tokenStart: -1 };
+}
+
+function renderSuggest(title, items) {
+  const pop = $('suggestPop');
+  if (!pop) return;
+  suggestState.items = items;
+  suggestState.index = 0;
+  if (!items.length) { hideSuggest(); return; }
+  pop.hidden = false;
+  pop.innerHTML = `
+    <div class="suggest-head">${esc(title)}</div>
+    <div class="suggest-list">${items.map((it, i) => `
+      <button type="button" class="suggest-item ${i === 0 ? 'active' : ''}" data-si="${i}">
+        <span class="si-main">${esc(it.label)}</span>
+        ${it.sub ? `<span class="si-sub">${esc(it.sub)}</span>` : ''}
+      </button>`).join('')}</div>`;
+}
+
+function moveSuggest(delta) {
+  const n = suggestState.items.length;
+  if (!n) return;
+  suggestState.index = (suggestState.index + delta + n) % n;
+  $('suggestPop')?.querySelectorAll('.suggest-item').forEach((el, i) => {
+    el.classList.toggle('active', i === suggestState.index);
+    if (i === suggestState.index) el.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function catalogOptions(cmdId) {
+  if (!spec) return [];
+  if (cmdId === 'doorStyle') {
+    return (spec.doorStyles || []).map((d) => ({ id: d.id, label: d.name, value: d.id }));
+  }
+  if (cmdId === 'boxMaterial') {
+    return (spec.boxMaterials || []).map((m) => ({
+      id: m.id, label: m.name, sub: m.code, value: m.id,
+    }));
+  }
+  if (cmdId === 'hardware') {
+    return (spec.hardwareOptions || []).map((h) => ({ id: h.id, label: h.name, value: h.id }));
+  }
+  if (cmdId === 'accessories') {
+    return (spec.accessoryOptions || []).map((a) => ({ id: a.id, label: a.name, value: a.id }));
+  }
+  return [];
+}
+
+function filterByQuery(items, q) {
+  const needle = (q || '').toLowerCase();
+  if (!needle) return items;
+  return items.filter((it) =>
+    (it.label || '').toLowerCase().includes(needle)
+    || (it.sub || '').toLowerCase().includes(needle)
+    || (it.id || '').toLowerCase().includes(needle)
+    || (it.aliases || []).some((a) => a.toLowerCase().includes(needle)));
+}
+
+/** 光标前最近一段 token：@xxx 或 /xxx 或 /cmd query */
+function tokenAtCursor(value, caret) {
+  const before = value.slice(0, caret);
+  const at = before.lastIndexOf('@');
+  const slash = before.lastIndexOf('/');
+  const start = Math.max(at, slash);
+  if (start < 0) return null;
+  const raw = before.slice(start);
+  if (raw.startsWith('@')) {
+    if ((raw.match(/ /g) || []).length > 1) return null;
+    return { kind: 'at', start, query: raw.slice(1) };
+  }
+  const body = raw.slice(1);
+  const sp = body.search(/\s/);
+  if (sp < 0) return { kind: 'slash-cmd', start, query: body };
+  return {
+    kind: 'slash-opt',
+    start,
+    cmd: body.slice(0, sp),
+    query: body.slice(sp + 1),
+  };
+}
+
+function updateSuggestFromInput() {
+  const input = $('chatInput');
+  if (!input) return;
+  const token = tokenAtCursor(input.value, input.selectionStart ?? input.value.length);
+  if (!token) { hideSuggest(); return; }
+  suggestState.tokenStart = token.start;
+
+  if (token.kind === 'at') {
+    suggestState.mode = 'at';
+    const items = filterByQuery(
+      companiesList.map((c) => ({
+        id: c.id, label: c.name, sub: (c.aliases || []).slice(0, 2).join(', '),
+        insert: `@${c.name}`,
+      })),
+      token.query,
+    );
+    renderSuggest(t('suggestAt'), items);
     return;
   }
-  const rows = cmp.rows.map((r, i) => `<tr>
-    <td>${esc(r.companyName)}${i === 0 ? ' <span class="cmp-lowest">★ 最低</span>' : ''}</td>
-    <td class="num">${money(r.netBeforeTax)}</td>
-    <td class="num">${money(r.shipping)}</td>
-    <td class="num">${money(r.taxTotal)}</td>
-    <td class="num">${money(r.total)}</td>
-    <td class="num">${r.deltaFromLowest === 0 ? '—' : '+' + money(r.deltaFromLowest)}</td></tr>`).join('');
-  const warns = (cmp.warnings || []).map((w) => `<div class="err">· ${esc(w.message)}</div>`).join('');
-  $('content').innerHTML = `
-    <div class="card">
-      <h3>多家报价对比</h3>
-      <table><thead><tr><th>公司</th><th class="num">未税小计</th><th class="num">运费</th>
-        <th class="num">税</th><th class="num">总计</th><th class="num">差额</th></tr></thead>
-        <tbody>${rows}</tbody></table>
-      ${warns}
-      <p class="hint" style="margin-top:10px">本表只比价格，不做图纸对比。各家的设计方案请分别查看。</p>
-    </div>`;
-});
+
+  if (token.kind === 'slash-cmd') {
+    suggestState.mode = 'slash-cmd';
+    const defs = SLASH_DEFS().map((d) => ({
+      id: d.id, label: `/${d.id}`, sub: d.hint(), aliases: d.aliases, def: d,
+    }));
+    renderSuggest(t('suggestSlash'), filterByQuery(defs, token.query));
+    return;
+  }
+
+  const def = SLASH_DEFS().find((d) =>
+    d.id.toLowerCase() === token.cmd.toLowerCase()
+    || d.aliases.some((a) => a.toLowerCase() === token.cmd.toLowerCase()));
+  if (!def) { hideSuggest(); return; }
+  suggestState.mode = 'slash-opt';
+  suggestState.cmd = def;
+  if (def.kind === 'action') {
+    renderSuggest(`/${def.id}`, [{ id: def.id, label: def.label(), sub: def.hint(), action: def.id }]);
+    return;
+  }
+  const opts = filterByQuery(catalogOptions(def.id), token.query);
+  renderSuggest(`/${def.id}`, opts.map((o) => ({ ...o, prefKey: def.prefKey })));
+}
+
+async function applySuggest(item) {
+  const input = $('chatInput');
+  if (!input || !item) return;
+  const start = suggestState.tokenStart;
+
+  if (suggestState.mode === 'at') {
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(input.selectionStart);
+    input.value = `${before}${item.insert} ${after}`.replace(/\s{2,}/g, ' ');
+    hideSuggest();
+    await selectCompany(item.id);
+    input.focus();
+    return;
+  }
+
+  if (suggestState.mode === 'slash-cmd') {
+    const def = item.def;
+    if (def.kind === 'action') {
+      input.value = input.value.slice(0, start) + input.value.slice(input.selectionStart);
+      hideSuggest();
+      await runSlashAction(def.id);
+      input.focus();
+      return;
+    }
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(input.selectionStart);
+    input.value = `${before}/${def.id} ${after}`;
+    const caret = before.length + def.id.length + 2;
+    input.setSelectionRange(caret, caret);
+    hideSuggest();
+    updateSuggestFromInput();
+    input.focus();
+    return;
+  }
+
+  if (suggestState.mode === 'slash-opt') {
+    const cmd = suggestState.cmd;
+    input.value = input.value.slice(0, start) + input.value.slice(input.selectionStart).replace(/^\s*/, '');
+    hideSuggest();
+    if (item.action) {
+      await runSlashAction(item.action);
+    } else if (cmd?.prefKey) {
+      const multi = cmd.prefKey === 'hardware' || cmd.prefKey === 'accessories';
+      const fakeCard = document.createElement('div');
+      fakeCard.className = 'msg interactive';
+      fakeCard.innerHTML = `<div class="qcard"><div class="qw">${t('saved')} <b>${esc(item.label)}</b></div></div>`;
+      $('chatLog').appendChild(fakeCard);
+      await savePreference(
+        cmd.prefKey,
+        multi ? [item.value] : item.value,
+        currentCompanyId(),
+        fakeCard,
+        item.label,
+      );
+      if (cmd.prefKey === 'doorStyle') {
+        selectedDoorStyleId = item.value;
+        syncCompanyConfirmed();
+      }
+    }
+    input.focus();
+    scrollChatToBottom();
+  }
+}
+
+async function runSlashAction(id) {
+  if (id === 'compare') return runCompare();
+  if (id === 'layout') return runGenerateLayout();
+  if (id === 'quote') return runGetQuote();
+  if (id === 'help') {
+    const lines = SLASH_DEFS().map((d) => `/${d.id} — ${d.hint()}`);
+    addMsg('assistant', `${t('slashHelpBody')}\n\n${lines.join('\n')}\n\n${t('slashHelpAlso')}`);
+  }
+}
+
+function setupComposer() {
+  const input = $('chatInput');
+  const pop = $('suggestPop');
+  $('attachBtn')?.addEventListener('click', (e) => { e.preventDefault(); triggerUpload(); });
+
+  input?.addEventListener('input', () => updateSuggestFromInput());
+  input?.addEventListener('keydown', async (e) => {
+    if (!$('suggestPop') || $('suggestPop').hidden) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveSuggest(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveSuggest(-1); }
+    else if (e.key === 'Escape') { e.preventDefault(); hideSuggest(); }
+    else if (e.key === 'Enter' && suggestState.items.length) {
+      e.preventDefault();
+      await applySuggest(suggestState.items[suggestState.index]);
+    }
+    else if (e.key === 'Tab' && suggestState.items.length) {
+      e.preventDefault();
+      await applySuggest(suggestState.items[suggestState.index]);
+    }
+  });
+  pop?.addEventListener('mousedown', async (e) => {
+    const btn = e.target.closest('[data-si]');
+    if (!btn) return;
+    e.preventDefault();
+    await applySuggest(suggestState.items[Number(btn.dataset.si)]);
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.composer-field')) hideSuggest();
+  });
+}
 
 boot();
 </script>

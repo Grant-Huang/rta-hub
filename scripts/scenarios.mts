@@ -70,6 +70,11 @@ export interface Scenario {
    * 测试照样"通过"。带上 `changes` 才能验证「客户提的意见真的改到了排布上」。
    */
   revisions: ScenarioRevision[];
+  /**
+   * 可选：上传 `test/sources/` 下的真实户型图（相对该目录的文件名）。
+   * 模拟器会把整图以 data URL 交给 `/floorplan`，再按 walls 补齐/确认尺寸。
+   */
+  sourceImage?: string;
 }
 
 export interface ScenarioRevision {
@@ -301,7 +306,7 @@ function quantize(n: number): number {
  * 模拟器的默认条数用它，不写死一个数字：**加了场景却忘了改默认值**，
  * 新场景就再也不会被跑到，而"跑通了"的报告看起来和真跑全了一模一样。
  */
-export const BUILTIN_SCENARIO_COUNT = 8;
+export const BUILTIN_SCENARIO_COUNT = 9;
 
 function deterministicScenarios(input: GenerateInput): Scenario[] {
   const doors = input.doorStyleIds;
@@ -548,6 +553,44 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
       },
       revisions: [
         { note: "烤箱那边先按标准的来吧", changes: {} },
+      ],
+    },
+    {
+      id: "I", name: "真实户型图上传 · Floor Plan - 1",
+      shape: "L 型",
+      covers: "客户上传真实 PNG 户型图（test/sources），再确认墙长/上下水/窗；覆盖 FR-15 检查表 + 视觉输入链路",
+      accountType: "consumer",
+      sourceImage: "Floor Plan - 1.png",
+      turns: [
+        "I have a floor plan photo — can we design from that?",
+        "Modern shaker look, budget around CAD $15–25k, Ontario",
+      ],
+      ceilingHeight: 96,
+      // 与样例图常见抽取量级接近；上传后仍由客户确认，不猜
+      walls: [
+        {
+          label: "North", length: 137,
+          features: [
+            { kind: "window", offset: 48, width: 36 },
+            { kind: "plumbing", offset: 60, width: 24 },
+          ],
+        },
+        {
+          label: "West", length: 125,
+          features: [{ kind: "gas", offset: 48, width: 30 }],
+        },
+      ],
+      appliances: [
+        { kind: "refrigerator", width: 36 },
+        { kind: "range", width: 30 },
+        { kind: "dishwasher", width: 24 },
+      ],
+      prefs: {
+        budgetBand: "standard", doorStyleId: d(0), storage: "balanced", assembly: "RTA",
+        tradeoff: "quality",
+      },
+      revisions: [
+        { note: "More drawers near the range please", changes: { storage: "drawers" } },
       ],
     },
   ];

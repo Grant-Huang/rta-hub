@@ -69,36 +69,36 @@ export function evaluateAcceptance(input: AcceptanceInput): AcceptanceReport {
   ).length;
 
   const metrics: MetricResult[] = [
-    metric("SKU 召回率", ratio(moduleCount, input.sourceSkuCount), THRESHOLDS.skuRecall, true,
-      `${moduleCount} / ${input.sourceSkuCount}（分母须人工数原表）`),
-    metric("必填字段覆盖率", ratio(requiredFieldComplete, moduleCount), THRESHOLDS.requiredFieldCoverage, true,
-      `${requiredFieldComplete} / ${moduleCount} 个型号六项字段齐全`),
-    metric("脸型规则命中率", ratio(input.faceTemplateRuleHits, moduleCount), THRESHOLDS.faceTemplateRuleHitRate, true,
-      "使用自有命名体系的公司此项会很低，需配置公司覆盖表"),
-    metric("脸型最终准确率", ratio(moduleCount - input.faceTemplateErrors, moduleCount),
-      THRESHOLDS.faceTemplateFinalAccuracy, true, "发布前人工全量复核"),
-    metric("静默失败数", input.unresolved.length === 0 ? 0 : 0, THRESHOLDS.silentFailures, false,
-      "导入器不猜值，拿不准一律进待确认队列，故恒为 0"),
-    metric("待确认项", input.unresolved.length, 0, false,
-      input.unresolved.length ? "必须清空后才能发布" : "无"),
-    metric("人工修正次数", input.manualCorrections, THRESHOLDS.manualCorrections, false),
-    metric("端到端耗时（人时）", input.endToEndHours, THRESHOLDS.endToEndHours, false),
+    metric("SKU recall rate", ratio(moduleCount, input.sourceSkuCount), THRESHOLDS.skuRecall, true,
+      `${moduleCount} / ${input.sourceSkuCount} (denominator must be a manual count of the source sheet)`),
+    metric("Required field coverage", ratio(requiredFieldComplete, moduleCount), THRESHOLDS.requiredFieldCoverage, true,
+      `${requiredFieldComplete} / ${moduleCount} modules have all six required fields`),
+    metric("Face template rule hit rate", ratio(input.faceTemplateRuleHits, moduleCount), THRESHOLDS.faceTemplateRuleHitRate, true,
+      "Companies with custom naming will score low here; configure company overrides"),
+    metric("Face template final accuracy", ratio(moduleCount - input.faceTemplateErrors, moduleCount),
+      THRESHOLDS.faceTemplateFinalAccuracy, true, "Full manual review before publish"),
+    metric("Silent failures", input.unresolved.length === 0 ? 0 : 0, THRESHOLDS.silentFailures, false,
+      "Importer never guesses; uncertain fields go to the unresolved queue, so this is always 0"),
+    metric("Unresolved items", input.unresolved.length, 0, false,
+      input.unresolved.length ? "Must clear before publishing" : "None"),
+    metric("Manual corrections", input.manualCorrections, THRESHOLDS.manualCorrections, false),
+    metric("End-to-end hours", input.endToEndHours, THRESHOLDS.endToEndHours, false),
   ];
 
   if (input.sampling) {
     metrics.push(
-      metric("价格准确率", input.sampling.accuracy, THRESHOLDS.priceAccuracy, true,
-        `抽样 ${input.sampling.sampled} 条，不一致 ${input.sampling.mismatches.length} 条（0 容错）`),
-      metric("分层抽样量", input.sampling.sampled, THRESHOLDS.minStratifiedSample, true,
-        "rule of three：n 次零缺陷仅能声称错误率 < 3/n，故 50 条不足"),
+      metric("Price accuracy", input.sampling.accuracy, THRESHOLDS.priceAccuracy, true,
+        `Sampled ${input.sampling.sampled}, mismatches ${input.sampling.mismatches.length} (zero tolerance)`),
+      metric("Stratified sample size", input.sampling.sampled, THRESHOLDS.minStratifiedSample, true,
+        "rule of three: n zero-defect samples only support claiming error rate < 3/n, so 50 is not enough"),
     );
   }
 
   const blockers: string[] = [];
   for (const m of metrics) {
-    if (!m.pass) blockers.push(`${m.name}：${format(m)} 未达门槛 ${format({ ...m, value: m.threshold })}`);
+    if (!m.pass) blockers.push(`${m.name}: ${format(m)} below threshold ${format({ ...m, value: m.threshold })}`);
   }
-  if (!input.sampling) blockers.push("尚未执行分层抽样比对");
+  if (!input.sampling) blockers.push("Stratified sampling comparison has not been run yet");
 
   return { pass: blockers.length === 0, metrics, blockers };
 }
@@ -115,7 +115,7 @@ function ratio(numerator: number, denominator: number): number {
 }
 
 function format(m: MetricResult): string {
-  return m.value <= 1 && m.value >= 0 && m.name.includes("率")
+  return m.value <= 1 && m.value >= 0 && /rate|coverage|accuracy/i.test(m.name)
     ? `${(m.value * 100).toFixed(1)}%`
     : String(m.value);
 }
@@ -229,15 +229,15 @@ export function planStratifiedSample(
     cells.push(...picked);
     strata.push({ stratum, picked: picked.length, available: list.length });
     if (list.length < minPer) {
-      warnings.push(`分层 ${stratum} 仅有 ${list.length} 条，不足每层 ${minPer} 条的要求`);
+      warnings.push(`Stratum ${stratum} has only ${list.length} row(s); need at least ${minPer} per stratum`);
     }
   }
 
   if (cells.length < minTotal) {
     warnings.push(
-      `抽样总量 ${cells.length} 条低于 ${minTotal} 条。按 rule of three，` +
-      `零缺陷时仅能声称错误率 < ${(300 / Math.max(cells.length, 1)).toFixed(1)}%——` +
-      `若价格矩阵本身规模不足，应改为全量比对。`,
+      `Sample size ${cells.length} is below ${minTotal}. By the rule of three, ` +
+      `zero defects only support claiming error rate < ${(300 / Math.max(cells.length, 1)).toFixed(1)}% — ` +
+      `if the price matrix is too small, switch to a full comparison.`,
     );
   }
 
@@ -258,7 +258,7 @@ export function evaluateSample(
   for (const cell of planned) {
     const expected = truth.get(key(cell));
     if (!expected) {
-      warnings.push(`抽样单元格 ${cell.moduleCode}×${cell.priceGroupCode} 没有对应的人工比对值`);
+      warnings.push(`Sample cell ${cell.moduleCode}×${cell.priceGroupCode} has no matching ground-truth value`);
       continue;
     }
     checked++;

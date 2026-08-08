@@ -19,6 +19,7 @@
 import type { ModuleSpec, ModuleType } from "../domain/types.js";
 import type { ParsedGeometry, WallFeature, WallRun } from "../floorplan/types.js";
 import { isIsland, quantize } from "../floorplan/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 import {
   buildKitchenPlan, doorSpan, toPlane, usableSpan, type KitchenPlan,
 } from "./plan-model.js";
@@ -32,7 +33,7 @@ import { solveStack, stackCandidates, STACK_SEAM_LOSS } from "./stacking.js";
 import { capabilitiesFor, hasRole } from "../spec/capabilities.js";
 import { planAppliances, type AppliancePlan, type PlacedAppliance } from "./appliance-plan.js";
 import {
-  APPLIANCE_LABEL, applianceFrom, reservedWidth,
+  APPLIANCE_LABEL, applianceLabel, applianceFrom, reservedWidth,
   type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
 
@@ -173,6 +174,10 @@ export interface LayoutOptions {
    * 而不是记下来给人看——所以它进的是装箱候选的 `preference` 项。
    */
   drawerBias?: "always" | "highUseOnly" | "never";
+  /**
+   * 客户语言偏好。人体工程 message / 美观 notes 跟它走；默认英文。
+   */
+  language?: UiLanguage;
 }
 
 /**
@@ -446,9 +451,10 @@ export function generateLayout(
 ): GeneratedLayout {
   const placements: Placement[] = [];
   const warnings: LayoutWarning[] = [];
+  const lang = opts.language ?? DEFAULT_LANGUAGE;
   // 家电落位**先于分层**统一决定——烟机在吊柜层，位置却由地柜层的灶台定
   const appliances = opts.appliances ?? DEFAULT_APPLIANCES;
-  const appliancePlan = opts.appliancePlan ?? planAppliances(geometry, appliances);
+  const appliancePlan = opts.appliancePlan ?? planAppliances(geometry, appliances, lang);
   for (const w of appliancePlan.warnings) {
     warnings.push({ code: "APPLIANCE_NO_ROOM", message: w.message });
   }
@@ -472,12 +478,12 @@ export function generateLayout(
     : undefined;
   const solveFor = (widths: readonly number[]) =>
     stackAvailable === undefined || widths.length === 0 ? undefined
-      : solveStack(stackAvailable, stackCandidates(modules, widths));
+      : solveStack(stackAvailable, stackCandidates(modules, widths), { language: lang });
 
   // 平面先拼出来：墙角要让多少位是**相邻墙段之间的事**，一段一段单独排布看不见它。
   // 这是「全局视图要把几个墙连起来」这条要求在排布器一侧的落点——不连起来，
   // 两段墙的柜子就会在墙角占同一块地方，而每一段各自都"没超墙"。
-  const plan = opts.plan ?? buildKitchenPlan(geometry);
+  const plan = opts.plan ?? buildKitchenPlan(geometry, lang);
   const byRunId = new Map(plan.runs.map((rp) => [rp.run.id, rp]));
   // 哪一段的哪一头要放转角柜。一段墙可能两头都拥有墙角（L 型中间没有，
   // 但 U 型的长墙一头是墙角、另一头可能又接一段）
@@ -510,7 +516,7 @@ export function generateLayout(
         x: r.x, width: r.width, height: HEIGHTS.baseBox, depth: 24,
         applianceKind: r.kind,
         // 标签带上实际宽度——图上要能看出"这是 33 寸的冰箱位"（FR-5.2）
-        label: `${r.label ?? APPLIANCE_LABEL[r.kind]}位 ${formatWidth(r.spec?.width ?? r.width)}`,
+        label: `${r.label ?? applianceLabel(r.kind, lang)} opening ${formatWidth(r.spec?.width ?? r.width)}`,
         ...(r.spec ? { applianceSpec: r.spec } : {}),
       });
     }
@@ -522,7 +528,7 @@ export function generateLayout(
         kind: "appliance", layer: "wall", wallRunId: run.id,
         x: p.x, width: p.width, height: wallHeight ?? 30, depth: 12,
         applianceKind: p.spec.kind,
-        label: `${APPLIANCE_LABEL[p.spec.kind]}位 ${formatWidth(p.spec.width)}`,
+        label: `${applianceLabel(p.spec.kind, lang)} opening ${formatWidth(p.spec.width)}`,
         applianceSpec: p.spec,
       });
     }
@@ -604,12 +610,15 @@ export function generateLayout(
               placements.push({
                 kind: "appliance", layer: "base", wallRunId: run.id,
                 x: dwX, width: dwWidth, height: HEIGHTS.baseBox, depth: 24,
-                applianceKind: "dishwasher", label: "洗碗机位",
+                applianceKind: "dishwasher",
+                label: msg(lang, "Dishwasher opening", "洗碗机位"),
               });
             } else {
               warnings.push({
                 code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
-                message: `${run.label} 水槽两侧都放不下 ${dwWidth}" 的洗碗机`,
+                message: msg(lang,
+                  `${run.label}: neither side of the sink fits a ${dwWidth}" dishwasher`,
+                  `${run.label} 水槽两侧都放不下 ${dwWidth}" 的洗碗机`),
               });
             }
           }
@@ -639,20 +648,22 @@ export function generateLayout(
           }
           for (const sub of subSegments) {
             fillBaseSegment(sub, run, modules, baseCandidates, highUseAnchors,
-              placements, warnings, drawerBias);
+              placements, warnings, drawerBias, lang);
           }
           continue; // 本段已处理完
         }
 
         warnings.push({
           code: "NO_SINK_BASE", wallRunId: run.id,
-          message: `${run.label} 有上下水但这家公司没有宽度 ≤ ${remaining}" 的水槽柜`,
+          message: msg(lang,
+            `${run.label} has plumbing but this catalog has no sink base ≤ ${remaining}" wide`,
+            `${run.label} 有上下水但这家公司没有宽度 ≤ ${remaining}" 的水槽柜`),
         });
       }
 
       fillBaseSegment(
         { start: cursor, length: remaining, atStart: seg.fillerAtStart, atEnd: seg.fillerAtEnd },
-        run, modules, baseCandidates, highUseAnchors, placements, warnings, drawerBias,
+        run, modules, baseCandidates, highUseAnchors, placements, warnings, drawerBias, lang,
       );
     }
 
@@ -662,7 +673,7 @@ export function generateLayout(
     // 只按冰箱宽度留空的话，上柜会与旁边的普通吊柜叠在一起。
     // 它要占多宽，就得先算出来再让开。
     const serving = planApplianceCabinets(run, forThisRun, modules, {
-      includeWall: opts.includeWall !== false, usable,
+      includeWall: opts.includeWall !== false, usable, language: lang,
     });
     warnings.push(...serving.warnings);
     placements.push(...serving.placements);
@@ -735,6 +746,7 @@ export function generateLayout(
           preferredSeams: baseSeams
             .map((abs) => abs - seg.start)
             .filter((rel) => rel > 0 && rel < seg.length),
+          language: lang,
         }));
       }
       const widths = [...new Set([
@@ -787,12 +799,17 @@ export function generateLayout(
           placements.push({
             kind: "filler", layer: "wall", wallRunId: run.id,
             x: cursor, width: packed.leftover,
-            height: runStack?.filled ?? wallHeight, depth: 12, label: "填缝条",
+            height: runStack?.filled ?? wallHeight, depth: 12, label: "Filler",
           });
         }
       }
     } else if (opts.includeWall !== false && wallCandidates.length === 0) {
-      warnings.push({ code: "NO_WALL_CABINETS", message: "这家公司规格库里没有吊柜型号" });
+      warnings.push({
+        code: "NO_WALL_CABINETS",
+        message: msg(lang,
+          "This catalog has no wall-cabinet modules",
+          "这家公司规格库里没有吊柜型号"),
+      });
     }
   }
 
@@ -803,16 +820,17 @@ export function generateLayout(
     for (const run of geometry.wallRuns) {
       if (run.length <= 0) continue;
       ergonomics.push(...checkErgonomics({
-        run, placements, hasDishwasher: appliances.some((a) => a.kind === "dishwasher"),
+        run, placements, language: lang,
+        hasDishwasher: appliances.some((a) => a.kind === "dishwasher"),
       }));
     }
-    ergonomics.push(...checkWorkTriangle(trianglePoints(plan, placements)));
+    ergonomics.push(...checkWorkTriangle(trianglePoints(plan, placements), lang));
     // 过道净空是**跨墙段**的：岛台与哪一列柜子挨得太近，一段一段单独看不出来
-    ergonomics.push(...checkAisles(plan));
+    ergonomics.push(...checkAisles(plan, lang));
   }
   for (const run of geometry.wallRuns) {
     if (run.length <= 0) continue;
-    aesthetics.push({ wallRunId: run.id, score: scoreAesthetics({ run, placements }) });
+    aesthetics.push({ wallRunId: run.id, score: scoreAesthetics({ run, placements, language: lang }) });
   }
 
   return {
@@ -970,6 +988,7 @@ function fillBaseSegment(
   placements: Placement[],
   warnings: LayoutWarning[],
   drawerBias: "always" | "highUseOnly" | "never" = "highUseOnly",
+  language: UiLanguage = DEFAULT_LANGUAGE,
 ): void {
   if (seg.length <= 0) return;
 
@@ -981,11 +1000,13 @@ function fillBaseSegment(
     ? biasTowardDrawers(candidates, drawerWidths(modules))
     : candidates;
 
-  const packed = packSegment(seg.length, segCandidates);
+  const packed = packSegment(seg.length, segCandidates, { language });
   if (!packed.feasible && packed.widths.length === 0) {
     warnings.push({
       code: "SEGMENT_UNFILLABLE", wallRunId: run.id,
-      message: `${run.label} 的 ${seg.length}" 段无法用现有型号填充：${packed.reason ?? ""}`,
+      message: msg(language,
+        `${run.label}: ${seg.length}" segment cannot be filled with available modules: ${packed.reason ?? ""}`,
+        `${run.label} 的 ${seg.length}" 段无法用现有型号填充：${packed.reason ?? ""}`),
     });
     return;
   }
@@ -994,7 +1015,9 @@ function fillBaseSegment(
   if (!fillers.feasible && packed.leftover > 0) {
     warnings.push({
       code: "FILLER_TOO_WIDE", wallRunId: run.id,
-      message: `${run.label} 剩余 ${packed.leftover}"，超出填缝条能吸收的范围，建议调整家电位置`,
+      message: msg(language,
+        `${run.label}: leftover ${packed.leftover}" exceeds what fillers can absorb — adjust appliance placement`,
+        `${run.label} 剩余 ${packed.leftover}"，超出填缝条能吸收的范围，建议调整家电位置`),
     });
   }
 
@@ -1002,7 +1025,7 @@ function fillBaseSegment(
   if (fillers.start > 0) {
     placements.push({
       kind: "filler", layer: "base", wallRunId: run.id,
-      x: cursor, width: fillers.start, height: HEIGHTS.baseBox, depth: 24, label: "填缝条",
+      x: cursor, width: fillers.start, height: HEIGHTS.baseBox, depth: 24, label: "Filler",
     });
     cursor = quantize(cursor + fillers.start);
   }
@@ -1024,7 +1047,7 @@ function fillBaseSegment(
   if (fillers.end > 0) {
     placements.push({
       kind: "filler", layer: "base", wallRunId: run.id,
-      x: cursor, width: fillers.end, height: HEIGHTS.baseBox, depth: 24, label: "填缝条",
+      x: cursor, width: fillers.end, height: HEIGHTS.baseBox, depth: 24, label: "Filler",
     });
   }
 }
@@ -1105,10 +1128,15 @@ function planApplianceCabinets(
   run: WallRun,
   placed: readonly PlacedAppliance[],
   modules: readonly ModuleSpec[],
-  opts: { includeWall: boolean; usable?: { start: number; end: number } },
+  opts: {
+    includeWall: boolean;
+    usable?: { start: number; end: number };
+    language?: UiLanguage;
+  },
 ): { placements: Placement[]; warnings: LayoutWarning[] } {
   const placements: Placement[] = [];
   const warnings: LayoutWarning[] = [];
+  const lang = opts.language ?? DEFAULT_LANGUAGE;
   // 配套柜可能比它服务的家电还宽（36" 的柜盖 33" 的冰箱位），家电本身没进
   // 让位区不代表它的上柜也没进。夹的是**让过墙角之后**的区间，不是整面墙。
   const usable = opts.usable ?? { start: 0, end: run.length };
@@ -1125,7 +1153,9 @@ function planApplianceCabinets(
       if (!over) {
         warnings.push({
           code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
-          message: `这家公司没有冰箱上柜型号，${run.label}的冰箱顶部会留一个空当`,
+          message: msg(lang,
+            `This catalog has no fridge upper; the top of the fridge on ${run.label} will be an open gap`,
+            `这家公司没有冰箱上柜型号，${run.label}的冰箱顶部会留一个空当`),
         });
         continue;
       }
@@ -1135,8 +1165,11 @@ function planApplianceCabinets(
       if (width === undefined) {
         warnings.push({
           code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
-          message: `冰箱位 ${p.width}" 比这家最宽的冰箱上柜（` +
-            `${Math.max(...over.widthOptions)}"）还宽，顶部盖不满`,
+          message: msg(lang,
+            `Fridge opening ${p.width}" is wider than this catalog's widest fridge upper (` +
+              `${Math.max(...over.widthOptions)}") — the top won't cover`,
+            `冰箱位 ${p.width}" 比这家最宽的冰箱上柜（` +
+              `${Math.max(...over.widthOptions)}"）还宽，顶部盖不满`),
         });
         continue;
       }
@@ -1151,7 +1184,7 @@ function planApplianceCabinets(
         ...(over.faceTemplateId ? { faceTemplateId: over.faceTemplateId } : {}),
         // 带上它配的是哪台家电——渲染层据此归类上色（kernel/palette.ts）
         applianceKind: "refrigerator",
-        label: "冰箱上柜",
+        label: msg(lang, "Fridge upper", "冰箱上柜"),
       });
       continue;
     }
@@ -1169,8 +1202,11 @@ function planApplianceCabinets(
       if (!mod) {
         warnings.push({
           code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
-          message: `这家公司没有宽度 ≤${p.width}" 的灶下柜（也没有同宽的门板柜）——` +
-            `嵌入式灶台下面必须有柜子，普通抽屉柜的上层抽屉会顶到灶体`,
+          message: msg(lang,
+            `This catalog has no cooktop base ≤${p.width}" (nor a matching door base) — ` +
+              `a cooktop needs a cabinet underneath; a regular drawer base's top drawer hits the cooktop body`,
+            `这家公司没有宽度 ≤${p.width}" 的灶下柜（也没有同宽的门板柜）——` +
+              `嵌入式灶台下面必须有柜子，普通抽屉柜的上层抽屉会顶到灶体`),
         });
         continue;
       }
@@ -1186,20 +1222,25 @@ function planApplianceCabinets(
         ...(mod.faceTemplateId ? { faceTemplateId: mod.faceTemplateId } : {}),
         applianceKind: "cooktop",
         applianceSpec: p.spec,
-        label: `灶下柜（台面开孔 ${formatWidth(p.spec.width)}）`,
+        label: msg(lang,
+          `Cooktop base (counter cutout ${formatWidth(p.spec.width)})`,
+          `灶下柜（台面开孔 ${formatWidth(p.spec.width)}）`),
       });
       if (width < p.width) {
         placements.push({
           kind: "filler", layer: "base", wallRunId: run.id,
           x: quantize(p.x + width), width: quantize(p.width - width),
-          height: HEIGHTS.baseBox, depth: 24, label: "填缝条",
+          height: HEIGHTS.baseBox, depth: 24, label: "Filler",
         });
       }
       if (!exact) {
         warnings.push({
           code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
-          message: `这家公司没有专门的灶下柜型号，${run.label}的灶台下面用 ${mod.code} ` +
-            `（门板柜）代替——能装，但抽屉储物会少一格`,
+          message: msg(lang,
+            `This catalog has no dedicated cooktop base; under the cooktop on ${run.label} ` +
+              `we used ${mod.code} (door base) — it fits, but you lose one drawer of storage`,
+            `这家公司没有专门的灶下柜型号，${run.label}的灶台下面用 ${mod.code} ` +
+              `（门板柜）代替——能装，但抽屉储物会少一格`),
         });
       }
       continue;
@@ -1220,14 +1261,16 @@ function planApplianceCabinets(
         moduleId: over.id, moduleCode: over.code,
         ...(over.faceTemplateId ? { faceTemplateId: over.faceTemplateId } : {}),
         applianceKind: "wallOven",
-        label: "烤箱高柜",
+        label: msg(lang, "Oven tall cabinet", "烤箱高柜"),
       });
       continue;
     }
     if (p.spec.kind === "wallOven" && !over) {
       warnings.push({
         code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
-        message: "这家公司没有烤箱高柜型号，独立烤箱没有地方嵌装",
+        message: msg(lang,
+          "This catalog has no oven tall cabinet — nowhere to install a wall oven",
+          "这家公司没有烤箱高柜型号，独立烤箱没有地方嵌装"),
       });
     }
   }
@@ -1253,31 +1296,32 @@ export function regenerateRun(
   // 家电落位按**完整户型**算一次再传进去——只把一段墙交给 generateLayout
   // 会让它以为整个厨房只有这一面墙，冰箱就跑过来了
   const appliancePlan = opts.appliancePlan
-    ?? planAppliances(geometry, opts.appliances ?? DEFAULT_APPLIANCES);
+    ?? planAppliances(geometry, opts.appliances ?? DEFAULT_APPLIANCES, opts.language ?? DEFAULT_LANGUAGE);
   // 平面同理，而且更要命：单独一段墙看不见自己的墙角，重排出来的柜子会一直
   // 排到墙角，压在隔壁那段墙的柜子上——**改一面墙，撞坏另一面墙**
-  const plan = opts.plan ?? buildKitchenPlan(geometry);
+  const plan = opts.plan ?? buildKitchenPlan(geometry, opts.language ?? DEFAULT_LANGUAGE);
   const regenerated = generateLayout(
     { ...geometry, wallRuns: [run] }, modules, { ...opts, appliancePlan, plan },
   );
   const placements = [...untouched, ...regenerated.placements];
   // 硬约束与美观分要按合并后的整体重算——只重排一段墙也可能破坏工作三角
+  const lang = opts.language ?? DEFAULT_LANGUAGE;
   const ergonomics: ErgonomicViolation[] = [];
   const aesthetics: { wallRunId: string; score: AestheticScore }[] = [];
   if (!opts.skipErgonomics) {
     for (const r of geometry.wallRuns) {
       if (r.length <= 0) continue;
       ergonomics.push(...checkErgonomics({
-        run: r, placements,
+        run: r, placements, language: lang,
         hasDishwasher: (opts.appliances ?? []).some((a) => a.kind === "dishwasher"),
       }));
     }
-    ergonomics.push(...checkWorkTriangle(trianglePoints(plan, placements)));
-    ergonomics.push(...checkAisles(plan));
+    ergonomics.push(...checkWorkTriangle(trianglePoints(plan, placements), lang));
+    ergonomics.push(...checkAisles(plan, lang));
   }
   for (const r of geometry.wallRuns) {
     if (r.length <= 0) continue;
-    aesthetics.push({ wallRunId: r.id, score: scoreAesthetics({ run: r, placements }) });
+    aesthetics.push({ wallRunId: r.id, score: scoreAesthetics({ run: r, placements, language: lang }) });
   }
 
   return {

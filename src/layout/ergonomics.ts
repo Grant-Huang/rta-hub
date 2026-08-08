@@ -8,9 +8,15 @@
  * ⚠️ **数值来源**：以下净空取自北美 NKBA（National Kitchen & Bath Association）
  * 厨房规划指南的常见表述。与税率同样处理：**这是种子数据，上线前必须核对
  * 现行版本**（见 PRE_LAUNCH_CHECKLIST）。数值集中在此处，改数值不用改逻辑。
+ *
+ * ## 语言
+ *
+ * `message` 默认英文；只有调用方传入 `language: "zh"` 时才出中文
+ * （与会话偏好同一套 `UiLanguage`）。
  */
 import type { Placement } from "./generate.js";
 import type { WallRun } from "../floorplan/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 import {
   AISLE, COUNTERTOP, depthOf, gapBetween, hasContinuousCounter, toPlane,
   type KitchenPlan, type PlacedRun, type Rect,
@@ -140,6 +146,8 @@ export interface ErgonomicsInput {
   placements: readonly Placement[];
   /** 是否已知洗碗机位置（没排洗碗机时跳过相关检查）。 */
   hasDishwasher?: boolean;
+  /** 客户语言偏好。默认英文。 */
+  language?: UiLanguage;
 }
 
 /**
@@ -149,6 +157,7 @@ export interface ErgonomicsInput {
  */
 export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
   const { run, placements } = input;
+  const lang = input.language ?? DEFAULT_LANGUAGE;
   const violations: ErgonomicViolation[] = [];
   const mine = placements.filter((p) => p.wallRunId === run.id);
 
@@ -160,8 +169,11 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
     if (!meetsTwoSided(landing, CLEARANCE.sinkLandingPrimary, CLEARANCE.sinkLandingSecondary)) {
       violations.push({
         code: "SINK_LANDING", severity: "blocking", wallRunId: run.id,
-        message: `水槽两侧的台面工作区不足（现为 ${round(landing.left)}" / ${round(landing.right)}"，` +
-          `需要一侧 ≥${CLEARANCE.sinkLandingPrimary}"、另一侧 ≥${CLEARANCE.sinkLandingSecondary}"）`,
+        message: msg(lang,
+          `Sink landing is short (now ${round(landing.left)}" / ${round(landing.right)}";` +
+            ` need ≥${CLEARANCE.sinkLandingPrimary}" on one side and ≥${CLEARANCE.sinkLandingSecondary}" on the other)`,
+          `水槽两侧的台面工作区不足（现为 ${round(landing.left)}" / ${round(landing.right)}"，` +
+            `需要一侧 ≥${CLEARANCE.sinkLandingPrimary}"、另一侧 ≥${CLEARANCE.sinkLandingSecondary}"）`),
       });
     }
   }
@@ -177,9 +189,13 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
     if (!meetsTwoSided(landing, CLEARANCE.cooktopLandingPrimary, CLEARANCE.cooktopLandingSecondary)) {
       violations.push({
         code: "COOKTOP_LANDING", severity: "blocking", wallRunId: run.id,
-        message: `灶具两侧的落台区不足（现为 ${round(landing.left)}" / ${round(landing.right)}"，` +
-          `需要一侧 ≥${CLEARANCE.cooktopLandingPrimary}"、另一侧 ≥${CLEARANCE.cooktopLandingSecondary}"）` +
-          `——这是放置热锅的安全空间`,
+        message: msg(lang,
+          `Cooktop landing is short (now ${round(landing.left)}" / ${round(landing.right)}";` +
+            ` need ≥${CLEARANCE.cooktopLandingPrimary}" / ≥${CLEARANCE.cooktopLandingSecondary}")` +
+            ` — clearance for hot pans`,
+          `灶具两侧的落台区不足（现为 ${round(landing.left)}" / ${round(landing.right)}"，` +
+            `需要一侧 ≥${CLEARANCE.cooktopLandingPrimary}"、另一侧 ≥${CLEARANCE.cooktopLandingSecondary}"）` +
+            `——这是放置热锅的安全空间`),
       });
     }
   }
@@ -191,8 +207,11 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
     if (Math.max(landing.left, landing.right) < CLEARANCE.refrigeratorLanding) {
       violations.push({
         code: "REFRIGERATOR_LANDING", severity: "blocking", wallRunId: run.id,
-        message: `冰箱旁没有 ≥${CLEARANCE.refrigeratorLanding}" 的落台区（现为 ` +
-          `${round(Math.max(landing.left, landing.right))}"），拿出来的东西没地方放`,
+        message: msg(lang,
+          `No ≥${CLEARANCE.refrigeratorLanding}" landing beside the fridge` +
+            ` (now ${round(Math.max(landing.left, landing.right))}") — nowhere to set items down`,
+          `冰箱旁没有 ≥${CLEARANCE.refrigeratorLanding}" 的落台区（现为 ` +
+            `${round(Math.max(landing.left, landing.right))}"），拿出来的东西没地方放`),
       });
     }
   }
@@ -206,14 +225,19 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
     if (gap > CLEARANCE.dishwasherToSinkMax) {
       violations.push({
         code: "DISHWASHER_TOO_FAR", severity: "blocking", wallRunId: run.id,
-        message: `洗碗机距水槽 ${round(gap)}"，超过 ${CLEARANCE.dishwasherToSinkMax}"——` +
-          `每次装碗都要端着滴水的餐具走一段`,
+        message: msg(lang,
+          `Dishwasher is ${round(gap)}" from the sink (max ${CLEARANCE.dishwasherToSinkMax}")` +
+            ` — you'll drip across the floor loading dishes`,
+          `洗碗机距水槽 ${round(gap)}"，超过 ${CLEARANCE.dishwasherToSinkMax}"——` +
+            `每次装碗都要端着滴水的餐具走一段`),
       });
     }
   } else if (input.hasDishwasher && dishwasher && !sink) {
     violations.push({
       code: "DISHWASHER_TOO_FAR", severity: "advisory", wallRunId: run.id,
-      message: "洗碗机与水槽不在同一段墙上，请确认走水方便",
+      message: msg(lang,
+        "Dishwasher and sink are on different walls — confirm carry distance is acceptable",
+        "洗碗机与水槽不在同一段墙上，请确认走水方便"),
     });
   }
 
@@ -222,8 +246,11 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
   if (longestRun > 0 && longestRun < CLEARANCE.continuousPrepSurface) {
     violations.push({
       code: "NO_CONTINUOUS_PREP", severity: "advisory", wallRunId: run.id,
-      message: `最长的连续台面只有 ${round(longestRun)}"，建议至少留一段 ` +
-        `${CLEARANCE.continuousPrepSurface}" 作为备餐区`,
+      message: msg(lang,
+        `Longest continuous counter is only ${round(longestRun)}";` +
+          ` aim for at least one ${CLEARANCE.continuousPrepSurface}" prep run`,
+        `最长的连续台面只有 ${round(longestRun)}"，建议至少留一段 ` +
+          `${CLEARANCE.continuousPrepSurface}" 作为备餐区`),
     });
   }
 
@@ -233,7 +260,10 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
     if (code.startsWith("BBC") || code.startsWith("WBC") || code.startsWith("WBBC")) {
       violations.push({
         code: "UNREACHABLE_BLIND_CORNER", severity: "advisory", wallRunId: run.id,
-        message: `${p.moduleCode} 是盲角柜，深处够不着——建议配拉篮，或换成转角柜（如 LSB）`,
+        message: msg(lang,
+          `${p.moduleCode} is a blind corner — deep storage is hard to reach;` +
+            ` add a pull-out or switch to a diagonal corner (e.g. LSB)`,
+          `${p.moduleCode} 是盲角柜，深处够不着——建议配拉篮，或换成转角柜（如 LSB）`),
       });
     }
   }
@@ -277,37 +307,47 @@ export interface TrianglePoint {
  * 需要各墙段在平面里的实际位置，故由调用方把「沿墙坐标」换算成平面坐标后传入。
  * 单边 4–9 ft、总和 ≤26 ft 是 NKBA 的常见表述。
  */
-export function checkWorkTriangle(points: readonly TrianglePoint[]): ErgonomicViolation[] {
+export function checkWorkTriangle(
+  points: readonly TrianglePoint[],
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): ErgonomicViolation[] {
   const sink = points.find((p) => p.kind === "sink");
   const cooktop = points.find((p) => p.kind === "cooktop");
   const fridge = points.find((p) => p.kind === "refrigerator");
   if (!sink || !cooktop || !fridge) return []; // 三点不全就不判定
 
-  const legs: [string, number][] = [
-    ["水槽↔灶具", dist(sink, cooktop)],
-    ["灶具↔冰箱", dist(cooktop, fridge)],
-    ["冰箱↔水槽", dist(fridge, sink)],
+  const legs: [string, string, number][] = [
+    ["Sink↔cooktop", "水槽↔灶具", dist(sink, cooktop)],
+    ["Cooktop↔fridge", "灶具↔冰箱", dist(cooktop, fridge)],
+    ["Fridge↔sink", "冰箱↔水槽", dist(fridge, sink)],
   ];
-  const total = legs.reduce((s, [, d]) => s + d, 0);
+  const total = legs.reduce((s, [, , d]) => s + d, 0);
   const violations: ErgonomicViolation[] = [];
 
-  for (const [name, d] of legs) {
+  for (const [enName, zhName, d] of legs) {
+    const name = msg(language, enName, zhName);
     if (d < CLEARANCE.workTriangleLegMin) {
       violations.push({
         code: "WORK_TRIANGLE", severity: "advisory",
-        message: `${name} 只有 ${round(d / 12)} 英尺，低于建议的 ${CLEARANCE.workTriangleLegMin / 12} 英尺，操作会显得局促`,
+        message: msg(language,
+          `${name} is only ${round(d / 12)} ft (min ${CLEARANCE.workTriangleLegMin / 12} ft) — the work zone feels cramped`,
+          `${name} 只有 ${round(d / 12)} 英尺，低于建议的 ${CLEARANCE.workTriangleLegMin / 12} 英尺，操作会显得局促`),
       });
     } else if (d > CLEARANCE.workTriangleLegMax) {
       violations.push({
         code: "WORK_TRIANGLE", severity: "advisory",
-        message: `${name} 有 ${round(d / 12)} 英尺，超过建议的 ${CLEARANCE.workTriangleLegMax / 12} 英尺，来回走动过多`,
+        message: msg(language,
+          `${name} is ${round(d / 12)} ft (max ${CLEARANCE.workTriangleLegMax / 12} ft) — too much walking`,
+          `${name} 有 ${round(d / 12)} 英尺，超过建议的 ${CLEARANCE.workTriangleLegMax / 12} 英尺，来回走动过多`),
       });
     }
   }
   if (total > CLEARANCE.workTriangleTotalMax) {
     violations.push({
       code: "WORK_TRIANGLE", severity: "advisory",
-      message: `工作三角总长 ${round(total / 12)} 英尺，超过建议的 ${CLEARANCE.workTriangleTotalMax / 12} 英尺`,
+      message: msg(language,
+        `Work triangle totals ${round(total / 12)} ft (max ${CLEARANCE.workTriangleTotalMax / 12} ft)`,
+        `工作三角总长 ${round(total / 12)} 英尺，超过建议的 ${CLEARANCE.workTriangleTotalMax / 12} 英尺`),
     });
   }
   return violations;
@@ -327,7 +367,10 @@ export function checkWorkTriangle(points: readonly TrianglePoint[]): ErgonomicVi
  * 两边各伸一次就是 3"，正好卡在 42" 与 39" 的分界上。按箱体量会算出一条
  * 实际上并不存在的合格过道。
  */
-export function checkAisles(plan: KitchenPlan): ErgonomicViolation[] {
+export function checkAisles(
+  plan: KitchenPlan,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): ErgonomicViolation[] {
   const violations: ErgonomicViolation[] = [];
   const islands = plan.runs.filter((r) => r.island);
   if (islands.length === 0) return violations;
@@ -344,14 +387,20 @@ export function checkAisles(plan: KitchenPlan): ErgonomicViolation[] {
       if (gap < AISLE.walkway) {
         violations.push({
           code: "AISLE_TOO_NARROW", severity: "blocking", wallRunId: island.run.id,
-          message: `${island.run.label}与${other.run.label}之间的过道只有 ${round(gap)}"，` +
-            `人过不去（至少要 ${AISLE.walkway}"）。把岛台改窄或去掉一排柜子才放得下。`,
+          message: msg(language,
+            `Aisle between ${island.run.label} and ${other.run.label} is only ${round(gap)}"` +
+              ` (need ≥${AISLE.walkway}"). Narrow the island or drop a run.`,
+            `${island.run.label}与${other.run.label}之间的过道只有 ${round(gap)}"，` +
+              `人过不去（至少要 ${AISLE.walkway}"）。把岛台改窄或去掉一排柜子才放得下。`),
         });
       } else if (gap < AISLE.work) {
         violations.push({
           code: "AISLE_TOO_NARROW", severity: "advisory", wallRunId: island.run.id,
-          message: `${island.run.label}与${other.run.label}之间的过道 ${round(gap)}"，` +
-            `低于建议的 ${AISLE.work}"——弯腰开下面的柜门时会顶到对面。`,
+          message: msg(language,
+            `Aisle between ${island.run.label} and ${other.run.label} is ${round(gap)}"` +
+              ` (recommended ≥${AISLE.work}") — opposite doors will bump when you bend to open them.`,
+            `${island.run.label}与${other.run.label}之间的过道 ${round(gap)}"，` +
+              `低于建议的 ${AISLE.work}"——弯腰开下面的柜门时会顶到对面。`),
         });
       }
     }

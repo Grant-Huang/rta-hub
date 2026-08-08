@@ -40,6 +40,7 @@ import { ZERO, fromCents, sub, type Money } from "../domain/money.js";
 import { computePrice, PricingError, type PricingContext, type PricingInput } from "../pricing/engine.js";
 import { priceEntryFor } from "../spec/finish.js";
 import type { DoorStyle, ModuleSelection } from "../domain/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export interface FinishOption {
   doorStyleId: string;
@@ -89,6 +90,8 @@ export interface FinishComparisonInput {
   accountType: PricingInput["accountType"];
   province: PricingInput["province"];
   at: string;
+  /** 客户可见文案语言；默认英文。 */
+  language?: UiLanguage;
 }
 
 export function compareFinishes(input: FinishComparisonInput): FinishComparison {
@@ -132,6 +135,7 @@ export function compareFinishes(input: FinishComparisonInput): FinishComparison 
  * 而那是最难解释的一种不一致。
  */
 function evaluate(style: DoorStyle, input: FinishComparisonInput): FinishOption {
+  const lang = input.language ?? DEFAULT_LANGUAGE;
   const base: FinishOption = {
     doorStyleId: style.id,
     doorStyleName: style.name,
@@ -143,11 +147,15 @@ function evaluate(style: DoorStyle, input: FinishComparisonInput): FinishOption 
   // 而客户想知道的是"要调整哪几个"
   const holes = holesFor(style, input);
   if (holes.length > 0) {
+    const codes = holes.join(msg(lang, ", ", "、"));
     return {
       ...base,
       unavailable: {
-        reason: `该商家的 ${holes.join("、")} 不供应此花色所属的价格组，` +
-          `换色需要先调整${holes.length > 1 ? "这几个" : "这个"}型号`,
+        reason: msg(lang,
+          `This seller does not offer ${codes} in this finish's price group — ` +
+            `change ${holes.length > 1 ? "these SKUs" : "this SKU"} before switching finishes`,
+          `该商家的 ${codes} 不供应此花色所属的价格组，` +
+            `换色需要先调整${holes.length > 1 ? "这几个" : "这个"}型号`),
         moduleCodes: holes,
       },
     };
@@ -170,7 +178,9 @@ function evaluate(style: DoorStyle, input: FinishComparisonInput): FinishOption 
       unavailable: {
         reason: err instanceof PricingError
           ? err.message
-          : "这个花色算不出价，请联系该商家确认",
+          : msg(lang,
+            "This finish cannot be priced — please confirm with the seller",
+            "这个花色算不出价，请联系该商家确认"),
         moduleCodes: [],
       },
     };
@@ -194,11 +204,15 @@ function holesFor(style: DoorStyle, input: FinishComparisonInput): string[] {
 export function renderFinishComparison(
   cmp: FinishComparison,
   format: (m: Money) => string,
+  language: UiLanguage = DEFAULT_LANGUAGE,
 ): string {
+  const lang = language;
   if (cmp.options.length <= 1) return "";
-  const out: string[] = ["【换一种门板花色】"];
+  const out: string[] = [msg(lang, "[Try another door finish]", "【换一种门板花色】")];
   if (cmp.current?.total !== undefined) {
-    out.push(`  当前：${cmp.current.doorStyleName}　${format(cmp.current.total)}`);
+    out.push(msg(lang,
+      `  Current: ${cmp.current.doorStyleName}  ${format(cmp.current.total)}`,
+      `  当前：${cmp.current.doorStyleName}　${format(cmp.current.total)}`));
     out.push(`  ${"─".repeat(52)}`);
   }
   for (const o of cmp.options) {
@@ -208,14 +222,20 @@ export function renderFinishComparison(
       continue;
     }
     const pct = o.deltaPercent === undefined ? ""
-      : o.deltaPercent === 0 ? "同价"
-        : o.deltaPercent > 0 ? `贵 ${o.deltaPercent}%` : `便宜 ${-o.deltaPercent}%`;
+      : o.deltaPercent === 0 ? msg(lang, "same price", "同价")
+        : o.deltaPercent > 0
+          ? msg(lang, `+${o.deltaPercent}%`, `贵 ${o.deltaPercent}%`)
+          : msg(lang, `${o.deltaPercent}%`, `便宜 ${-o.deltaPercent}%`);
     const delta = o.delta === undefined || o.delta === 0
       ? "±$0" : `${o.delta > 0 ? "+" : "−"}${format(fromCents(Math.abs(o.delta)))}`;
     out.push(`  ${o.doorStyleName}　${pct}　${format(o.total!)}　${delta}`);
   }
   out.push("");
-  out.push("  说明：以上是同一套方案换门板后的**重算价**，柜体数量与排布完全不变。");
-  out.push("  填缝条、收口板、踢脚板跟着换色；塑料地脚不换——它藏在踢脚板后面，一个价。");
+  out.push(msg(lang,
+    "  Note: these are **recalculated** prices for the same layout with a different door finish — cabinet count and placement stay the same.",
+    "  说明：以上是同一套方案换门板后的**重算价**，柜体数量与排布完全不变。"));
+  out.push(msg(lang,
+    "  Fillers, end panels, and toe kicks follow the finish; plastic legs do not — they hide behind the toe kick and stay one price.",
+    "  填缝条、收口板、踢脚板跟着换色；塑料地脚不换——它藏在踢脚板后面，一个价。"));
   return out.join("\n");
 }

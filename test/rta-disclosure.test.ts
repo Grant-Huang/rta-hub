@@ -24,22 +24,22 @@ const opts = { profile: interactionProfile("consumer") };
 
 test("开场那一段把三件事都说到：不是定制、需要组装、不含安装", () => {
   assert.match(RTA_INTRO, /RTA/);
-  assert.match(RTA_INTRO, /不是全定制/);
-  assert.match(RTA_INTRO, /组装/);
-  assert.match(RTA_INTRO, /安装/);
+  assert.match(RTA_INTRO, /not fully custom/i);
+  assert.match(RTA_INTRO, /assembl/i);
+  assert.match(RTA_INTRO, /install/i);
 });
 
 test("报价单末尾也说一遍——只在开场说过一次不算说过", () => {
   // 报价单是客户**已经把方案做完之后**才看到的，也是他拿去跟定制报价比的那一份
   assert.match(RTA_QUOTE_NOTE, /RTA/);
-  assert.match(RTA_QUOTE_NOTE, /组装/);
-  assert.match(RTA_QUOTE_NOTE, /不含.*安装/);
-  assert.match(RTA_QUOTE_NOTE, /定制/, "没提醒客户拿去与定制对比时要算上这一点");
+  assert.match(RTA_QUOTE_NOTE, /assembl/i);
+  assert.match(RTA_QUOTE_NOTE, /install/i);
+  assert.match(RTA_QUOTE_NOTE, /custom/i, "没提醒客户拿去与定制对比时要算上这一点");
 });
 
 test("差异表把最容易变成投诉的那几条都列了", () => {
   const aspects = RTA_DIFFERENCES.map((d) => d.aspect);
-  for (const need of ["尺寸", "安装", "到货状态"]) {
+  for (const need of ["Size", "Installation", "How it arrives"]) {
     assert.ok(aspects.includes(need), `差异表里没有「${need}」——那正是事后最容易吵的一条`);
   }
   // 每一条都要两边都说，只说 RTA 那边等于没有对比
@@ -49,9 +49,9 @@ test("差异表把最容易变成投诉的那几条都列了", () => {
 });
 
 test("差异说明既不贬低也不美化：说清便宜在哪，不说「质量差」", () => {
-  const text = renderRtaComparison();
-  assert.match(text, /省掉|设计费|组装工时/, "没说清便宜是因为省掉了什么");
-  assert.match(text, /不是\*\*质量\*\*|差的是\*\*做法\*\*/,
+  const text = renderRtaComparison("en");
+  assert.match(text, /Skips|assembly|design/i, "没说清便宜是因为省掉了什么");
+  assert.match(text, /how it's made|not \*\*quality\*\*/i,
     "没点明差的是做法不是质量——不点明，客户会以为 RTA 就是低质");
 });
 
@@ -62,6 +62,7 @@ test("客户问「RTA 和定制有什么区别」时认得出来", () => {
     "什么是 RTA",
     "需要自己组装吗？跟定制橱柜差在哪",
     "定制橱柜和这个厨房柜子有什么不同",
+    "What's the difference between RTA and custom?",
   ];
   for (const q of yes) assert.ok(asksAboutRta(q), `没认出这是在问 RTA：「${q}」`);
 
@@ -76,16 +77,20 @@ test("这道题**不走模型**——配了模型也一样给固定答案", asyn
   const client = {
     complete: async () => { called = true; return "RTA 就是便宜一点的橱柜，其他都一样。"; },
   };
-  const reply = await orchestratorReply(client, ctx, "RTA 和定制有什么区别？", opts);
+  const reply = await orchestratorReply(client, ctx, "RTA 和定制有什么区别？", {
+    ...opts, language: "zh",
+  });
   assert.equal(called, false, "把产品边界问题交给了模型");
   assert.match(reply.content, /尺寸/);
   assert.match(reply.content, /安装/);
 });
 
 test("没配模型时同样答得出来——不退化成「还需要：厨房尺寸…」", async () => {
-  const reply = await orchestratorReply(undefined, ctx, "什么是 RTA？", opts);
+  const reply = await orchestratorReply(undefined, ctx, "什么是 RTA？", {
+    ...opts, language: "zh",
+  });
   assert.match(reply.content, /ready-to-assemble|待组装/);
-  assert.doesNotMatch(reply.content, /还想确认|还需要/,
+  assert.doesNotMatch(reply.content, /还想确认|还需要|Still need|Got it\. One/,
     "把客户的提问当成了「他还没答我的问题」");
 });
 

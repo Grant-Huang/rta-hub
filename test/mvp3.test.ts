@@ -373,7 +373,7 @@ test("审核：驳回必须给原因，已通过的不能重复提交", () => {
 
   assert.throws(() => reviewVerification(pending, {
     approve: false, reviewedBy: "ops", at: AT,
-  }), /必须给出原因/);
+  }), /reason|必须给出原因/i);
 
   const rejected = reviewVerification(pending, {
     approve: false, reviewedBy: "ops", reason: "GST 号查无此号", at: AT,
@@ -387,10 +387,10 @@ test("审核：驳回必须给原因，已通过的不能重复提交", () => {
   const approved = reviewVerification(pending, { approve: true, reviewedBy: "ops", at: AT });
   assert.equal(approved.status, "verified");
   assert.throws(() => reviewVerification(approved, { approve: true, reviewedBy: "ops", at: AT }),
-    /只有 pending/);
+    /only pending|只有 pending/i);
   assert.throws(() => submitVerification(approved, {
     accountId: "ca_1", businessNumber: "123456789RT0001", legalName: "X Ltd", at: AT,
-  }), /已通过资质审核/);
+  }), /already verified|已通过资质审核/i);
 });
 
 test("被驳回后可以重新提交", () => {

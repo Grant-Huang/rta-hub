@@ -91,7 +91,7 @@ export class StageError extends Error {}
 
 export function assertStageMove(from: DesignStage, to: DesignStage): void {
   if (!ALLOWED_STAGE_MOVES[from].includes(to)) {
-    throw new StageError(`设计阶段不能从 ${from} 直接到 ${to}`);
+    throw new StageError(`Cannot move design stage from ${from} directly to ${to}`);
   }
 }
 
@@ -128,15 +128,17 @@ export interface StagePrompt {
 export function stagePrompt(session: DesignSession, ctx: {
   missingFields?: readonly string[];
   planAcceptable?: boolean;
+  language?: "en" | "zh";
 }): StagePrompt {
+  const zh = ctx.language === "zh";
   switch (session.stage) {
     case "collecting": {
       const missing = ctx.missingFields ?? [];
       return {
         stage: session.stage,
         message: missing.length
-          ? `还需要补充：${missing.join("、")}。`
-          : "资料看起来齐了。",
+          ? (zh ? `还需要补充：${missing.join("、")}。` : `Still need: ${missing.join(", ")}.`)
+          : (zh ? "资料看起来齐了。" : "Looks like we have enough to continue."),
         awaiting: "moreInfo",
         actions: [],
       };
@@ -145,54 +147,89 @@ export function stagePrompt(session: DesignSession, ctx: {
     case "readyToDraw":
       return {
         stage: session.stage,
-        message:
-          "户型和偏好都齐了。**需要我帮你生成设计图吗？**\n" +
-          "我会先出一张全局俯视图，让你看看柜子大致怎么排；" +
-          "你觉得排布没问题了，我再出完整的四视图和报价清单。",
+        message: zh
+          ? "户型和偏好都齐了。**需要我帮你生成设计图吗？**\n" +
+            "我会先出一张全局俯视图，让你看看柜子大致怎么排；" +
+            "你觉得排布没问题了，我再出完整的四视图和报价清单。"
+          : "Floor plan and preferences look complete. **Shall I generate a design drawing?**\n" +
+            "I'll start with an overall plan view so you can review cabinet placement; " +
+            "once that looks right, I'll produce the full four views and quote list.",
         awaiting: "drawingConsent",
-        actions: [
-          { id: "yes", label: "好，出图看看" },
-          { id: "notYet", label: "先等等，我还想补充点东西" },
-        ],
+        actions: zh
+          ? [
+              { id: "yes", label: "好，出图看看" },
+              { id: "notYet", label: "先等等，我还想补充点东西" },
+            ]
+          : [
+              { id: "yes", label: "Yes — show me a plan" },
+              { id: "notYet", label: "Not yet — I want to add more" },
+            ],
       };
 
     case "planReview":
       return {
         stage: session.stage,
         message: session.planRevisions === 0
-          ? "这是全局俯视图，分地柜层和吊柜层。**先看排布**——哪个柜子该挪、" +
-            "哪里想换成抽屉，直接说。觉得可以了我再出完整四视图。"
-          : `已经调整 ${session.planRevisions} 轮。还有要改的吗？没有的话我出完整图纸。`,
+          ? (zh
+            ? "这是全局俯视图，分地柜层和吊柜层。**先看排布**——哪个柜子该挪、" +
+              "哪里想换成抽屉，直接说。觉得可以了我再出完整四视图。"
+            : "Here's the overall plan (base and wall layers). **Review the layout first** — " +
+              "tell me what to move or which bays should become drawers. When you're happy, I'll produce the full drawings.")
+          : (zh
+            ? `已经调整 ${session.planRevisions} 轮。还有要改的吗？没有的话我出完整图纸。`
+            : `Adjusted ${session.planRevisions} time(s). Anything else to change? If not, I'll produce the full drawings.`),
         awaiting: "planFeedback",
-        actions: [
-          { id: "approve", label: "排布可以了，出完整图纸" },
-          { id: "revise", label: "还要调整" },
-        ],
+        actions: zh
+          ? [
+              { id: "approve", label: "排布可以了，出完整图纸" },
+              { id: "revise", label: "还要调整" },
+            ]
+          : [
+              { id: "approve", label: "Layout looks good — full drawings" },
+              { id: "revise", label: "Still needs changes" },
+            ],
       };
 
     case "fullDrawings":
       return {
         stage: session.stage,
         message: ctx.planAcceptable === false
-          ? "完整图纸已出，但这一版没通过人体工程检查，需要先调整才能报价。"
-          : "完整四视图与报价清单已出。要发给这家公司吗？发送前我会先列出" +
-            "将要提供的全部信息给你确认。",
+          ? (zh
+            ? "完整图纸已出，但这一版没通过人体工程检查，需要先调整才能报价。"
+            : "Full drawings are ready, but this version failed ergonomic checks — fix those before quoting.")
+          : (zh
+            ? "完整四视图与报价清单已出。要发给这家公司吗？发送前我会先列出" +
+              "将要提供的全部信息给你确认。"
+            : "Full four views and quote list are ready. Send to this company? " +
+              "I'll list everything that will be shared and ask you to confirm first."),
         awaiting: ctx.planAcceptable === false ? "planFeedback" : "sendConsent",
-        actions: [
-          { id: "quote", label: "看报价清单" },
-          { id: "revise", label: "回去改排布" },
-        ],
+        actions: zh
+          ? [
+              { id: "quote", label: "看报价清单" },
+              { id: "revise", label: "回去改排布" },
+            ]
+          : [
+              { id: "quote", label: "Show quote list" },
+              { id: "revise", label: "Back to layout" },
+            ],
       };
 
     case "quoted":
       return {
         stage: session.stage,
-        message: "报价已生成。可以发给这家公司，也可以再叫别家出一版比价。",
+        message: zh
+          ? "报价已生成。可以发给这家公司，也可以再叫别家出一版比价。"
+          : "Quote is ready. You can send it to this company, or ask another seller for a competing quote.",
         awaiting: "sendConsent",
-        actions: [
-          { id: "disclose", label: "查看将发送的内容" },
-          { id: "revise", label: "回去改排布" },
-        ],
+        actions: zh
+          ? [
+              { id: "disclose", label: "查看将发送的内容" },
+              { id: "revise", label: "回去改排布" },
+            ]
+          : [
+              { id: "disclose", label: "Review what will be sent" },
+              { id: "revise", label: "Back to layout" },
+            ],
       };
   }
 }
@@ -243,7 +280,7 @@ export function recordPlanRevision(
   request: Omit<PlanRevisionRequest, "at">,
 ): DesignSession {
   if (s.stage !== "planReview") {
-    throw new StageError(`只有在全局俯视图评审阶段才能改排布，当前是 ${s.stage}`);
+    throw new StageError(`Layout revisions are only allowed during plan review; current stage is ${s.stage}`);
   }
   return {
     ...s,

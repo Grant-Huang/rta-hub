@@ -1,0 +1,239 @@
+/**
+ * 基于 Ollama 的视觉抽取 —— 实现 `VisionExtractor`（FR-3）。
+ *
+ * 端点用 Ollama 原生 `/api/generate`（`OPENAI_BASE_URL_VISION`，如
+ * `http://localhost:11434`）。模型名取自 `LLM_MODEL_VISION`（默认 qwen2.5vl）。
+ *
+ * 输出必须是 `RawExtraction`（`wallRuns` 等），好让 `normalizeExtraction`
+ * 直接收口——以前这里返回 rooms/walls 形状，归一化永远看不到墙段。
+ */
+import type { VisionExtractor, RawExtraction } from "./parse.js";
+
+interface OllamaGenerateResponse {
+  response?: string;
+  done?: boolean;
+  error?: string;
+}
+
+const FLOOR_PLAN_PROMPT = `You are reading an architectural floor plan image to extract the KITCHEN for cabinet layout.
+
+The image may show a whole house (main floor + upper floor + garage). Focus on the room labeled Kitchen / KITCHEN / 厨房. Ignore bedrooms, garage, office, decks unless they are the only room shown.
+
+From the kitchen outline, return the walls where base cabinets would run (usually along the kitchen perimeter walls that have counters/sink/stove). Lengths must be in **inches**.
+
+Convert feet-inches labels: 11'5" = 11*12+5 = 137 inches. 10'5" = 125 inches.
+
+Return ONLY a JSON object (no markdown fences, no commentary):
+{
+  "ceilingHeight": 96,
+  "ceilingHeightConfidence": 0.4,
+  "overallConfidence": 0.8,
+  "wallRuns": [
+    {
+      "label": "Kitchen wall A",
+      "length": 137,
+      "lengthConfidence": 0.85,
+      "startsAtCorner": true,
+      "endsAtCorner": true,
+      "features": [
+        { "kind": "window", "offset": 24, "width": 36, "confidence": 0.7 },
+        { "kind": "plumbing", "offset": 48, "width": 24, "confidence": 0.6 },
+        { "kind": "door", "offset": 0, "width": 32, "confidence": 0.7 }
+      ]
+    }
+  ],
+  "notes": ["optional uncertainties"]
+}
+
+Rules:
+- kind must be one of: window, door, plumbing, gas, electrical, obstruction.
+- Prefer 2–4 kitchen wall runs that form an L / U / galley from the drawing.
+- If the kitchen is labeled with overall room size (W x D) but individual wall segments are not marked, emit the four sides (or two for a galley) using that W and D.
+- **Only add features you can actually see** (sink → plumbing on that wall, a drawn window, a doorway). Do NOT invent a window/door/plumbing on every wall.
+- If you truly cannot find any kitchen, set wallRuns to [] and explain in notes — but first look carefully for a Kitchen label on the main floor.
+- Do not invent bedrooms as kitchen walls.`;
+
+export interface OllamaVisionOptions {
+  /** Ollama base URL, e.g. http://localhost:11434 */
+  baseURL: string;
+  /** Model tag; default LLM_MODEL_VISION or qwen2.5vl */
+  model?: string;
+  /** Fetch timeout ms. Vision models can be slow on CPU. */
+  timeoutMs?: number;
+}
+
+/** 从环境变量装配；没配 base URL 就返回 undefined（上传降级为手动录入）。 */
+export function createVisionExtractorFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): VisionExtractor | undefined {
+  const baseURL = env.OPENAI_BASE_URL_VISION?.trim();
+  if (!baseURL) return undefined;
+  return createOllamaVisionExtractor(baseURL, {
+    ...(env.LLM_MODEL_VISION?.trim() ? { model: env.LLM_MODEL_VISION.trim() } : {}),
+  });
+}
+
+export function createOllamaVisionExtractor(
+  baseURL: string,
+  opts: Omit<OllamaVisionOptions, "baseURL"> = {},
+): VisionExtractor {
+  const root = baseURL.replace(/\/$/, "");
+  const model = opts.model?.trim() || process.env.LLM_MODEL_VISION?.trim() || "qwen2.5vl";
+  const timeoutMs = opts.timeoutMs ?? 180_000;
+
+  return {
+    async extract({ image, mimeType, hint }): Promise<RawExtraction | undefined> {
+      const b64 = stripDataUrl(image);
+      if (!b64) return undefined;
+
+      const prompt = hint?.trim()
+        ? `${FLOOR_PLAN_PROMPT}\n\nExtra hint from user: ${hint.trim()}`
+        : FLOOR_PLAN_PROMPT;
+
+      const url = `${root}/api/generate`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model,
+            prompt,
+            images: [b64],
+            stream: false,
+            format: "json",
+            options: { temperature: 0.1 },
+          }),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Ollama vision request failed (${url}, model=${model}): ${msg}`);
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(
+          `Ollama API error: ${response.status} ${response.statusText}` +
+            (body ? ` — ${body.slice(0, 200)}` : "") +
+            ` (model=${model}; image=${mimeType})`,
+        );
+      }
+
+      const data = (await response.json()) as OllamaGenerateResponse;
+      if (data.error) throw new Error(`Ollama error: ${data.error}`);
+      const text = data.response?.trim();
+      if (!text) return undefined;
+
+      const parsed = parseJsonObject(text);
+      if (!parsed) {
+        throw new Error(
+          `Vision model returned non-JSON (model=${model}): ${text.slice(0, 280)}`,
+        );
+      }
+      return toRawExtraction(parsed);
+    },
+  };
+}
+
+/** Ollama `images` 要裸 base64，不要 data URL 前缀。 */
+function stripDataUrl(image: string): string {
+  const s = image.trim();
+  const m = /^data:[^;]+;base64,(.+)$/i.exec(s);
+  return (m?.[1] ?? s).replace(/\s+/g, "");
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+  try {
+    const v = JSON.parse(text);
+    if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  } catch { /* try fence */ }
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  if (fenced?.[1]) {
+    try {
+      const v = JSON.parse(fenced[1].trim());
+      if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+    } catch { /* fall through */ }
+  }
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      const v = JSON.parse(text.slice(start, end + 1));
+      if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+    } catch { /* ignore */ }
+  }
+  return undefined;
+}
+
+function num(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) return Number(v);
+  return undefined;
+}
+
+function toRawExtraction(parsed: Record<string, unknown>): RawExtraction {
+  const wallRunsRaw = Array.isArray(parsed.wallRuns) ? parsed.wallRuns
+    : Array.isArray(parsed.walls) ? parsed.walls
+      : [];
+
+  const wallRuns = wallRunsRaw.map((w) => {
+    const row = (w && typeof w === "object" ? w : {}) as Record<string, unknown>;
+    const length = num(row.length) ?? inchesFromFtIn(row.lengthFt, row.lengthIn)
+      ?? num(row.lengthInches);
+    const features = Array.isArray(row.features)
+      ? row.features.map((f) => {
+          const feat = (f && typeof f === "object" ? f : {}) as Record<string, unknown>;
+          return {
+            ...(typeof feat.kind === "string" ? { kind: feat.kind } : {}),
+            ...(num(feat.offset) !== undefined ? { offset: num(feat.offset)! } : {}),
+            ...(num(feat.width) !== undefined ? { width: num(feat.width)! }
+              : inchesFromFtIn(feat.widthFt, feat.widthIn) !== undefined
+                ? { width: inchesFromFtIn(feat.widthFt, feat.widthIn)! } : {}),
+            ...(num(feat.sillHeight) !== undefined ? { sillHeight: num(feat.sillHeight)! } : {}),
+            ...(num(feat.confidence) !== undefined ? { confidence: num(feat.confidence)! } : {}),
+            ...(typeof feat.note === "string" ? { note: feat.note } : {}),
+          };
+        })
+      : undefined;
+
+    return {
+      ...(typeof row.label === "string" ? { label: row.label }
+        : typeof row.id === "string" ? { label: row.id }
+          : typeof row.name === "string" ? { label: row.name } : {}),
+      ...(length !== undefined ? { length } : {}),
+      ...(num(row.lengthConfidence) !== undefined
+        ? { lengthConfidence: num(row.lengthConfidence)! }
+        : length !== undefined ? { lengthConfidence: 0.8 } : {}),
+      ...(typeof row.startsAtCorner === "boolean" ? { startsAtCorner: row.startsAtCorner } : {}),
+      ...(typeof row.endsAtCorner === "boolean" ? { endsAtCorner: row.endsAtCorner } : {}),
+      ...(features && features.length ? { features } : {}),
+    };
+  });
+
+  const ceilingHeight = num(parsed.ceilingHeight);
+  const notes = Array.isArray(parsed.notes)
+    ? parsed.notes.filter((n): n is string => typeof n === "string")
+    : undefined;
+
+  return {
+    ...(ceilingHeight !== undefined ? { ceilingHeight } : {}),
+    ...(num(parsed.ceilingHeightConfidence) !== undefined
+      ? { ceilingHeightConfidence: num(parsed.ceilingHeightConfidence)! } : {}),
+    ...(num(parsed.overallConfidence) !== undefined
+      ? { overallConfidence: num(parsed.overallConfidence)! } : {}),
+    ...(wallRuns.length ? { wallRuns } : { wallRuns: [] }),
+    ...(notes && notes.length ? { notes } : {}),
+  };
+}
+
+function inchesFromFtIn(ft: unknown, inch: unknown): number | undefined {
+  const f = num(ft) ?? 0;
+  const i = num(inch) ?? 0;
+  if (f === 0 && i === 0 && num(ft) === undefined && num(inch) === undefined) return undefined;
+  return f * 12 + i;
+}

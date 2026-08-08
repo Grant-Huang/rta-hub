@@ -8,9 +8,14 @@
  *   36, 33, 30, 30      ← 造价接近，观感好得多
  *
  * 所以宽度节奏必须进目标函数，不能只当锦上添花。
+ *
+ * ## 语言
+ *
+ * `notes` 默认英文；只有调用方传入 `language: "zh"` 时才出中文。
  */
 import type { Placement } from "./generate.js";
 import type { WallRun } from "../floorplan/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 /**
  * 各项权重。数值本身没有绝对意义，重要的是**相对大小**：
@@ -46,20 +51,23 @@ export interface AestheticScore {
 export interface ScoreInput {
   run: WallRun;
   placements: readonly Placement[];
+  /** 客户语言偏好。默认英文。 */
+  language?: UiLanguage;
 }
 
 export function scoreAesthetics(input: ScoreInput): AestheticScore {
   const { run } = input;
+  const lang = input.language ?? DEFAULT_LANGUAGE;
   const mine = input.placements.filter((p) => p.wallRunId === run.id);
   const base = mine.filter((p) => p.layer === "base").sort((a, b) => a.x - b.x);
   const wall = mine.filter((p) => p.layer === "wall").sort((a, b) => a.x - b.x);
   const notes: string[] = [];
 
-  const widthRhythm = scoreWidthRhythm(base, notes);
-  const narrowPenalty = scoreNarrowCabinets(base, notes);
-  const seamAlignment = scoreSeamAlignment(base, wall, notes);
-  const symmetry = scoreSymmetry(run, base, notes);
-  const fillerPlacement = scoreFillerPlacement(run, mine, notes);
+  const widthRhythm = scoreWidthRhythm(lang, base, notes);
+  const narrowPenalty = scoreNarrowCabinets(lang, base, notes);
+  const seamAlignment = scoreSeamAlignment(lang, base, wall, notes);
+  const symmetry = scoreSymmetry(lang, run, base, notes);
+  const fillerPlacement = scoreFillerPlacement(lang, run, mine, notes);
 
   const w = AESTHETIC_WEIGHTS;
   const weighted =
@@ -82,7 +90,7 @@ export function scoreAesthetics(input: ScoreInput): AestheticScore {
  *
  * 用「相邻差的平均值 / 最大可能差」归一化后取反。全部同宽 → 1.0。
  */
-function scoreWidthRhythm(base: readonly Placement[], notes: string[]): number {
+function scoreWidthRhythm(lang: UiLanguage, base: readonly Placement[], notes: string[]): number {
   const cabinets = base.filter((p) => p.kind === "cabinet");
   if (cabinets.length < 2) return 1;
 
@@ -98,7 +106,9 @@ function scoreWidthRhythm(base: readonly Placement[], notes: string[]): number {
   const score = Math.max(0, 1 - avgDelta / spread);
 
   if (score < 0.5) {
-    notes.push(`柜体宽度跳动较大（${widths.join("/")}），相邻宽度平均差 ${avgDelta.toFixed(1)}"`);
+    notes.push(msg(lang,
+      `Cabinet widths jump a lot (${widths.join("/")}); average adjacent delta ${avgDelta.toFixed(1)}"`,
+      `柜体宽度跳动较大（${widths.join("/")}），相邻宽度平均差 ${avgDelta.toFixed(1)}"`));
   }
   return score;
 }
@@ -109,7 +119,7 @@ function scoreWidthRhythm(base: readonly Placement[], notes: string[]): number {
  * 「填得尽量满」会主动塞 9"/12" 窄柜收尾——这恰恰是最难看的做法，
  * 而且窄柜单位造价高、储物效率低。有功能理由的窄柜（拉篮/垃圾柜/填缝）不罚。
  */
-function scoreNarrowCabinets(base: readonly Placement[], notes: string[]): number {
+function scoreNarrowCabinets(lang: UiLanguage, base: readonly Placement[], notes: string[]): number {
   const cabinets = base.filter((p) => p.kind === "cabinet");
   if (cabinets.length === 0) return 1;
 
@@ -117,8 +127,12 @@ function scoreNarrowCabinets(base: readonly Placement[], notes: string[]): numbe
     (p) => p.width < NARROW_THRESHOLD && !FUNCTIONAL_NARROW.test(p.moduleCode ?? ""),
   );
   if (gratuitous.length > 0) {
-    notes.push(`有 ${gratuitous.length} 个窄柜（${gratuitous.map((p) => `${p.moduleCode} ${p.width}"`).join("、")}）` +
-      `纯粹用于填满，建议改用更宽的柜体 + 填缝条`);
+    const list = gratuitous.map((p) => `${p.moduleCode} ${p.width}"`).join(lang === "zh" ? "、" : ", ");
+    notes.push(msg(lang,
+      `${gratuitous.length} narrow cabinet(s) (${list}) used only to fill space` +
+        ` — prefer wider boxes + fillers`,
+      `有 ${gratuitous.length} 个窄柜（${list}）` +
+        `纯粹用于填满，建议改用更宽的柜体 + 填缝条`));
   }
   return Math.max(0, 1 - gratuitous.length / cabinets.length);
 }
@@ -131,6 +145,7 @@ function scoreNarrowCabinets(base: readonly Placement[], notes: string[]): numbe
 const SEAM_TOLERANCE = 1;
 
 function scoreSeamAlignment(
+  lang: UiLanguage,
   base: readonly Placement[],
   wall: readonly Placement[],
   notes: string[],
@@ -146,7 +161,9 @@ function scoreSeamAlignment(
   const score = aligned / wallSeams.length;
 
   if (score < 0.5) {
-    notes.push(`吊柜与地柜的分隔线大多没对齐（${aligned}/${wallSeams.length}），正视图上会显得错落`);
+    notes.push(msg(lang,
+      `Most wall/base seams don't align (${aligned}/${wallSeams.length}) — elevation looks staggered`,
+      `吊柜与地柜的分隔线大多没对齐（${aligned}/${wallSeams.length}），正视图上会显得错落`));
   }
   return score;
 }
@@ -161,7 +178,12 @@ function seamsOf(placements: readonly Placement[]): number[] {
  * 只在存在明确的对称参照物（水槽或窗）时评分；没有参照物时不扣分——
  * 一字型厨房强行要求对称是没意义的。
  */
-function scoreSymmetry(run: WallRun, base: readonly Placement[], notes: string[]): number {
+function scoreSymmetry(
+  lang: UiLanguage,
+  run: WallRun,
+  base: readonly Placement[],
+  notes: string[],
+): number {
   const window = run.features.find((f) => f.kind === "window");
   // 排掉配套给家电的：灶下柜可能就是一个水槽柜箱体，拿它当对称参照物是错的
   const sink = base.find((p) => p.label === "sink")
@@ -179,7 +201,9 @@ function scoreSymmetry(run: WallRun, base: readonly Placement[], notes: string[]
     const windowCenter = window.offset + window.width / 2;
     const offBy = Math.abs(sinkCenter - windowCenter);
     if (offBy > 3) {
-      notes.push(`水槽中心偏离窗中心 ${offBy.toFixed(1)}"，建议对齐`);
+      notes.push(msg(lang,
+        `Sink center is ${offBy.toFixed(1)}" off the window center — consider aligning`,
+        `水槽中心偏离窗中心 ${offBy.toFixed(1)}"，建议对齐`));
       return Math.max(0, 1 - offBy / (run.length / 4));
     }
     return 1;
@@ -199,6 +223,7 @@ function scoreSymmetry(run: WallRun, base: readonly Placement[], notes: string[]
  * 门缝节奏立刻被打断。
  */
 function scoreFillerPlacement(
+  lang: UiLanguage,
   run: WallRun,
   placements: readonly Placement[],
   notes: string[],
@@ -211,7 +236,9 @@ function scoreFillerPlacement(
   ).length;
   const score = atEdge / fillers.length;
   if (score < 1) {
-    notes.push(`有 ${fillers.length - atEdge} 条填缝条不在墙角，正视图上会打断门缝节奏`);
+    notes.push(msg(lang,
+      `${fillers.length - atEdge} filler(s) not at a corner — breaks the reveal rhythm on elevation`,
+      `有 ${fillers.length - atEdge} 条填缝条不在墙角，正视图上会打断门缝节奏`));
   }
   return score;
 }

@@ -3,36 +3,20 @@
  *
  * ## 为什么需要
  *
- * 客户的原话：「类似这样的问题：『您偏好的厨房风格是什么？』（比如：现代简约、
- * 美式乡村、轻奢、极简、北欧等）——会话框中要么显示按钮让客户选择，
- * 要么提示用户只用输入"现代简约"（告诉用户怎么快速回答）。」
+ * 「What's your preferred kitchen style?」后面跟一串括号例子，客户读完
+ * 还是不知道答案该有多长。给可点选项，或至少告诉他"a short phrase is fine"。
  *
- * 这是一条真实的可用性问题。「您偏好的厨房风格是什么？」后面跟一串括号里的
- * 例子，客户读完还是不知道**答案该有多长**——是要写一段描述，还是回两个字就行？
- * 于是他要么写一大段（系统的关键词表匹配不上，接着又被问一遍），要么干脆不答。
- *
- * `preferences/questions.ts` 那套选择题解决的是**有公司上下文之后**的偏好
- * （门板、五金、配件——选项来自那家公司的真实规格）。但客户在还没 @ 任何公司之前
- * 就已经在被问「尺寸、布局、风格、预算、省份」了，那五个字段一个选项都没有。
- * 这里补的正是这一段。
- *
- * ## 与选择题的分工
- *
- * | | `preferences/questions.ts` | 这里 |
- * |---|---|---|
- * | 什么时候 | 已经指向某家公司 | 需求收集阶段，还没有公司 |
- * | 选项来自 | 该公司 published 规格 | 通用常识，写死 |
- * | 影响 | 直接进报价 | 只是把话说清楚，进 `designRequirements` |
- *
- * 所以这里的选项**不带价格**，也不该带——它们不对应任何公司的任何真实商品。
+ * `preferences/questions.ts` 那套选择题解决的是**有公司上下文之后**的偏好；
+ * 这里补的是还没 @ 任何公司之前的尺寸 / 布局 / 风格 / 预算 / 省份。
  *
  * ## 一条纪律
  *
  * 选项文字就是**客户点了之后原样发出去的那句话**，不是标签。
- * 「现代简约」点下去发的就是"现代简约"，随后 `missingFields` 的关键词表
- * 必须认得它。写一套好看的标签、再映射到另一套内部值，两边迟早对不上——
- * 那正是 `repeatedAsk` 那套补救逻辑存在的原因。
+ * 随后 `missingFields` 的关键词表必须认得它。
  */
+import type { UiLanguage } from "../i18n/language.js";
+import { DEFAULT_LANGUAGE } from "../i18n/language.js";
+
 export interface QuickReply {
   /** 缺哪个字段。与 `missingFields` 的返回值同名。 */
   field: string;
@@ -44,32 +28,66 @@ export interface QuickReply {
   alternative?: string;
 }
 
-/**
- * 各字段的快捷回答。
- *
- * ⚠️ 每一条选项都必须能被 `orchestrator.ts` 的 `missingFields` 关键词表认出来。
- * 认不出来的话，客户点了一下、系统下一轮**又问同一个问题**——比不给选项更糟。
- * `test/quick-replies.test.ts` 对这一点做了穷举断言。
- */
-const CATALOG: Record<string, Omit<QuickReply, "field">> = {
-  厨房尺寸: {
+type CatalogEntry = Omit<QuickReply, "field">;
+
+const CATALOG_EN: Record<string, CatalogEntry> = {
+  "kitchen size": {
+    hint: "A rough size is fine — e.g. \"one wall ~12 ft\"",
+    options: [
+      "One wall ~8 ft",
+      "One wall ~12 ft",
+      "Two walls ~10 ft each",
+      "Kitchen ~100 sq ft",
+    ],
+    alternative: "Upload a floor plan for more accuracy — we can read sizes from the drawing.",
+  },
+  layout: {
+    hint: "Tap one",
+    options: ["I-shape", "L-shape", "U-shape", "With island"],
+  },
+  style: {
+    hint: "A short phrase is fine — e.g. \"modern\"",
+    options: ["Modern", "Farmhouse", "Nordic", "Transitional", "Traditional"],
+  },
+  budget: {
+    hint: "A range is fine; \"not sure yet\" works too",
+    options: [
+      "Budget under CAD $10k",
+      "Budget CAD $10–20k",
+      "Budget over CAD $20k",
+      "Budget not decided yet",
+    ],
+  },
+  province: {
+    hint: "Province is required for tax",
+    options: [
+      "Ontario ON",
+      "British Columbia BC",
+      "Alberta AB",
+      "Quebec QC",
+    ],
+  },
+};
+
+const CATALOG_ZH: Record<string, CatalogEntry> = {
+  "kitchen size": {
     hint: "报个大概就行，比如「一面墙 12 尺」",
     options: ["一面墙 8 尺左右", "一面墙 12 尺左右", "两面墙各 10 尺左右", "厨房约 100 平方尺"],
     alternative: "直接上传户型图更准——从图上读出来的数不用你量。",
   },
-  布局: {
+  layout: {
     hint: "点一个就行",
     options: ["一字型", "L 型", "U 型", "带岛台"],
   },
-  风格: {
+  style: {
     hint: "回两个字就行，比如「现代简约」",
     options: ["现代简约", "美式乡村", "北欧", "轻奢", "传统欧式"],
   },
-  预算: {
+  budget: {
     hint: "给个范围就行，不确定也可以直说",
     options: ["预算 1 万加币以内", "预算 1-2 万加币", "预算 2 万加币以上", "预算还没想好"],
   },
-  所在省份: {
+  province: {
     hint: "省份用来算税，必填",
     options: ["安大略省 ON", "不列颠哥伦比亚省 BC", "阿尔伯塔省 AB", "魁北克省 QC"],
   },
@@ -78,18 +96,18 @@ const CATALOG: Record<string, Omit<QuickReply, "field">> = {
 /**
  * 本轮该给哪些快捷回答。
  *
- * 收的是**已经算好的缺失字段**（`orchestrator.ts` 的 `missingFields`）而不是
- * 需求原文——这一层只管"缺这个字段时给哪几个按钮"，不该再判一遍缺什么。
- * 判两遍的话，助手问的和按钮给的会对不上号。
- *
- * `limit` 与助手本轮问了几个问题对齐（`TradeInteractionProfile.maxQuestionsPerTurn`）：
- * 问了两件事却摆出五组按钮，客户不知道该先点哪个。
+ * `limit` 与助手本轮问了几个问题对齐。
  */
-export function quickRepliesFor(missing: readonly string[], limit = 2): QuickReply[] {
+export function quickRepliesFor(
+  missing: readonly string[],
+  limit = 2,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): QuickReply[] {
+  const catalog = lang === "zh" ? CATALOG_ZH : CATALOG_EN;
   return missing
     .slice(0, Math.max(0, limit))
     .flatMap((field) => {
-      const entry = CATALOG[field];
+      const entry = catalog[field];
       return entry ? [{ field, ...entry }] : [];
     });
 }
@@ -97,14 +115,26 @@ export function quickRepliesFor(missing: readonly string[], limit = 2): QuickRep
 /**
  * 给 LLM 的提问纪律。
  *
- * 光有按钮不够：模型仍然会写出「您偏好的厨房风格是什么？（比如：现代简约、
- * 美式乡村、轻奢、极简、北欧等）」这种句子——括号里塞五个例子，客户读完
- * 还是不知道回一个词行不行。所以 system prompt 里要**明确要求短答案**。
+ * 光有按钮不够：模型仍然会写出很长的括号列举。system prompt 里要明确要求短答案。
  */
-export const ASK_STYLE_RULES = [
-  "提问纪律：",
-  "- 每个问题都要让客户**能用几个字答完**。不确定时，直接说「回一个词就行」。",
-  "- 举例最多给三个，写成「比如现代简约」，不要罗列五六个再加一个「等」。",
-  "- 不要问「您的需求是什么」这类没有答案形状的问题。",
-  "- 客户已经答过的，不要换个说法再问一遍。",
-].join("\n");
+export function askStyleRules(lang: UiLanguage = DEFAULT_LANGUAGE): string {
+  if (lang === "zh") {
+    return [
+      "提问纪律：",
+      "- 每个问题都要让客户**能用几个字答完**。不确定时，直接说「回一个词就行」。",
+      "- 举例最多给三个，写成「比如现代简约」，不要罗列五六个再加一个「等」。",
+      "- 不要问「您的需求是什么」这类没有答案形状的问题。",
+      "- 客户已经答过的，不要换个说法再问一遍。",
+    ].join("\n");
+  }
+  return [
+    "Asking style:",
+    "- Every question must be answerable in a few words. When unsure, say \"a short phrase is fine\".",
+    "- Give at most three examples (e.g. \"modern\"), never a long laundry list.",
+    "- Don't ask shapeless questions like \"What are your requirements?\".",
+    "- Don't re-ask something the customer already answered.",
+  ].join("\n");
+}
+
+/** @deprecated 用 `askStyleRules(lang)`。默认英文。 */
+export const ASK_STYLE_RULES = askStyleRules("en");

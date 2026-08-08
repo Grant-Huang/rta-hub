@@ -48,7 +48,7 @@ test("需求摘要累积而不是被覆盖（旧实现的空串清空问题）",
 });
 
 test("缺失字段识别", () => {
-  assert.deepEqual(missingFields(""), ["厨房尺寸", "布局", "风格", "预算", "所在省份"]);
+  assert.deepEqual(missingFields(""), ["kitchen size", "layout", "style", "budget", "province"]);
   const full = "厨房 12 尺，L 型布局，现代风格，预算 2 万加币，安大略省";
   assert.deepEqual(missingFields(full), []);
 });
@@ -57,7 +57,7 @@ test("追问同一批字段的话术会逐轮退让，不会一字不差地重�
   const ctx = { conversationId: "cv", requirements: "", history: [] };
   const say = async (repeatedAsk: number) =>
     (await orchestratorReply(undefined, ctx, "想换厨房",
-      { ...optionsFor("consumer"), repeatedAsk })).content;
+      { ...optionsFor("consumer"), repeatedAsk, language: "zh" })).content;
 
   const first = await say(0);
   const second = await say(1);
@@ -77,17 +77,19 @@ test("追问同一批字段的话术会逐轮退让，不会一字不差地重�
 test("布尔形式的 repeatedAsk 仍按「第二次」处理，旧调用方不会退化", async () => {
   const ctx = { conversationId: "cv", requirements: "", history: [] };
   const bool = await orchestratorReply(undefined, ctx, "想换厨房",
-    { ...optionsFor("consumer"), repeatedAsk: true });
+    { ...optionsFor("consumer"), repeatedAsk: true, language: "zh" });
   const num = await orchestratorReply(undefined, ctx, "想换厨房",
-    { ...optionsFor("consumer"), repeatedAsk: 1 });
+    { ...optionsFor("consumer"), repeatedAsk: 1, language: "zh" });
   assert.equal(bool.content, num.content);
 });
 
 test("贸易账号得到更直给的话术", async () => {
   const consumer = await orchestratorReply(undefined,
-    { conversationId: "cv", requirements: "", history: [] }, "开始", optionsFor("consumer"));
+    { conversationId: "cv", requirements: "", history: [] }, "开始",
+    { ...optionsFor("consumer"), language: "zh" });
   const trade = await orchestratorReply(undefined,
-    { conversationId: "cv", requirements: "", history: [] }, "开始", optionsFor("trade"));
+    { conversationId: "cv", requirements: "", history: [] }, "开始",
+    { ...optionsFor("trade"), language: "zh" });
   assert.notEqual(consumer.content, trade.content);
   assert.match(trade.content, /一次给全/);
 });
@@ -97,6 +99,12 @@ test("贸易账号得到更直给的话术", async () => {
 test("公司 Agent 的 system prompt 只含本公司规格且禁止报价", () => {
   const sys = buildCompanyAgentSystem("Maple Ridge", bundle);
   assert.match(sys, /B30/);
+  assert.match(sys, /Never quote prices|绝对不要报价格/i);
+  assert.match(sys, /do not invent|不要编/i);
+});
+
+test("明确 language=zh 时公司 Agent prompt 为中文", () => {
+  const sys = buildCompanyAgentSystem("Maple Ridge", bundle, "zh");
   assert.match(sys, /绝对不要报价格/);
   assert.match(sys, /不要编，也不要提别家公司/);
 });
@@ -109,7 +117,7 @@ test("规格问答只答本公司有的型号", () => {
 
 test("规格库里没有的尺寸，明确说没有并给出可选值", () => {
   const a = deterministicSpecAnswer("Maple Ridge", bundle, "有 37 寸的柜子吗");
-  assert.match(a, /没有 37"/);
+  assert.match(a, /no 37"|没有 37"/i);
   assert.match(a, /30|36/);
 });
 
@@ -179,17 +187,17 @@ test("EstimateDraft 结构上没有 companyId，不可能被发送", () => {
 test("来源未核实时 disclaimer 必须如实说明", () => {
   const draft = buildEstimateDraft(genericCatalog, {
     conversationId: "cv_1", moduleCounts: { base: 3 }, at: AT,
-  }, { sourceVerified: false });
-  assert.match(draft.disclaimer, /不是任何具体公司的真实报价/);
-  assert.match(draft.disclaimer, /未经核实的占位数据/);
+  }, { sourceVerified: false, language: "zh" });
+  assert.match(draft.disclaimer, /not a real quote from any specific company|不是任何具体公司的真实报价/i);
+  assert.match(draft.disclaimer, /unverified placeholder|未经核实的占位数据/i);
 });
 
 test("来源已核实时不再显示占位警告", () => {
   const draft = buildEstimateDraft(genericCatalog, {
     conversationId: "cv_1", moduleCounts: { base: 3 }, at: AT,
-  }, { sourceVerified: true });
-  assert.match(draft.disclaimer, /不是任何具体公司的真实报价/);
-  assert.ok(!draft.disclaimer.includes("未经核实"));
+  }, { sourceVerified: true, language: "zh" });
+  assert.match(draft.disclaimer, /not a real quote from any specific company|不是任何具体公司的真实报价/i);
+  assert.ok(!/unverified|未经核实/.test(draft.disclaimer));
 });
 
 test("给了省份则区间含税", () => {
@@ -198,9 +206,9 @@ test("给了省份则区间含税", () => {
   });
   const taxed = buildEstimateDraft(genericCatalog, {
     conversationId: "cv", moduleCounts: { base: 5 }, province: "ON", at: AT,
-  }, { taxRules: SEED_TAX_RULES });
+  }, { taxRules: SEED_TAX_RULES, language: "zh" });
   assert.ok(taxed.totalRange.low > untaxed.totalRange.low);
-  assert.match(taxed.disclaimer, /ON 13%/);
+  assert.match(taxed.disclaimer, /ON.*13%/);
 });
 
 test("目录里没有的柜类不臆造区间", () => {
@@ -216,9 +224,9 @@ test("纯文本呈现包含免责声明", () => {
   const draft = buildEstimateDraft(genericCatalog, {
     conversationId: "cv", moduleCounts: { base: 5, wall: 4 }, at: AT,
   });
-  const text = renderEstimateText(draft);
-  assert.match(text, /通用预估/);
-  assert.match(text, /合计区间/);
+  const text = renderEstimateText(draft, "zh");
+  assert.match(text, /Generic estimate|通用预估/i);
+  assert.match(text, /Range total|合计区间/i);
   assert.ok(text.includes(draft.disclaimer));
 });
 
@@ -240,7 +248,7 @@ test("报价邮件包含发件人身份与一次性询价说明", () => {
   }, sender);
   assert.equal(email.kind, "lead");
   assert.match(email.text, /RTA-Hub/);
-  assert.match(email.text, /不是营销邮件/);
+  assert.match(email.text, /not a marketing message|不是营销邮件/i);
   assert.doesNotThrow(() => assertCaslCompliant({ ...email, to: "x@y.com" }, sender));
 });
 
@@ -280,7 +288,7 @@ test("招商邮件的线索描述已去标识化，不含客户身份", () => {
     companyName: "X", deIdentifiedSignal: signal,
     unsubscribeUrl: "https://x.example/unsub?token=abc",
   }, sender);
-  assert.match(email.text, /3 位客户/);
+  assert.match(email.text, /3 customers|3 位客户/i);
   for (const pii of ["@example.com", "Alex", "电话", "地址："]) {
     assert.ok(!email.text.includes(pii), `邮件泄露了 ${pii}`);
   }

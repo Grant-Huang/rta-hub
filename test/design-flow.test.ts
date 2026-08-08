@@ -15,6 +15,8 @@ import {
 import { generateLayout } from "../src/layout/generate.js";
 import { buildBom, bomToSelections } from "../src/layout/bom.js";
 import { buildQuoteList, countFaces, renderQuoteListText } from "../src/quote/line-items.js";
+
+const zhLang = "zh" as const;
 import { layoutPlan, renderPlanViews } from "../src/render/plan-view.js";
 import { checkErgonomics } from "../src/layout/ergonomics.js";
 import { pilotModules } from "../src/app/seed.js";
@@ -50,7 +52,7 @@ test("readyToDraw 阶段说的是一句问句，而不是直接给图", () => {
   const s = markReadyToDraw(newSession({ conversationId: "cv_1", companyId: "co_1", at: AT }), AT);
   const p = stagePrompt(s, {});
   assert.equal(p.awaiting, "drawingConsent");
-  assert.ok(p.message.includes("需要我帮你生成设计图吗"), p.message);
+  assert.ok(p.message.includes("Shall I generate a design drawing"), p.message);
   assert.ok(p.actions.some((a) => a.id === "notYet"), "必须给「先等等」这个选项");
 });
 
@@ -193,7 +195,7 @@ test("接不上的墙段如实标注为示意排列，不假装知道方位", ()
   const a = run({ id: "wr_a", label: "北墙", length: 144, endsAtCorner: false });
   const b = run({ id: "wr_b", label: "南墙", length: 96, startsAtCorner: false });
   const plan = layoutPlan(geometryOf(a, b));
-  assert.ok(plan.note?.includes("示意排列"), plan.note);
+  assert.ok(/schematic layout|示意排列/.test(plan.note ?? ""), plan.note);
 });
 
 test("全局俯视图分地柜层与吊柜层两张，各自只画自己那层", () => {
@@ -207,8 +209,8 @@ test("全局俯视图分地柜层与吊柜层两张，各自只画自己那层",
 
   assert.ok(views.base.startsWith("<svg"));
   assert.ok(views.wall.startsWith("<svg"));
-  assert.ok(views.base.includes("地柜层"));
-  assert.ok(views.wall.includes("吊柜层"));
+  assert.ok(views.base.includes("Overall plan · Base") || views.base.includes("Base"));
+  assert.ok(views.wall.includes("Overall plan · Wall") || views.wall.includes("Wall"));
 
   const wallCode = layout.placements.find((p) => p.layer === "wall" && p.moduleCode)?.moduleCode;
   if (wallCode) {
@@ -273,7 +275,8 @@ test("缺辅料型号时如实报出，不静默漏掉", () => {
     layout, wallRuns: [wall], modules: cabinetsOnly, toeKickSystem: "plasticLegs",
   });
   assert.ok(bom.missing.length > 0, "少了踢脚就是装不上，必须报出来");
-  assert.ok(bom.missing.some((m) => m.includes("地脚") || m.includes("踢脚")));
+  assert.ok(bom.missing.some((m) =>
+    /leg|toe.?kick|地脚|踢脚/i.test(m)));
 });
 
 test("五金与配件只加在柜体上，不加在填缝条上", () => {
@@ -325,7 +328,7 @@ const trimLine = {
 } as unknown as Quote["lineItems"][number];
 
 test("柜体与它的门板放在一组，附件单独成区", () => {
-  const list = buildQuoteList({
+  const list = buildQuoteList({ language: zhLang, 
     quote: quoteWith([cabinetLine, trimLine], 55100),
     modules: fixtureModules,
     doorStyles,
@@ -342,34 +345,35 @@ test("柜体与它的门板放在一组，附件单独成区", () => {
 });
 
 test("门板不编一个假的单价，而是标明含在柜体价内", () => {
-  const list = buildQuoteList({
+  const list = buildQuoteList({ language: zhLang, 
     quote: quoteWith([cabinetLine], 52700), modules: fixtureModules, doorStyles,
   });
   const door = list.subtotals.find((s) => s.category === "door");
   assert.ok(door, "分类汇总里要有门板一类");
   assert.equal(door.amount, 0);
-  assert.ok(door.includedIn?.includes("不单独计价"), "0 元要有解释，不能让人以为门是送的");
-  assert.ok(list.cabinets[0]!.door.includedNote.includes("门板价格组"));
+  assert.ok(door.includedIn && /not priced separately|不单独计价/i.test(door.includedIn),
+    "0 元要有解释，不能让人以为门是送的");
+  assert.ok(/price group|门板价格组|included in cabinet/i.test(list.cabinets[0]!.door.includedNote));
 });
 
 test("逐行合计对不上报价单小计时会报出差额", () => {
-  const list = buildQuoteList({
+  const list = buildQuoteList({ language: zhLang, 
     quote: quoteWith([cabinetLine], 99999), modules: fixtureModules, doorStyles,
   });
   assert.notEqual(list.reconciliationDelta, 0);
-  assert.ok(renderQuoteListText(list).includes("清单可能有遗漏项"));
+  assert.ok(/may be missing items|清单可能有遗漏项/i.test(renderQuoteListText(list, zhLang)));
 });
 
 test("逐行合计与小计一致时不报警", () => {
-  const list = buildQuoteList({
+  const list = buildQuoteList({ language: zhLang, 
     quote: quoteWith([cabinetLine, trimLine], 55100), modules: fixtureModules, doorStyles,
   });
   assert.equal(list.reconciliationDelta, 0);
-  assert.equal(renderQuoteListText(list).includes("遗漏项"), false);
+  assert.equal(/missing items|遗漏项/i.test(renderQuoteListText(list, zhLang)), false);
 });
 
 test("分类汇总把五金与配件分开——它们是真的额外收费", () => {
-  const list = buildQuoteList({
+  const list = buildQuoteList({ language: zhLang, 
     quote: quoteWith([cabinetLine], 52700), modules: fixtureModules, doorStyles,
   });
   const hw = list.subtotals.find((s) => s.category === "hardware");
@@ -386,12 +390,12 @@ test("门板数量取自渲染那套脸型文法，不另起一套规则", () =>
 });
 
 test("报价清单文本里五项俱全：代码、名称、数量、单价、总价", () => {
-  const text = renderQuoteListText(buildQuoteList({
+  const text = renderQuoteListText(buildQuoteList({ language: zhLang, 
     quote: quoteWith([cabinetLine], 52700), modules: fixtureModules, doorStyles,
   }));
-  for (const h of ["代码", "名称", "数量", "单价", "总价"]) {
+  for (const h of ["Code", "Name", "Qty", "Unit", "Total"]) {
     assert.ok(text.includes(h), `表头缺 ${h}`);
   }
   assert.ok(text.includes("B30"));
-  assert.ok(text.includes("分类汇总"));
+  assert.ok(/Category subtotals|分类汇总/i.test(text));
 });

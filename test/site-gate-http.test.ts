@@ -42,7 +42,7 @@ async function unlock(password: string) {
 test("没有 cookie 时页面返回登录页，API 返回 401", async () => {
   const page = await req("/");
   assert.equal(page.status, 401);
-  assert.match(await page.text(), /访问口令/);
+  assert.match(await page.text(), /Access password|访问口令/i);
 
   const api = await req("/api/companies");
   assert.equal(api.status, 401);
@@ -74,14 +74,14 @@ test("退订链接免于口令 —— CASL 要求退订真的能用", async () =
   // 无效 token 会返回 400，但**不是** 401：说明请求确实到了业务逻辑，没被口令挡下
   const r = await req("/unsubscribe?token=whatever");
   assert.notEqual(r.status, 401);
-  assert.match(await r.text(), /退订/);
+  assert.match(await r.text(), /unsubscribed|unsubscribe|退订/i);
 });
 
 test("口令错误不放行，且不泄露细节", async () => {
   const { res } = await unlock("wrong-password");
   assert.equal(res.status, 401);
   const html = await res.text();
-  assert.match(html, /口令不正确/);
+  assert.match(html, /Incorrect password|口令不正确/i);
   // 不该把正确口令、长度之类的信息漏出去
   assert.ok(!html.includes("preview-only-hunter2"));
 });

@@ -29,6 +29,7 @@
  * （§3.3，与 §1.2 同一条原则）。
  */
 import type { ModuleSpec } from "../domain/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 import { capabilitiesFor } from "../spec/capabilities.js";
 
 /**
@@ -66,6 +67,8 @@ export interface StackOptions {
   maxShortfall?: number;
   /** 最多几段。段数越多缝越多，通常 2 段就够。 */
   maxSegments?: number;
+  /** 客户语言偏好；`note` 跟它走，默认英文。 */
+  language?: UiLanguage;
 }
 
 const DEFAULTS = { maxShortfall: 6, maxSegments: 3 } as const;
@@ -154,6 +157,7 @@ export function solveStack(
   opts: StackOptions = {},
 ): StackSolution | undefined {
   const o = { ...DEFAULTS, ...opts };
+  const lang = opts.language ?? DEFAULT_LANGUAGE;
   if (available <= 0 || candidates.length === 0) return undefined;
 
   const target = toUnits(available);
@@ -204,8 +208,13 @@ export function solveStack(
       // 顶上留了空当同样要说。客户要知道那 6" 是顶线不是柜子——
       // 「做到顶」和「差一截用线条收口」在成品上是两个样子，而且价格不同。
       ...(shortfall > 0.01
-        ? { note: `吊柜可用高度 ${round(available)}"，排成 ${best.heights.join("+")}"，`
-            + `顶上余 ${shortfall}" 用加高顶线收口——不是做到顶。` }
+        ? {
+            note: msg(lang,
+              `Wall-cabinet height budget ${round(available)}"; stacked as ${best.heights.join("+")}"` +
+                ` with ${shortfall}" left for a taller crown molding — not floor-to-ceiling.`,
+              `吊柜可用高度 ${round(available)}"，排成 ${best.heights.join("+")}"，` +
+                `顶上余 ${shortfall}" 用加高顶线收口——不是做到顶。`),
+          }
         : {}),
     };
   }
@@ -215,14 +224,19 @@ export function solveStack(
     .filter((c) => c.asLower && c.height <= available)
     .sort((a, b) => b.height - a.height)[0];
   if (!single) return undefined;
+  const leftover = round(available - single.height);
   return {
     heights: [single.height],
     seams: [],
     filled: single.height,
-    shortfall: round(available - single.height),
-    note: `可用高度 ${round(available)}"，这家最高的吊柜是 ${single.height}"，` +
-      `而现有档位拼不出贴合的组合——顶上 ${round(available - single.height)}" ` +
-      `用加高顶线收口。想做到顶的话，需要选支持这个高度组合的商家。`,
+    shortfall: leftover,
+    note: msg(lang,
+      `Height budget ${round(available)}"; tallest wall cabinet here is ${single.height}"` +
+        ` and no combination fills the gap — the top ${leftover}" needs taller crown molding.` +
+        ` Floor-to-ceiling needs a catalog that supports that stack.`,
+      `可用高度 ${round(available)}"，这家最高的吊柜是 ${single.height}"，` +
+        `而现有档位拼不出贴合的组合——顶上 ${leftover}" ` +
+        `用加高顶线收口。想做到顶的话，需要选支持这个高度组合的商家。`),
   };
 }
 

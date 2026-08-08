@@ -20,12 +20,22 @@ test("五个缺失字段每一个都有快捷回答，没有漏网的", () => {
   assert.deepEqual([...covered].sort(), [...ALL_FIELDS].sort());
 });
 
-test("每个选项点下去都能真的把那个字段答掉", () => {
-  for (const q of quickRepliesFor(ALL_FIELDS, ALL_FIELDS.length)) {
+test("每个选项点下去都能真的把那个字段答掉（英文默认）", () => {
+  for (const q of quickRepliesFor(ALL_FIELDS, ALL_FIELDS.length, "en")) {
     for (const option of q.options) {
       const stillMissing = missingFields(option);
       assert.equal(stillMissing.includes(q.field), false,
         `点了「${option}」之后系统还认为缺「${q.field}」——下一轮会原样再问一遍`);
+    }
+  }
+});
+
+test("中文选项点下去也能把字段答掉", () => {
+  for (const q of quickRepliesFor(ALL_FIELDS, ALL_FIELDS.length, "zh")) {
+    for (const option of q.options) {
+      const stillMissing = missingFields(option);
+      assert.equal(stillMissing.includes(q.field), false,
+        `点了「${option}」之后系统还认为缺「${q.field}」`);
     }
   }
 });
@@ -45,11 +55,13 @@ test("给的组数与助手本轮问的问题数对齐", () => {
 });
 
 test("已经答齐的对话不再给按钮", () => {
-  const answered = "厨房一面墙 12 尺，L 型，现代简约风格，预算 1-2 万加币，安大略省 ON";
-  assert.deepEqual(quickRepliesFor(missingFields(answered)), []);
+  const answeredEn = "One wall ~12 ft, L-shape, modern style, budget CAD $10–20k, Ontario ON";
+  assert.deepEqual(quickRepliesFor(missingFields(answeredEn)), []);
+  const answeredZh = "厨房一面墙 12 尺，L 型，现代简约风格，预算 1-2 万加币，安大略省 ON";
+  assert.deepEqual(quickRepliesFor(missingFields(answeredZh)), []);
 });
 
 test("提问纪律进了 system prompt——光有按钮治不住模型写长问题", () => {
-  assert.match(ASK_STYLE_RULES, /几个字答完/);
-  assert.match(ASK_STYLE_RULES, /举例最多给三个/);
+  assert.match(ASK_STYLE_RULES, /few words|short phrase/i);
+  assert.match(ASK_STYLE_RULES, /at most three/i);
 });

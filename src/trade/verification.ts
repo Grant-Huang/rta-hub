@@ -45,14 +45,16 @@ export function submitVerification(
   input: { accountId: string; businessNumber: string; legalName: string; at: Timestamp },
 ): TradeVerification {
   if (existing?.status === "verified") {
-    throw new VerificationError("该账号已通过资质审核，无需重复提交");
+    throw new VerificationError("This account is already verified — no need to resubmit");
   }
   const bn = normalizeBusinessNumber(input.businessNumber);
   if (bn.length < 9) {
-    throw new VerificationError("请提供有效的营业执照号或 GST/HST 号（至少 9 位）");
+    throw new VerificationError(
+      "Provide a valid business registration or GST/HST number (at least 9 digits)",
+    );
   }
   const legalName = input.legalName.trim();
-  if (!legalName) throw new VerificationError("请提供公司注册名称");
+  if (!legalName) throw new VerificationError("Provide the registered company name");
 
   return {
     id: input.accountId,
@@ -74,10 +76,14 @@ export function reviewVerification(
   input: { approve: boolean; reviewedBy: string; reason?: string; at: Timestamp },
 ): TradeVerification {
   if (current.status !== "pending") {
-    throw new VerificationError(`当前状态为 ${current.status}，只有 pending 的申请可以审核`);
+    throw new VerificationError(
+      `Current status is ${current.status}; only pending applications can be reviewed`,
+    );
   }
   if (!input.approve && !input.reason?.trim()) {
-    throw new VerificationError("驳回必须给出原因——申请人要据此知道该补什么");
+    throw new VerificationError(
+      "Rejection requires a reason — applicants need to know what to fix",
+    );
   }
   return {
     ...current,
@@ -102,28 +108,31 @@ export function canSeeTradePricing(
   verification: TradeVerification | undefined,
 ): TradeGate {
   if (account.accountType !== "trade") {
-    return { allowed: false, reason: "非贸易账号", nextStep: "none" };
+    return { allowed: false, reason: "Not a trade account", nextStep: "none" };
   }
 
   const status = verification?.status ?? "unverified";
   if (status === "unverified") {
     return {
       allowed: false,
-      reason: "贸易价需要先通过资质核实。请提交公司注册名称与营业执照号 / GST 号。",
+      reason:
+        "Trade pricing requires verification. Submit your registered company name and business license / GST number.",
       nextStep: "submitVerification",
     };
   }
   if (status === "pending") {
     return {
       allowed: false,
-      reason: "资质材料已收到，我们会在 2 个工作日内完成审核。审核期间按标准零售价报价。",
+      reason:
+        "Documents received — we typically finish review within 2 business days. Retail pricing applies until then.",
       nextStep: "awaitReview",
     };
   }
   if (status === "rejected") {
     return {
       allowed: false,
-      reason: `资质审核未通过：${verification?.rejectionReason ?? "未说明原因"}。补齐后可重新提交。`,
+      reason:
+        `Verification rejected: ${verification?.rejectionReason ?? "no reason given"}. You can resubmit after fixing the issues.`,
       nextStep: "resubmit",
     };
   }
@@ -131,7 +140,8 @@ export function canSeeTradePricing(
   if (account.subscriptionStatus !== "active" && account.subscriptionStatus !== "trial") {
     return {
       allowed: false,
-      reason: "资质已通过，但贸易账号订阅未生效。订阅恢复后自动按贸易价报价。",
+      reason:
+        "Verified, but the trade subscription is not active. Trade pricing resumes when the subscription is active.",
       nextStep: "subscribe",
     };
   }

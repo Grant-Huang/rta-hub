@@ -83,6 +83,11 @@ export interface SharedPreferences {
   storage?: "drawers" | "doors" | "balanced";
   tradeoff?: "price" | "quality" | "lookAndFeel";
   assembly?: AssemblyOption;
+  /**
+   * 客户语言偏好。默认英文；只有客户明确要求才切到中文。
+   * 图纸上的文字一律英文，不受此字段影响。
+   */
+  language?: "en" | "zh";
 }
 
 /** 绑定到某家公司规格库的偏好——实体 id 只在该公司下有意义。 */

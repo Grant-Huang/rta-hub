@@ -217,13 +217,13 @@ function quoteWith(boxMaterialId: string): Quote {
 }
 
 test("报价清单写明箱体是哪一档——不写，两家的价看起来就是可比的", () => {
-  const list = buildQuoteList({
+  const list = buildQuoteList({ language: "zh", 
     quote: quoteWith(PLYWOOD), modules: pilotModules,
     doorStyles: pilotDoorStyles, boxMaterials: pilotBoxMaterials,
   });
   assert.equal(list.boxMaterial?.name, "全夹板箱体");
   assert.equal(list.boxMaterial?.chosen, true);
-  const text = renderQuoteListText(list);
+  const text = renderQuoteListText(list, "zh");
   assert.match(text, /箱体板材/);
   assert.match(text, /全夹板箱体/);
 });
@@ -231,12 +231,12 @@ test("报价清单写明箱体是哪一档——不写，两家的价看起来�
 test("客户没选而走了默认档时，清单上说明「你没选」", () => {
   // 「没选」和「选了基础档」在价上没区别，在解释上有：不说明的话，
   // 客户会以为自己选过全夹板
-  const list = buildQuoteList({
+  const list = buildQuoteList({ language: "zh", 
     quote: quoteWith(PARTICLE), modules: pilotModules,
     doorStyles: pilotDoorStyles, boxMaterials: pilotBoxMaterials,
   });
   assert.equal(list.boxMaterial?.chosen, false);
-  assert.match(renderQuoteListText(list), /按该商家的基础档算的/);
+  assert.match(renderQuoteListText(list, "zh"), /按该商家的基础档算的/);
 });
 
 // ── 与换花色比价的交互 ───────────────────────────────────────────────────

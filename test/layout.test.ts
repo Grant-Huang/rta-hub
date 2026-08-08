@@ -51,7 +51,7 @@ test("完整性优先：长度置信度不足时进待确认，不静默采用",
   const { geometry, unresolved } = normalizeExtraction({
     ...goodExtraction,
     wallRuns: [{ ...goodExtraction.wallRuns![0]!, length: 144, lengthConfidence: 0.4 }],
-  });
+  }, "zh");
   assert.equal(geometry.wallRuns[0]!.length, 0, "低置信度的值不应被采用");
   const item = unresolved.find((u) => u.field === "length");
   assert.ok(item);
@@ -60,7 +60,7 @@ test("完整性优先：长度置信度不足时进待确认，不静默采用",
 });
 
 test("完全没识别出墙段时给手动录入提示，而不是编一个户型", () => {
-  const { geometry, unresolved } = normalizeExtraction({ wallRuns: [] });
+  const { geometry, unresolved } = normalizeExtraction({ wallRuns: [] }, "zh");
   assert.equal(geometry.wallRuns.length, 0);
   assert.equal(unresolved[0]!.field, "wallRuns");
   assert.match(unresolved[0]!.reason, /手动告诉我/);
@@ -172,14 +172,14 @@ test("剩余超过填缝条能力时标为不可行", () => {
   const r = packSegment(50, [{ width: 36 }]);
   assert.equal(r.leftover, 14);
   assert.equal(r.feasible, false);
-  assert.match(r.reason ?? "", /填缝条/);
+  assert.match(r.reason ?? "", /filler|填缝条/i);
 });
 
 test("没有足够窄的型号时明确报不可行", () => {
   const r = packSegment(8, widths);
   assert.equal(r.feasible, false);
   assert.equal(r.widths.length, 0);
-  assert.match(r.reason ?? "", /没有宽度/);
+  assert.match(r.reason ?? "", /No module width|没有宽度/i);
 });
 
 test("1/4 英寸精度：非整数墙长也能处理", () => {

@@ -35,7 +35,7 @@ import type { WallRun } from "../floorplan/types.js";
 import type { BomResult } from "../layout/bom.js";
 import type { QuoteList } from "../quote/line-items.js";
 import type { ApplianceSpec } from "../floorplan/appliances.js";
-import { APPLIANCE_LABEL, assumedOnes } from "../floorplan/appliances.js";
+import { APPLIANCE_LABEL_EN, APPLIANCE_LABEL_ZH, assumedOnes } from "../floorplan/appliances.js";
 import { format } from "../domain/money.js";
 import { hasBlockingViolation } from "../layout/ergonomics.js";
 import {
@@ -45,6 +45,7 @@ import type { SanityRuleId } from "./sanity-rules.js";
 import type { ErgonomicCode } from "../layout/ergonomics.js";
 import type { DesignStage } from "../design/stages.js";
 import { allowedArtifacts } from "../design/stages.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 /** 交付物的种类——不同交付物该过的检查不同。 */
 export type Deliverable = "planView" | "fourViews" | "quoteList";
@@ -136,6 +137,8 @@ export interface AuditInput {
   unappliedPreferences?: readonly string[];
   /** 快照复算结论（由调用方跑，因为它需要 PricingContext）。 */
   snapshot?: { ok: boolean; mismatches?: string[] };
+  /** 客户语言偏好。默认英文。 */
+  language?: UiLanguage;
 }
 
 /** 美观分低于这个值就提醒客户——不拦，但值得他看一眼。 */
@@ -162,6 +165,7 @@ const RULE_BY_ERGONOMIC: Record<ErgonomicCode, SanityRuleId> = {
 const ERGONOMIC_RULES = [...new Set(Object.values(RULE_BY_ERGONOMIC))];
 
 export function auditDeliverable(input: AuditInput): AuditReport {
+  const lang = input.language ?? DEFAULT_LANGUAGE;
   const findings: AuditFinding[] = [];
   const checked: AuditCode[] = [];
   const checkedRules: SanityRuleId[] = [];
@@ -178,7 +182,9 @@ export function auditDeliverable(input: AuditInput): AuditReport {
   if (!allowedArtifacts(input.stage)[input.deliverable]) {
     add({
       code: "STAGE", rule: "SR-D3", severity: "blocking",
-      message: `当前处于「${stageLabel(input.stage)}」，还不该出${deliverableLabel(input.deliverable)}`,
+      message: msg(lang,
+        `You're currently at "${stageLabel(input.stage, lang)}" — it's too early for ${deliverableLabel(input.deliverable, lang)}.`,
+        `当前处于「${stageLabel(input.stage, lang)}」，还不该出${deliverableLabel(input.deliverable, lang)}`),
     });
   }
 
@@ -199,7 +205,7 @@ export function auditDeliverable(input: AuditInput): AuditReport {
     // ── 几何自洽：柜体不超墙、互不重叠 ──
     if (input.wallRuns) {
       ran("GEOMETRY", "SR-G1", "SR-G2");
-      for (const g of geometryProblems(input.layout.placements, input.wallRuns)) add(g);
+      for (const g of geometryProblems(input.layout.placements, input.wallRuns, lang)) add(g);
 
       // ── 跨墙段干涉 ──
       //
@@ -207,7 +213,7 @@ export function auditDeliverable(input: AuditInput): AuditReport {
       // 两个柜子分别属于两段墙，各自都"没超墙"，合起来却占着同一块地方。
       // 客户说的「只有把它们连起来的时候，才会发现干涉的问题」就是这一条。
       ran("INTERFERENCE", "SR-G3");
-      for (const g of interferenceProblems(input.layout.placements, input.wallRuns)) add(g);
+      for (const g of interferenceProblems(input.layout.placements, input.wallRuns, lang)) add(g);
 
       // ── 门洞旁的台面外伸（SR-G4）──
       //
@@ -215,11 +221,11 @@ export function auditDeliverable(input: AuditInput): AuditReport {
       // 现场台面会压在门套线上，门开到一半顶住。排布阶段已经让过位了，
       // 这里是出口复核——`regenerateRun` 之类的路径改过 x 之后同样要过这一关。
       ran("DOOR_CLEARANCE", "SR-G4");
-      for (const g of doorClearanceProblems(input.layout.placements, input.wallRuns)) add(g);
+      for (const g of doorClearanceProblems(input.layout.placements, input.wallRuns, lang)) add(g);
 
       // ── 平面连不起来时要标注（SR-V4）──
       ran("PLAN_NOTE", "SR-V4");
-      for (const g of planNoteProblems(input.wallRuns, input.customerFacingText ?? "")) add(g);
+      for (const g of planNoteProblems(input.wallRuns, input.customerFacingText ?? "", lang)) add(g);
     }
 
     // ── 美观：不拦，但低到一定程度要让客户知道 ──
@@ -228,8 +234,11 @@ export function auditDeliverable(input: AuditInput): AuditReport {
       if (a.score.total >= AESTHETICS_ADVISORY_BELOW) continue;
       add({
         code: "AESTHETICS", rule: "SR-D2", severity: "advisory", wallRunId: a.wallRunId,
-        message: `这面墙的排布评分偏低（${a.score.total}/100）——柜宽跳动或有凑数窄柜，` +
-          `想更整齐的话可以让我再调一版。`,
+        message: msg(lang,
+          `This wall's layout score is on the low side (${a.score.total}/100) — uneven cabinet widths or filler-narrow cabinets. ` +
+            `If you'd like a cleaner look, I can adjust another revision.`,
+          `这面墙的排布评分偏低（${a.score.total}/100）——柜宽跳动或有凑数窄柜，` +
+            `想更整齐的话可以让我再调一版。`),
       });
     }
   }
@@ -240,7 +249,9 @@ export function auditDeliverable(input: AuditInput): AuditReport {
     for (const m of input.bom.missing) {
       add({
         code: "BOM_INCOMPLETE", rule: "SR-M1", severity: "blocking",
-        message: `这家公司的规格库里没有「${m}」，这份清单是缺料的——照它下单装不完整`,
+        message: msg(lang,
+          `This seller's catalog doesn't include "${m}", so this list is incomplete — ordering from it won't give you a full install.`,
+          `这家公司的规格库里没有「${m}」，这份清单是缺料的——照它下单装不完整`),
       });
     }
   }
@@ -248,7 +259,7 @@ export function auditDeliverable(input: AuditInput): AuditReport {
   // ── 只用规格库里真实存在的型号与尺寸（FR-8 同源）──
   if (input.modules && input.bom) {
     ran("SPEC_MISMATCH", "SR-M2");
-    for (const p of specProblems(input.bom, input.modules)) add(p);
+    for (const p of specProblems(input.bom, input.modules, lang)) add(p);
   }
 
   // ── 报价：逐行合计必须与小计对得上 ──
@@ -257,8 +268,11 @@ export function auditDeliverable(input: AuditInput): AuditReport {
     if (input.quoteList.reconciliationDelta !== 0) {
       add({
         code: "QUOTE_RECONCILIATION", rule: "SR-Q1", severity: "blocking",
-        message: `报价清单逐行合计与小计差 ${format(input.quoteList.reconciliationDelta)}——` +
-          `说明有行漏了或算重了，这份价格不能拿去比价`,
+        message: msg(lang,
+          `The quote line items don't add up to the subtotal (off by ${format(input.quoteList.reconciliationDelta)}) — ` +
+            `something was missed or double-counted, so this price isn't reliable for comparison.`,
+          `报价清单逐行合计与小计差 ${format(input.quoteList.reconciliationDelta)}——` +
+            `说明有行漏了或算重了，这份价格不能拿去比价`),
       });
     }
   }
@@ -267,10 +281,17 @@ export function auditDeliverable(input: AuditInput): AuditReport {
   if (input.snapshot) {
     ran("PRICE_SNAPSHOT", "SR-Q2");
     if (!input.snapshot.ok) {
+      const detail = input.snapshot.mismatches?.length
+        ? `（${input.snapshot.mismatches[0]}）`
+        : "";
+      const detailEn = input.snapshot.mismatches?.length
+        ? ` (${input.snapshot.mismatches[0]})`
+        : "";
       add({
         code: "PRICE_SNAPSHOT", rule: "SR-Q2", severity: "blocking",
-        message: "报价快照与按规格库复算的结果不一致，这份报价不可信" +
-          (input.snapshot.mismatches?.length ? `（${input.snapshot.mismatches[0]}）` : ""),
+        message: msg(lang,
+          `The quote snapshot doesn't match a recalculation from the catalog, so this quote isn't trustworthy${detailEn}`,
+          `报价快照与按规格库复算的结果不一致，这份报价不可信${detail}`),
       });
     }
   }
@@ -283,12 +304,20 @@ export function auditDeliverable(input: AuditInput): AuditReport {
     const assumed = assumedOnes(input.appliances);
     const text = input.customerFacingText ?? "";
     for (const a of assumed) {
-      const label = APPLIANCE_LABEL[a.kind];
-      if (text.includes(label) && (text.includes("推定") || text.includes("预留"))) continue;
+      const labels = [APPLIANCE_LABEL_EN[a.kind], APPLIANCE_LABEL_ZH[a.kind]];
+      if (labels.some((label) => text.includes(label))
+          && (text.includes("推定") || text.includes("预留")
+            || /assumed|reserved/i.test(text))) continue;
+      const applianceLabel = lang === "zh"
+        ? APPLIANCE_LABEL_ZH[a.kind]
+        : APPLIANCE_LABEL_EN[a.kind];
       add({
         code: "UNDISCLOSED_ASSUMPTION", rule: "SR-D1", severity: "blocking",
-        message: `${label}的尺寸是按常见款推定的（${a.width}"），` +
-          `但交给你的说明里没有写清这一点——按图订柜可能装不进去`,
+        message: msg(lang,
+          `${applianceLabel} size was assumed from a common model (${a.width}"), ` +
+            `but that wasn't clearly stated in what we sent you — ordering cabinets from the drawings may not fit.`,
+          `${applianceLabel}的尺寸是按常见款推定的（${a.width}"），` +
+            `但交给你的说明里没有写清这一点——按图订柜可能装不进去`),
       });
     }
   }
@@ -301,19 +330,24 @@ export function auditDeliverable(input: AuditInput): AuditReport {
   if (input.deliverable === "quoteList") {
     ran("UNDISCLOSED_PRODUCT_SCOPE", "SR-D4");
     const text = input.customerFacingText ?? "";
-    if (!/RTA/.test(text) || !/组装/.test(text)) {
+    if (!/RTA/.test(text) || !/(组装|assembl)/i.test(text)) {
       add({
         code: "UNDISCLOSED_PRODUCT_SCOPE", rule: "SR-D4", severity: "blocking",
-        message: "报价单上没写明这是 RTA（板件平装、需要组装、不含上门安装）——" +
-          "客户会拿它去跟全定制的报价直接比，而那两个数不可比",
+        message: msg(lang,
+          "This quote doesn't state that it's RTA (flat-packed panels, assembly required, no on-site install) — " +
+            "customers may compare it directly to a fully custom quote, and those numbers aren't comparable.",
+          "报价单上没写明这是 RTA（板件平装、需要组装、不含上门安装）——" +
+            "客户会拿它去跟全定制的报价直接比，而那两个数不可比"),
       });
     }
     // 商家只有一档时不必写：没有可比的另一档，写了也只是噪音
     if (input.boxMaterialCount !== undefined && input.boxMaterialCount > 1
-        && !/箱体/.test(text)) {
+        && !/(箱体|box material|carcass)/i.test(text)) {
       add({
         code: "UNDISCLOSED_PRODUCT_SCOPE", rule: "SR-D4", severity: "blocking",
-        message: "该商家有多档箱体板材，但报价单上没写明这份价按的是哪一档",
+        message: msg(lang,
+          "This seller offers more than one box-material grade, but the quote doesn't say which grade this price is based on.",
+          "该商家有多档箱体板材，但报价单上没写明这份价按的是哪一档"),
       });
     }
   }
@@ -342,6 +376,7 @@ export function auditDeliverable(input: AuditInput): AuditReport {
 function geometryProblems(
   placements: readonly Placement[],
   runs: readonly WallRun[],
+  lang: UiLanguage,
 ): AuditFinding[] {
   const out: AuditFinding[] = [];
   const EPS = 0.01;
@@ -356,8 +391,11 @@ function geometryProblems(
         if (p.x < -EPS || p.x + p.width > run.length + EPS) {
           out.push({
             code: "GEOMETRY", rule: "SR-G1", severity: "blocking", wallRunId: run.id,
-            message: `${run.label}上有构件超出墙长（${p.moduleCode ?? p.label ?? "构件"} ` +
-              `占 ${p.x}"–${p.x + p.width}"，墙只有 ${run.length}"）`,
+            message: msg(lang,
+              `${run.label} has a component past the wall length (${nameOf(p, lang)} ` +
+                `spans ${p.x}"–${p.x + p.width}", wall is only ${run.length}")`,
+              `${run.label}上有构件超出墙长（${nameOf(p, lang)} ` +
+                `占 ${p.x}"–${p.x + p.width}"，墙只有 ${run.length}"）`),
           });
         }
       }
@@ -373,8 +411,11 @@ function geometryProblems(
           if (!verticallyOverlap(a, b, EPS)) continue;
           out.push({
             code: "GEOMETRY", rule: "SR-G2", severity: "blocking", wallRunId: run.id,
-            message: `${run.label}上有构件重叠（${nameOf(a)} 与 ${nameOf(b)} ` +
-              `在 ${Math.max(a.x, b.x)}" 处叠在一起）`,
+            message: msg(lang,
+              `${run.label} has overlapping components (${nameOf(a, lang)} and ${nameOf(b, lang)} ` +
+                `overlap at ${Math.max(a.x, b.x)}")`,
+              `${run.label}上有构件重叠（${nameOf(a, lang)} 与 ${nameOf(b, lang)} ` +
+                `在 ${Math.max(a.x, b.x)}" 处叠在一起）`),
           });
         }
       }
@@ -396,6 +437,7 @@ function geometryProblems(
 function interferenceProblems(
   placements: readonly Placement[],
   runs: readonly WallRun[],
+  lang: UiLanguage,
 ): AuditFinding[] {
   const out: AuditFinding[] = [];
   const plan = buildKitchenPlan({ wallRuns: [...runs], confidence: 1 });
@@ -425,8 +467,11 @@ function interferenceProblems(
       seen.add(key);
       out.push({
         code: "INTERFERENCE", rule: "SR-G3", severity: "blocking", wallRunId: a.p.wallRunId,
-        message: `${a.rp.run.label}的${nameOf(a.p)}与${b.rp.run.label}的${nameOf(b.p)}` +
-          `占了同一块地方——这两段在墙角处需要让位或改用转角柜`,
+        message: msg(lang,
+          `${a.rp.run.label}'s ${nameOf(a.p, lang)} and ${b.rp.run.label}'s ${nameOf(b.p, lang)} ` +
+            `occupy the same space — these two runs need to yield at the corner or switch to a corner cabinet.`,
+          `${a.rp.run.label}的${nameOf(a.p, lang)}与${b.rp.run.label}的${nameOf(b.p, lang)}` +
+            `占了同一块地方——这两段在墙角处需要让位或改用转角柜`),
       });
     }
   }
@@ -464,6 +509,7 @@ function sameBand(a: Placement["layer"], b: Placement["layer"]): boolean {
 function doorClearanceProblems(
   placements: readonly Placement[],
   runs: readonly WallRun[],
+  lang: UiLanguage,
 ): AuditFinding[] {
   const out: AuditFinding[] = [];
   const EPS = 0.01;
@@ -487,10 +533,15 @@ function doorClearanceProblems(
         if (right <= doorLeft + EPS || left >= doorRight - EPS) continue;
         out.push({
           code: "DOOR_CLEARANCE", rule: "SR-G4", severity: "blocking", wallRunId: run.id,
-          message: `${run.label}上的${nameOf(p)}离门洞太近——` +
-            `连台面外伸算进去占到 ${round(left)}"–${round(right)}"，` +
-            `而门洞连门套要留出 ${round(doorLeft)}"–${round(doorRight)}"。` +
-            `台面会压在门套上，门开不到位。`,
+          message: msg(lang,
+            `${run.label}'s ${nameOf(p, lang)} is too close to the doorway — ` +
+              `counting countertop overhang it covers ${round(left)}"–${round(right)}", ` +
+              `while the door opening with casing needs ${round(doorLeft)}"–${round(doorRight)}". ` +
+              `The countertop would press against the door casing and the door won't open fully.`,
+            `${run.label}上的${nameOf(p, lang)}离门洞太近——` +
+              `连台面外伸算进去占到 ${round(left)}"–${round(right)}"，` +
+              `而门洞连门套要留出 ${round(doorLeft)}"–${round(doorRight)}"。` +
+              `台面会压在门套上，门开不到位。`),
         });
         break; // 一个构件报一次就够
       }
@@ -508,14 +559,19 @@ function doorClearanceProblems(
 function planNoteProblems(
   runs: readonly WallRun[],
   customerFacingText: string,
+  lang: UiLanguage,
 ): AuditFinding[] {
   const plan = buildKitchenPlan({ wallRuns: [...runs], confidence: 1 });
   if (plan.connected || !plan.note) return [];
-  if (customerFacingText.includes("示意排列")) return [];
+  if (customerFacingText.includes("示意排列")
+      || /schematic|indicative/i.test(customerFacingText)) return [];
   return [{
     code: "PLAN_NOTE", rule: "SR-V4", severity: "advisory",
-    message: "有墙段拼不到一起，图上是示意排列——实际方位要以现场为准，" +
-      "这一点需要在给客户的说明里写清楚。",
+    message: msg(lang,
+      "Some wall runs couldn't be joined into a connected plan — the drawing is schematic/indicative. " +
+        "Actual orientation must follow the site; that needs to be clear in the customer notes.",
+      "有墙段拼不到一起，图上是示意排列——实际方位要以现场为准，" +
+        "这一点需要在给客户的说明里写清楚。"),
   }];
 }
 
@@ -523,8 +579,10 @@ function round(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function nameOf(p: Placement): string {
-  return p.moduleCode ?? p.label ?? (p.kind === "appliance" ? "家电位" : "构件");
+function nameOf(p: Placement, lang: UiLanguage): string {
+  return p.moduleCode ?? p.label ?? (p.kind === "appliance"
+    ? msg(lang, "appliance opening", "家电位")
+    : msg(lang, "component", "构件"));
 }
 
 /**
@@ -534,7 +592,11 @@ function nameOf(p: Placement): string {
  * 一个规格库里不存在的尺寸，定价时会在价格矩阵里查不到而整单拒绝——
  * 那时客户看到的只是一句"报价校验未通过"，而根因在几百行之外。
  */
-function specProblems(bom: BomResult, modules: readonly ModuleSpec[]): AuditFinding[] {
+function specProblems(
+  bom: BomResult,
+  modules: readonly ModuleSpec[],
+  lang: UiLanguage,
+): AuditFinding[] {
   const out: AuditFinding[] = [];
   const byId = new Map(modules.map((m) => [m.id, m]));
 
@@ -543,21 +605,25 @@ function specProblems(bom: BomResult, modules: readonly ModuleSpec[]): AuditFind
     if (!spec) {
       out.push({
         code: "SPEC_MISMATCH", rule: "SR-M2", severity: "blocking",
-        message: `清单里的 ${line.moduleCode} 不在这家公司的规格库里`,
+        message: msg(lang,
+          `${line.moduleCode} on the list isn't in this seller's catalog`,
+          `清单里的 ${line.moduleCode} 不在这家公司的规格库里`),
       });
       continue;
     }
     const dims: [string, number, number[]][] = [
-      ["宽", line.width, spec.widthOptions],
-      ["高", line.height, spec.heightOptions],
-      ["深", line.depth, spec.depthOptions],
+      [msg(lang, "width", "宽"), line.width, spec.widthOptions],
+      [msg(lang, "height", "高"), line.height, spec.heightOptions],
+      [msg(lang, "depth", "深"), line.depth, spec.depthOptions],
     ];
     for (const [label, value, options] of dims) {
       if (options.length === 0 || options.includes(value)) continue;
       out.push({
         code: "SPEC_MISMATCH", rule: "SR-M2", severity: "blocking",
-        message: `${line.moduleCode} 的${label} ${value}" 不在这家公司提供的档位里` +
-          `（${options.join("/")}）`,
+        message: msg(lang,
+          `${line.moduleCode}'s ${label} ${value}" isn't among the sizes this seller offers (${options.join("/")})`,
+          `${line.moduleCode} 的${label} ${value}" 不在这家公司提供的档位里` +
+            `（${options.join("/")}）`),
       });
     }
   }
@@ -566,15 +632,22 @@ function specProblems(bom: BomResult, modules: readonly ModuleSpec[]): AuditFind
 
 // ── 呈现 ──────────────────────────────────────────────────────────────────
 
-function stageLabel(stage: DesignStage): string {
+function stageLabel(stage: DesignStage, lang: UiLanguage): string {
   return {
-    collecting: "还在收集资料", readyToDraw: "等你确认是否出图",
-    planReview: "全局排布评审", fullDrawings: "完整图纸", quoted: "已出报价",
+    collecting: msg(lang, "still gathering information", "还在收集资料"),
+    readyToDraw: msg(lang, "waiting for your OK to draw", "等你确认是否出图"),
+    planReview: msg(lang, "overall layout review", "全局排布评审"),
+    fullDrawings: msg(lang, "full drawings", "完整图纸"),
+    quoted: msg(lang, "quoted", "已出报价"),
   }[stage];
 }
 
-function deliverableLabel(d: Deliverable): string {
-  return { planView: "全局俯视图", fourViews: "完整四视图", quoteList: "报价清单" }[d];
+function deliverableLabel(d: Deliverable, lang: UiLanguage): string {
+  return {
+    planView: msg(lang, "overall plan view", "全局俯视图"),
+    fourViews: msg(lang, "full four-view drawings", "完整四视图"),
+    quoteList: msg(lang, "quote list", "报价清单"),
+  }[d];
 }
 
 /**
@@ -583,38 +656,59 @@ function deliverableLabel(d: Deliverable): string {
  * 通过时也要说——「查过了，这几项都过了」比什么都不说更有用，
  * 客户才知道这份东西是被检查过的，而不是随手生成的。
  */
-export function renderAuditText(report: AuditReport): string {
+export function renderAuditText(
+  report: AuditReport,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const lang = language;
   const out: string[] = [];
   // 每条结论都带上规范编号。客户被拦下时能查到依据（docs/SANITY_RULES.md），
   // 运营能核对「这一条到底是谁规定的」——没有编号的话，审核结论就只是
   // 一句系统自己说的话。
   if (report.blockers.length > 0) {
-    out.push("【这一版还不能用】");
+    out.push(msg(lang, "[This revision isn't ready yet]", "【这一版还不能用】"));
     for (const b of report.blockers) out.push(`  ✗ [${b.rule}] ${b.message}`);
     out.push("");
   }
   if (report.notices.length > 0) {
-    out.push("【需要你知道的几点】");
+    out.push(msg(lang, "[A few things you should know]", "【需要你知道的几点】"));
     for (const n of report.notices) out.push(`  ! [${n.rule}] ${n.message}`);
     out.push("");
   }
   if (report.ok && report.notices.length === 0) {
-    out.push(`【交付前检查】按《合理性审查规范》跑了 ${report.checkedRules.length} 条，` +
-      `全部通过：${report.checkedRules.join("、")}。`);
+    const join = msg(lang, ", ", "、");
+    out.push(msg(lang,
+      `[Pre-delivery check] Ran ${report.checkedRules.length} rules from the Sanity Review Spec — ` +
+        `all passed: ${report.checkedRules.join(join)}.`,
+      `【交付前检查】按《合理性审查规范》跑了 ${report.checkedRules.length} 条，` +
+        `全部通过：${report.checkedRules.join(join)}。`));
   } else if (report.ok) {
-    out.push(`【交付前检查】按《合理性审查规范》跑了 ${report.checkedRules.length} 条，无阻断项。`);
+    out.push(msg(lang,
+      `[Pre-delivery check] Ran ${report.checkedRules.length} rules from the Sanity Review Spec — no blockers.`,
+      `【交付前检查】按《合理性审查规范》跑了 ${report.checkedRules.length} 条，无阻断项。`));
   }
   return out.join("\n");
 }
 
-export function codeLabel(code: AuditCode): string {
+export function codeLabel(
+  code: AuditCode,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const lang = language;
   return {
-    ERGONOMICS: "人体工程与安全", BOM_INCOMPLETE: "物料完整性",
-    QUOTE_RECONCILIATION: "报价逐行对账", SPEC_MISMATCH: "型号与尺寸同源",
-    PRICE_SNAPSHOT: "价格快照复算", GEOMETRY: "几何自洽", INTERFERENCE: "跨墙段干涉",
-    DOOR_CLEARANCE: "门洞台面净空", PLAN_NOTE: "平面拼接标注",
-    UNDISCLOSED_ASSUMPTION: "推定值披露",
-    UNDISCLOSED_PRODUCT_SCOPE: "产品边界披露", STAGE: "阶段匹配",
-    UNAPPLIED_PREFERENCE: "偏好落实", AESTHETICS: "排布评分",
+    ERGONOMICS: msg(lang, "Ergonomics & safety", "人体工程与安全"),
+    BOM_INCOMPLETE: msg(lang, "Bill of materials complete", "物料完整性"),
+    QUOTE_RECONCILIATION: msg(lang, "Quote line-item reconciliation", "报价逐行对账"),
+    SPEC_MISMATCH: msg(lang, "SKU & size from catalog", "型号与尺寸同源"),
+    PRICE_SNAPSHOT: msg(lang, "Price snapshot recalculation", "价格快照复算"),
+    GEOMETRY: msg(lang, "Geometry consistency", "几何自洽"),
+    INTERFERENCE: msg(lang, "Cross-run interference", "跨墙段干涉"),
+    DOOR_CLEARANCE: msg(lang, "Doorway countertop clearance", "门洞台面净空"),
+    PLAN_NOTE: msg(lang, "Plan join annotation", "平面拼接标注"),
+    UNDISCLOSED_ASSUMPTION: msg(lang, "Assumed-value disclosure", "推定值披露"),
+    UNDISCLOSED_PRODUCT_SCOPE: msg(lang, "Product-scope disclosure", "产品边界披露"),
+    STAGE: msg(lang, "Stage match", "阶段匹配"),
+    UNAPPLIED_PREFERENCE: msg(lang, "Preference applied", "偏好落实"),
+    AESTHETICS: msg(lang, "Layout score", "排布评分"),
   }[code];
 }

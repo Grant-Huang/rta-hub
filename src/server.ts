@@ -35,7 +35,7 @@ import { quoteContentHash, verifySnapshot } from "./quote/state.js";
 import { layoutFace, toSvg } from "./render/face-grammar.js";
 import { buildFace, BASE_FACE_HEIGHT, matchFaceTemplate, type FaceTemplateId } from "./render/templates.js";
 import {
-  companyAgentReply, mergeRequirements, missingFields, orchestratorReply,
+  companyAgentReply, fieldLabel, mergeRequirements, missingFields, orchestratorReply,
 } from "./agents/orchestrator.js";
 import { quickRepliesFor } from "./agents/quick-replies.js";
 import {
@@ -81,6 +81,7 @@ import {
   newSession, recordPlanRevision, stagePrompt, StageError, allowedArtifacts,
   type DesignSession,
 } from "./design/stages.js";
+import { evaluateDesignReadiness } from "./design/readiness.js";
 import { renderPlanViews } from "./render/plan-view.js";
 import { buildBom, bomToSelections } from "./layout/bom.js";
 import { buildQuoteList, renderQuoteListHtml, renderQuoteListText } from "./quote/line-items.js";
@@ -91,7 +92,11 @@ import {
 } from "./spec/onboarding.js";
 import { blankTemplates, type ImportSources } from "./spec/import.js";
 import type { CompanyOverrides } from "./render/templates.js";
-import { RTA_INTRO, RTA_QUOTE_NOTE } from "./quote/rta-disclosure.js";
+import { rtaIntro, rtaQuoteNote } from "./quote/rta-disclosure.js";
+import {
+  DEFAULT_LANGUAGE, detectLanguageSwitch, languageSwitchAck, msg, resolveLanguage,
+  type UiLanguage,
+} from "./i18n/language.js";
 import { BOX_MATERIAL_LABEL_EN } from "./spec/carcass.js";
 import { bomReadiness } from "./layout/bom.js";
 import {
@@ -154,7 +159,7 @@ app.post("/__unlock", async (c) => {
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "local";
   const limit = rateLimit(ip);
   if (!limit.allowed) {
-    return c.html(unlockPage(`尝试次数过多，请 ${Math.ceil(limit.retryAfterSec / 60)} 分钟后再试。`), 429);
+    return c.html(unlockPage(`Too many attempts. Try again in ${Math.ceil(limit.retryAfterSec / 60)} minutes.`), 429);
   }
 
   // 登录页是普通表单提交；同时接受 JSON，便于脚本化测试
@@ -164,7 +169,7 @@ app.post("/__unlock", async (c) => {
     : (await c.req.parseBody())["password"];
 
   if (!checkPassword(gate, password)) {
-    return c.html(unlockPage("口令不正确。"), 401);
+    return c.html(unlockPage("Incorrect password."), 401);
   }
 
   const secure = new URL(c.req.url).protocol === "https:";
@@ -179,7 +184,7 @@ app.post("/__unlock", async (c) => {
 async function requireAccount(c: Ctx, next: Next) {
   const id = c.req.header("x-account-id");
   const account = id ? appCtx.repos.accounts.byId(id) : undefined;
-  if (!account) return c.json({ error: "未认证：请在 X-Account-Id 头中提供账号 id" }, 401);
+  if (!account) return c.json({ error: "Unauthenticated: provide account id in X-Account-Id header" }, 401);
   c.set("account", account);
   await next();
 }
@@ -188,7 +193,7 @@ async function requireAccount(c: Ctx, next: Next) {
 async function requireAdmin(c: Ctx, next: Next) {
   const expected = process.env.ADMIN_TOKEN;
   if (!expected || c.req.header("x-admin-token") !== expected) {
-    return c.json({ error: "未授权：需要有效的 X-Admin-Token" }, 401);
+    return c.json({ error: "Unauthorized: valid X-Admin-Token required" }, 401);
   }
   await next();
 }
@@ -303,7 +308,7 @@ async function sessionFor(conversationId: string, companyId: string): Promise<De
   // 资料齐了就推进到「该问客户了」。
   // 这个判断放在这里而不是某个 GET 端点里：阶段是**状态的函数**，
   // 不该取决于有没有人先查过一次状态。
-  if (session.stage === "collecting" && isReadyToDraw(conversationId)) {
+  if (session.stage === "collecting" && isReadyToDraw(conversationId, companyId)) {
     session = markReadyToDraw(session, now());
   }
   return appCtx.repos.designSessions.upsert(session);
@@ -312,18 +317,48 @@ async function sessionFor(conversationId: string, companyId: string): Promise<De
 /**
  * 能不能开始问「要不要出图」。
  *
- * 判据只有一条：**户型几何完整**（墙段长度、层高都补齐了）。
- *
- * 刻意**不要求**聊天里说全尺寸/布局/风格/预算：
- *   - 尺寸与布局就是户型图本身，再要求打一遍字是多余的；
- *   - 省份在账号上（注册必填，定价要用）；
- *   - 风格与预算是**选择题**的事（FR-1.1），不是从聊天里抠关键词。
- *
- * 把这些当成出图的前置条件，等于让客户为了看一眼排布先做一遍问卷。
+ * 以 FR-15 内部检查表为准：墙长齐 + 关键现场/意图项齐（不能猜上下水、家电等）。
+ * 齐了只推进到 `readyToDraw`（文字确认 + 问一句），**不会**自动出图。
  */
-function isReadyToDraw(conversationId: string): boolean {
+function isReadyToDraw(conversationId: string, companyId?: string): boolean {
+  return designReadinessFor(conversationId, companyId).readyToAskDesign;
+}
+
+function designReadinessFor(conversationId: string, companyId?: string) {
+  const conv = appCtx.repos.conversations.byId(conversationId);
+  if (!conv) {
+    return evaluateDesignReadiness({
+      conversation: {
+        id: conversationId, customerAccountId: "", messages: [],
+        designRequirements: "", perCompanyThreads: [], createdAt: now(),
+      },
+      plan: undefined,
+      language: DEFAULT_LANGUAGE,
+    });
+  }
   const plan = planForConversation(conversationId);
-  return plan !== undefined && isLayoutReady(plan);
+  const co = companyId ? appCtx.repos.companies.byId(companyId) : undefined;
+  return evaluateDesignReadiness({
+    conversation: conv,
+    plan,
+    ...(companyId ? { companyId } : {}),
+    ...(co ? { companyName: co.name } : {}),
+    language: resolveLanguage(conv.preferences?.shared),
+  });
+}
+
+/**
+ * 设计前还缺哪些 intake 字段（编排/快捷回答用）。
+ * 现场类缺口改走检查表 openItems。
+ */
+function intakeMissing(conversationId: string): string[] {
+  const conv = appCtx.repos.conversations.byId(conversationId);
+  let missing = missingFields(conv?.designRequirements ?? "");
+  const plan = planForConversation(conversationId);
+  if (plan && isLayoutReady(plan)) {
+    missing = missing.filter((f) => f !== "kitchen size" && f !== "layout");
+  }
+  return missing;
 }
 
 /** 该公司的踢脚做法。缺省整体底座；`plasticLegs` 时物料清单里会出现地脚。 */
@@ -336,13 +371,19 @@ function toeKickSystemFor(companyId: string) {
 }
 
 /** 完整 BOM —— 柜体 + 填缝条 + 踢脚/地脚 + 收口板，缺料如实报出。 */
-function bomFor(plan: FloorPlan, layout: GeneratedLayout, companyId: string) {
+function bomFor(
+  plan: FloorPlan,
+  layout: GeneratedLayout,
+  companyId: string,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+) {
   const bundle = publishedBundle(appCtx, companyId);
   return buildBom({
     layout,
     wallRuns: plan.parsedGeometry.wallRuns,
     modules: bundle?.modules ?? [],
     toeKickSystem: toeKickSystemFor(companyId),
+    language,
   });
 }
 
@@ -353,14 +394,14 @@ function bomFor(plan: FloorPlan, layout: GeneratedLayout, companyId: string) {
  * 后者**只在方案被否决时**才有意义——「你的厨房排不下」和
  * 「按我们猜的尺寸排不下」对客户是完全不同的两句话。
  */
-function applianceNotes(plan: FloorPlan, acceptable: boolean): {
+function applianceNotes(plan: FloorPlan, acceptable: boolean, language = DEFAULT_LANGUAGE): {
   applianceProvenance?: string;
   ergonomicsCaveat?: string;
 } {
   const list = plan.appliances ?? [];
   if (list.length === 0) return {};
-  const note = provenanceNote(list);
-  const caveat = acceptable ? undefined : violationCaveat(list);
+  const note = provenanceNote(list, language);
+  const caveat = acceptable ? undefined : violationCaveat(list, language);
   return {
     ...(note ? { applianceProvenance: note } : {}),
     ...(caveat ? { ergonomicsCaveat: caveat } : {}),
@@ -409,7 +450,7 @@ async function applyRevision(
   changes: Partial<CustomerPreferences>,
 ): Promise<{ keys: string[]; error?: string }> {
   const conv = appCtx.repos.conversations.byId(conversationId);
-  if (!conv) return { keys: [], error: "会话不存在" };
+  if (!conv) return { keys: [], error: "Conversation not found" };
   const bundle = publishedBundle(appCtx, companyId);
 
   let split;
@@ -446,6 +487,10 @@ function baseRunInches(conversationId: string): number | undefined {
 app.get("/health", (c) => c.json({ ok: true }));
 
 app.get("/", (c) => c.html(readFileSync(path.join(__dirname, "../web/index.html"), "utf-8")));
+app.get("/ui-i18n.js", (c) => {
+  c.header("content-type", "application/javascript; charset=utf-8");
+  return c.body(readFileSync(path.join(__dirname, "../web/ui-i18n.js"), "utf-8"));
+});
 
 // ── 公司目录（只暴露客户可见信息，不暴露订阅/计费状态）────────────────────
 
@@ -458,12 +503,15 @@ app.get("/api/companies", (c) =>
 
 app.get("/api/companies/:id/spec", (c) => {
   const co = appCtx.repos.companies.byId(param(c, "id"));
-  if (!co || !isCompanyActive(co)) return c.json({ error: "公司不存在或暂不可用" }, 404);
+  if (!co || !isCompanyActive(co)) return c.json({ error: "Company not found or unavailable" }, 404);
   const bundle = publishedBundle(appCtx, co.id);
-  if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 404);
+  if (!bundle) return c.json({ error: "Company has no published catalog" }, 404);
   return c.json({
     company: { id: co.id, name: co.name },
     doorStyles: bundle.doorStyles.map((d) => ({ id: d.id, name: d.name, priceGroupId: d.priceGroupId })),
+    boxMaterials: (bundle.boxMaterialOptions ?? []).map((m) => ({
+      id: m.id, name: m.name, code: m.code,
+    })),
     modules: bundle.modules.map((m) => ({
       id: m.id, code: m.code, type: m.type,
       widthOptions: m.widthOptions, heightOptions: m.heightOptions, depthOptions: m.depthOptions,
@@ -490,20 +538,37 @@ app.post("/api/conversations", requireAccount, async (c) => {
 app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
   const account = c.get("account");
   const conv = ownedConversation(c, param(c, "id"));
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
 
   const body = await jsonBody<{ text: string }>(c);
   const text = (body.text ?? "").trim();
-  if (!text) return c.json({ error: "text 不能为空" }, 400);
+  if (!text) return c.json({ error: "text is required" }, 400);
 
   const at = now();
   const messages: ChatMessage[] = [...conv.messages, { role: "user", content: text, at }];
   const routing = { companies: appCtx.repos.companies.all(), isActive: isCompanyActive };
 
+  // 语言偏好：默认英文；只有客户明确要求才切换，并写入会话偏好。
+  let language: UiLanguage = resolveLanguage(conv.preferences?.shared);
+  const switched = detectLanguageSwitch(text);
+  let prefsPatch = conv.preferences;
+  if (switched && switched !== language) {
+    language = switched;
+    const prev = conv.preferences ?? {};
+    prefsPatch = {
+      ...prev,
+      shared: { ...(prev.shared ?? {}), language },
+    };
+  }
+
   const routed: { companyId: string; companyName: string }[] = [];
   const notices: string[] = [];
   const replies: ChatMessage[] = [];
   const perCompanyThreads = conv.perCompanyThreads.map((t) => ({ ...t, messages: [...t.messages] }));
+
+  if (switched) {
+    replies.push({ role: "assistant", content: languageSwitchAck(language), at });
+  }
 
   const mentions = parseMentions(text);
   for (const raw of mentions) {
@@ -523,10 +588,10 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
 
       // 公司 Agent：上下文里只有这家公司的 published 规格
       const reply = await companyAgentReply(appCtx.llm, outcome.company.name, bundle,
-        { conversationId: conv.id, requirements: conv.designRequirements, history }, text);
-      const msg: ChatMessage = { role: "assistant", content: reply.content, companyId: outcome.company.id, at };
-      thread.messages.push(msg);
-      replies.push(msg);
+        { conversationId: conv.id, requirements: conv.designRequirements, history }, text, language);
+      const assistantMsg: ChatMessage = { role: "assistant", content: reply.content, companyId: outcome.company.id, at };
+      thread.messages.push(assistantMsg);
+      replies.push(assistantMsg);
     } else {
       notices.push(clientFacingMessage(outcome));
       await appCtx.repos.mentionSignals.insert(buildMentionSignal(outcome, {
@@ -542,21 +607,58 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     // 说话方式也应该一致，否则会出现"按零售价报价却全程行话"的错位
     const effective = effectiveAccountType(account, verificationFor(account.id));
 
-    // 日常轮次走轻量模型，只有确定性触发才上主力（model-tiers.ts）。
-    // 「连续几轮没进展」是兜底：轻量模型可能在原地打转，客户已经说了三轮
-    // 却一个字段都没被收集到。
-    const escalation = escalationDecision({
-      userText: text,
-      turnsWithoutProgress: turnsWithoutProgress(conv),
-      justParsedFloorPlan: false,
-    });
-    // 上一轮是否已经问过同样的缺失字段——是的话改口去用选择题，别原样再问一遍
-    const repeatedAsk = askedSameFieldsBefore(conv, designRequirementsAfter(conv, text));
-    const reply = await orchestratorReply(appCtx.llm,
-      { conversationId: conv.id, requirements: conv.designRequirements, history: conv.messages.map(toHistory) },
-      text, { profile: interactionProfile(effective), escalation, repeatedAsk });
-    designRequirements = reply.requirements ?? designRequirements;
-    replies.push({ role: "assistant", content: reply.content, at });
+    // 纯切换语言的短句：只回确认，不再跑一轮需求问答（否则会叠两句助手回复）。
+    const switchOnly = Boolean(switched) && isLanguageSwitchOnly(text);
+    if (!switchOnly) {
+      // 日常轮次走轻量模型，只有确定性触发才上主力（model-tiers.ts）。
+      // 「连续几轮没进展」是兜底：轻量模型可能在原地打转，客户已经说了三轮
+      // 却一个字段都没被收集到。
+      const escalation = escalationDecision({
+        userText: text,
+        turnsWithoutProgress: turnsWithoutProgress(conv),
+        justParsedFloorPlan: false,
+      });
+  // Pass intake status into LLM for friendlier collection
+      const nextReqs = designRequirementsAfter(conv, text);
+      const readinessPre = (() => {
+        // provisional: merge next reqs into a shallow copy for status
+        const shadow = { ...conv, designRequirements: nextReqs };
+        const plan = planForConversation(conv.id);
+        return evaluateDesignReadiness({
+          conversation: shadow,
+          plan,
+          language,
+        });
+      })();
+      const intakeMiss = intakeMissing(conv.id).length
+        ? missingFields(nextReqs).filter((f) => {
+            const plan = planForConversation(conv.id);
+            if (plan && isLayoutReady(plan) && (f === "kitchen size" || f === "layout")) return false;
+            return true;
+          })
+        : [];
+      // prefer checklist open critical asks when geometry exists
+      const planReady = readinessPre.items.some((i) => i.id === "walls_ceiling" && i.status === "ok");
+      const repeatedAsk = askedSameFieldsBefore(conv, nextReqs);
+      const reply = await orchestratorReply(appCtx.llm,
+        { conversationId: conv.id, requirements: conv.designRequirements, history: conv.messages.map(toHistory) },
+        text, {
+          profile: interactionProfile(effective),
+          escalation,
+          repeatedAsk,
+          language,
+          intakeStatus: {
+            missing: [
+              ...intakeMiss,
+              ...readinessPre.openItems.filter((i) => i.critical).map((i) => i.id),
+            ],
+            floorPlanReady: planReady,
+            readyToAskDesign: readinessPre.readyToAskDesign,
+          },
+        });
+      designRequirements = reply.requirements ?? designRequirements;
+      replies.push({ role: "assistant", content: reply.content, at });
+    }
   } else {
     designRequirements = mergeRequirements(designRequirements, text);
     if (notices.length > 0 && replies.length === 0) {
@@ -566,6 +668,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
 
   const updated = await appCtx.repos.conversations.update(conv.id, {
     messages: [...messages, ...replies], perCompanyThreads, designRequirements,
+    ...(prefsPatch !== conv.preferences ? { preferences: prefsPatch } : {}),
   });
 
   // 随回复带上本轮的选择题。
@@ -573,7 +676,8 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
   // 「预算大概多少」这类问题不该用开放式问法——客户不知道一套橱柜该是多少钱，
   // 开放式提问等于让他先去做一遍市场调研。有公司上下文时给出真实门板/五金选项，
   // 没有时至少能给按尺寸锚定的预算区间。
-  const questionCompanyId = routed[0]?.companyId ?? "";
+  const questionCompanyId = routed[0]?.companyId
+    ?? (appCtx.repos.companies.all().find((co) => isCompanyActive(co))?.id ?? "");
   const qBundle = questionCompanyId ? publishedBundle(appCtx, questionCompanyId) : undefined;
   const inches = baseRunInches(conv.id);
   const questions = buildQuestionSet({
@@ -596,12 +700,38 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
   // 「您偏好的厨房风格是什么？」后面跟一串括号里的例子，客户读完还是不知道
   // 答案该有多长——写一段？回两个字？于是他要么写一大段（关键词表匹配不上，
   // 下一轮又被问一遍），要么干脆不答。给按钮，或者至少告诉他"回一个词就行"。
-  const missing = missingFields(updated.designRequirements);
+  const missing = intakeMissing(updated.id);
+  const readiness = designReadinessFor(updated.id, questionCompanyId || undefined);
   const quickReplies = mentions.length === 0
-    ? quickRepliesFor(missing, interactionProfile(
-        effectiveAccountType(account, verificationFor(account.id)),
-      ).maxQuestionsPerTurn)
+    ? quickRepliesFor(
+        missing.length ? missing : readiness.openItems.filter((i) => i.critical).map((i) => {
+          // map checklist ids back to quick-reply catalog keys when possible
+          if (i.id === "style" || i.id === "budget" || i.id === "province") return i.id;
+          return "";
+        }).filter(Boolean),
+        interactionProfile(
+          effectiveAccountType(account, verificationFor(account.id)),
+        ).maxQuestionsPerTurn,
+        language,
+      )
     : [];
+
+  // 资料齐了：推进阶段并带回「要不要出设计」+ 文字确认复述
+  let designPrompt = null as ReturnType<typeof stagePrompt> | null;
+  let designSession = null as Awaited<ReturnType<typeof sessionFor>> | null;
+  if (questionCompanyId && isReadyToDraw(updated.id, questionCompanyId)) {
+    designSession = await sessionFor(updated.id, questionCompanyId);
+    if (designSession.stage === "readyToDraw") {
+      const base = stagePrompt(designSession, {
+        language,
+        missingFields: readiness.openItems.map((i) => i.brief),
+      });
+      designPrompt = {
+        ...base,
+        message: `${readiness.confirmationText}\n\n${base.message}`,
+      };
+    }
+  }
 
   return c.json({
     replies,
@@ -613,6 +743,16 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     quickReplies,
     questions,
     questionCompanyId,
+    language,
+    designBrief: {
+      sections: readiness.sections,
+      readyToAskDesign: readiness.readyToAskDesign,
+      openItems: readiness.openItems.map((i) => ({
+        id: i.id, status: i.status, brief: i.brief, askHint: i.askHint,
+      })),
+      confirmationText: readiness.confirmationText,
+    },
+    ...(designPrompt ? { designPrompt, designSession } : {}),
   });
 });
 
@@ -636,7 +776,7 @@ app.get("/api/conversations", requireAccount, (c) => {
       const mine = quotes.filter((q) => q.conversationId === v.id);
       return {
         id: v.id,
-        title: (firstUser?.content ?? "").slice(0, 40) || "新会话",
+        title: (firstUser?.content ?? "").slice(0, 40) || "New conversation",
         messageCount: v.messages.length,
         quoteCount: mine.length,
         companies: v.perCompanyThreads.map((t) => t.companyId),
@@ -650,7 +790,27 @@ app.get("/api/conversations", requireAccount, (c) => {
 
 app.get("/api/conversations/:id", requireAccount, (c) => {
   const conv = ownedConversation(c, param(c, "id"));
-  return conv ? c.json({ conversation: conv }) : c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
+  const language = resolveLanguage(conv.preferences?.shared);
+  const companyId = c.req.query("companyId") || undefined;
+  const readiness = designReadinessFor(conv.id, companyId);
+  return c.json({
+    conversation: conv,
+    language,
+    rtaIntro: rtaIntro(language),
+    welcome:
+      language === "zh"
+        ? "你好，我是橱柜设计顾问。先聊聊你的项目——厨房大概多大？喜欢什么风格？预算范围？所在省份？\n\n想问某家公司的具体细节，用 @公司名 点名（例如 @枫岭橱柜 / @湖畔厨柜）。"
+        : "Hi — I'm your cabinet design assistant. To get started: roughly how big is the kitchen, what style do you like, what's your budget range, and which province are you in?\n\nFor a specific seller, @ the company name (e.g. @MapleRidgeCabinets).",
+    designBrief: {
+      sections: readiness.sections,
+      readyToAskDesign: readiness.readyToAskDesign,
+      openItems: readiness.openItems.map((i) => ({
+        id: i.id, status: i.status, brief: i.brief, askHint: i.askHint,
+      })),
+      confirmationText: readiness.confirmationText,
+    },
+  });
 });
 
 // ── 价格与偏好的选择式提问（FR-1）─────────────────────────────────────────
@@ -665,11 +825,11 @@ app.get("/api/conversations/:id", requireAccount, (c) => {
 app.get("/api/conversations/:id/questions", requireAccount, (c) => {
   const account = c.get("account");
   const conv = ownedConversation(c, param(c, "id"));
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
 
   const companyId = c.req.query("companyId") ?? "";
   const bundle = companyId ? publishedBundle(appCtx, companyId) : undefined;
-  if (companyId && !bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+  if (companyId && !bundle) return c.json({ error: "Company has no published catalog" }, 409);
 
   const inches = baseRunInches(conv.id);
   const plan = planForConversation(conv.id);
@@ -700,7 +860,9 @@ app.get("/api/conversations/:id/questions", requireAccount, (c) => {
     answered: prefsFor(conv, companyId),
     // 没有户型图时预算题问不出来（区间需要尺寸锚定），如实说明而不是给个瞎猜的区间
     ...(inches === undefined
-      ? { note: "上传户型图并补齐尺寸后，我们才能给出有依据的预算区间。" }
+      ? { note: msg(resolveLanguage(conv.preferences?.shared),
+          "Upload a floor plan and fill in the sizes first — then we can give a grounded budget range.",
+          "上传户型图并补齐尺寸后，我们才能给出有依据的预算区间。") }
       : {}),
   });
 });
@@ -708,7 +870,7 @@ app.get("/api/conversations/:id/questions", requireAccount, (c) => {
 /** 记录客户的选择。跨公司项与该公司项分开存（见 Conversation.preferences）。 */
 app.post("/api/conversations/:id/preferences", requireAccount, async (c) => {
   const conv = ownedConversation(c, param(c, "id"));
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
 
   const body = await jsonBody<CustomerPreferences & { companyId: string }>(c);
   const companyId = body.companyId ?? "";
@@ -746,34 +908,36 @@ app.post("/api/conversations/:id/preferences", requireAccount, async (c) => {
 app.post("/api/conversations/:id/estimate", requireAccount, async (c) => {
   const account = c.get("account");
   const conv = ownedConversation(c, param(c, "id"));
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
 
   // 有户型图就出**含四视图**的版本（MVP-2，场景 B 第 4 点）；否则退回纯文本版
   const plan = appCtx.repos.floorPlans.find((p) => p.conversationId === conv.id && isLayoutReady(p));
 
   if (plan) {
+    const lang = resolveLanguage(conv.preferences?.shared);
     const illustrated = buildIllustratedEstimate(appCtx.catalog, plan.parsedGeometry, {
       conversationId: conv.id, province: account.province, at: now(),
-    }, { taxRules: appCtx.taxRules, sourceVerified: appCtx.catalogSourceVerified });
+    }, { taxRules: appCtx.taxRules, sourceVerified: appCtx.catalogSourceVerified, language: lang });
     await appCtx.repos.estimates.insert(illustrated.draft);
     return c.json({
       estimate: illustrated.draft,
-      text: renderEstimateText(illustrated.draft),
+      text: renderEstimateText(illustrated.draft, lang),
       views: illustrated.viewsByRun,
       viewsDisclaimer: illustrated.viewsDisclaimer,
     }, 201);
   }
 
+  const lang = resolveLanguage(conv.preferences?.shared);
   const draft = buildEstimateDraft(appCtx.catalog, {
     conversationId: conv.id,
     moduleCounts: estimateCountsFromText(conv.designRequirements),
     province: account.province,
     at: now(),
-  }, { taxRules: appCtx.taxRules, sourceVerified: appCtx.catalogSourceVerified });
+  }, { taxRules: appCtx.taxRules, sourceVerified: appCtx.catalogSourceVerified, language: lang });
 
   await appCtx.repos.estimates.insert(draft);
   // EstimateDraft 没有 companyId —— 结构上不可能进入发送闸门（FR-8 第 4 条）
-  return c.json({ estimate: draft, text: renderEstimateText(draft) }, 201);
+  return c.json({ estimate: draft, text: renderEstimateText(draft, lang) }, 201);
 });
 
 // ── 报价 ──────────────────────────────────────────────────────────────────
@@ -786,18 +950,18 @@ app.post("/api/quotes", requireAccount, async (c) => {
   }>(c);
 
   const company = body.companyId ? appCtx.repos.companies.byId(body.companyId) : undefined;
-  if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
+  if (!company || !isCompanyActive(company)) return c.json({ error: "Company not found or unavailable" }, 404);
   const conv = ownedConversation(c, body.conversationId ?? "");
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
   // 客户在选择题里选过门板/箱体就直接用，不必再传一遍
   const prefs = prefsFor(conv, company.id);
   const doorStyleId = body.doorStyleId || prefs.doorStyleId;
   // 箱体板材没选就传空——定价那边按商家的默认档算，并把用的是哪一档记进快照
   const boxMaterialId = body.boxMaterialId || prefs.boxMaterialId;
-  if (!doorStyleId) return c.json({ error: "必须选择门板样式（决定价格组）" }, 400);
+  if (!doorStyleId) return c.json({ error: "Door style is required (sets the price group)" }, 400);
 
   const pricing = pricingContextFor(appCtx, company.id);
-  if (!pricing) return c.json({ error: "该公司尚无已发布规格" }, 409);
+  if (!pricing) return c.json({ error: "Company has no published catalog" }, 409);
 
   // 方案违反人体工程硬约束时不允许出报价——那不是"便宜一点"的取舍，
   // 是灶台旁没处放热锅、洗碗机离水槽太远这类不该发给客户的方案（FR-4）
@@ -807,7 +971,7 @@ app.post("/api/quotes", requireAccount, async (c) => {
     : undefined;
   if (stored && !stored.acceptable) {
     return c.json({
-      error: "当前方案未通过人体工程检查，请先调整",
+      error: "Current layout failed ergonomic checks — adjust it first",
       ergonomics: stored.ergonomics.filter((v) => v.severity === "blocking"),
     }, 409);
   }
@@ -832,20 +996,22 @@ app.post("/api/quotes", requireAccount, async (c) => {
   });
 
   for (const e of result.events) await appCtx.repos.auditEvents.insert(e);
-  if (!result.ok) return c.json({ error: "报价校验未通过，已拒绝生成", issues: result.issues }, 422);
+  if (!result.ok) return c.json({ error: "Quote validation failed; generation refused", issues: result.issues }, 422);
 
   await appCtx.repos.quotes.insert(result.quote);
 
   // 逐项清单：柜体与其门板一组、附件单列、分类汇总。
   // 只给一个总价，客户既判断不了贵在哪，也没法跟别家比（quote/line-items.ts）
+  const quoteLang = convLanguage(conv);
   const bom = activePlan && stored
-    ? bomFor(activePlan, toGeneratedLayout(stored), company.id) : undefined;
+    ? bomFor(activePlan, toGeneratedLayout(stored), company.id, quoteLang) : undefined;
   const list = buildQuoteList({
     quote: result.quote,
     modules: pricing.modules,
     doorStyles: pricing.doorStyles,
     ...(pricing.boxMaterialOptions ? { boxMaterials: pricing.boxMaterialOptions } : {}),
     ...(bom ? { bomLines: bom.lines } : {}),
+    language: quoteLang,
   });
 
   // ── 换花色比价（FR-6.3）──
@@ -871,6 +1037,7 @@ app.post("/api/quotes", requireAccount, async (c) => {
     accountType,
     province: account.province,
     at: now(),
+    language: quoteLang,
   });
 
   const session = appCtx.repos.designSessions.byId(conv.id);
@@ -887,10 +1054,10 @@ app.post("/api/quotes", requireAccount, async (c) => {
   // 报价比——那两个数不可比，而不可比这件事必须写在单子上，不能只在开场
   // 说过一次。
   const listText = [
-    renderQuoteListText(list),
-    renderFinishComparison(finishes, format),
-    activePlan?.appliances?.length ? provenanceNote(activePlan.appliances) : undefined,
-    RTA_QUOTE_NOTE,
+    renderQuoteListText(list, quoteLang),
+    renderFinishComparison(finishes, format, quoteLang),
+    activePlan?.appliances?.length ? provenanceNote(activePlan.appliances, quoteLang) : undefined,
+    rtaQuoteNote(quoteLang),
   ].filter(Boolean).join("\n\n");
   const audit = auditDeliverable({
     deliverable: "quoteList",
@@ -907,12 +1074,13 @@ app.post("/api/quotes", requireAccount, async (c) => {
     // 有多档才要求写明按的是哪一档；只有一档时没有可比的另一档，写了只是噪音
     ...(pricing.boxMaterialOptions
       ? { boxMaterialCount: pricing.boxMaterialOptions.length } : {}),
+    language: quoteLang,
   });
   if (!audit.ok) {
     // 拦下来，并**说清楚拦的是什么**——「报价校验未通过」对客户毫无用处
     return c.json({
-      error: "这份报价没通过交付前检查，先不能给你",
-      audit, auditText: renderAuditText(audit),
+      error: "This quote failed pre-delivery checks and cannot be released yet",
+      audit, auditText: renderAuditText(audit, quoteLang),
     }, 409);
   }
 
@@ -925,9 +1093,9 @@ app.post("/api/quotes", requireAccount, async (c) => {
     formattedTotal: format(result.quote.total),
     quoteList: list,
     quoteListText: listText,
-    quoteListHtml: renderQuoteListHtml(list),
+    quoteListHtml: renderQuoteListHtml(list, quoteLang),
     finishComparison: finishes,
-    audit, auditText: renderAuditText(audit),
+    audit, auditText: renderAuditText(audit, quoteLang),
     // trade 账号被降级定价时如实说明原因，不静默按零售价出单
     ...(account.accountType === "trade" && !gate.allowed
       ? { tradePricing: { applied: false, reason: gate.reason, nextStep: gate.nextStep } }
@@ -937,24 +1105,25 @@ app.post("/api/quotes", requireAccount, async (c) => {
 
 app.get("/api/quotes/:id", requireAccount, (c) => {
   const q = ownedQuote(c, param(c, "id"));
-  return q ? c.json({ quote: q, formattedTotal: format(q.total) }) : c.json({ error: "报价不存在" }, 404);
+  return q ? c.json({ quote: q, formattedTotal: format(q.total) }) : c.json({ error: "Quote not found" }, 404);
 });
 
 /** 发送前的二次披露（FR-13 第 2 条）——客户必须先看到这个清单。 */
 app.get("/api/quotes/:id/disclosure", requireAccount, (c) => {
   const account = c.get("account");
   const q = ownedQuote(c, param(c, "id"));
-  if (!q) return c.json({ error: "报价不存在" }, 404);
+  if (!q) return c.json({ error: "Quote not found" }, 404);
   const company = appCtx.repos.companies.byId(q.companyId);
+  const conv = appCtx.repos.conversations.byId(q.conversationId);
   return c.json(buildSendDisclosure(q, company?.name ?? q.companyId, {
     displayName: account.displayName, email: account.email,
-  }));
+  }, resolveLanguage(conv?.preferences?.shared)));
 });
 
 /** 客户确认 —— 独立的服务端状态迁移，留痕。 */
 app.post("/api/quotes/:id/confirm", requireAccount, async (c) => {
   const q = ownedQuote(c, param(c, "id"));
-  if (!q) return c.json({ error: "报价不存在" }, 404);
+  if (!q) return c.json({ error: "Quote not found" }, 404);
   try {
     const r = confirm(q, now());
     await appCtx.repos.quotes.update(r.quote.id, r.quote);
@@ -974,9 +1143,9 @@ app.post("/api/quotes/:id/confirm", requireAccount, async (c) => {
 app.post("/api/quotes/:id/send", requireAccount, async (c) => {
   const account = c.get("account");
   const q = ownedQuote(c, param(c, "id"));
-  if (!q) return c.json({ error: "报价不存在" }, 404);
+  if (!q) return c.json({ error: "Quote not found" }, 404);
   if (q.status !== "confirmed") {
-    return c.json({ error: `报价当前状态为 ${q.status}，必须先由客户确认才能发送` }, 409);
+    return c.json({ error: `Quote status is ${q.status}; customer must confirm before send` }, 409);
   }
 
   const company = appCtx.repos.companies.byId(q.companyId);
@@ -1038,7 +1207,7 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
     q, appCtx.repos.billingEvents.all(),
     sendResult.delivered
       ? { delivered: true }
-      : { delivered: false, error: "error" in sendResult ? sendResult.error : "未知错误" },
+      : { delivered: false, error: "error" in sendResult ? sendResult.error : "Unknown error" },
     LEAD_FEE, at,
   );
 
@@ -1053,7 +1222,7 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
     // 事件里——客户点了发送，界面上什么也没说；运营要翻审计流水才知道是
     // CASL 校验没过还是 SMTP 连不上。两者要做的事完全不同。
     ...(sendResult.delivered ? {} : {
-      sendError: "error" in sendResult ? sendResult.error : "未知错误",
+      sendError: "error" in sendResult ? sendResult.error : "Unknown error",
     }),
     billingSuppressed: outcome.billingSuppressed,
     billingEventId: outcome.billingEvent?.id,
@@ -1072,11 +1241,11 @@ app.post("/api/quotes/:id/send", requireAccount, async (c) => {
 app.get("/api/quotes/:id/pdf", requireAccount, (c) => {
   const account = c.get("account");
   const q = ownedQuote(c, param(c, "id"));
-  if (!q) return c.json({ error: "报价不存在" }, 404);
+  if (!q) return c.json({ error: "Quote not found" }, 404);
 
   const plan = planForConversation(q.conversationId);
   const layout = plan ? storedLayoutFor(plan.id, q.companyId) : undefined;
-  if (!plan || !layout) return c.json({ error: "该报价没有关联的方案，无法生成图纸版报价单" }, 409);
+  if (!plan || !layout) return c.json({ error: "This quote has no linked layout; cannot build a drawing quote PDF" }, 409);
 
   const result = renderQuotePdf(q, plan, layout, account);
   return c.body(new Uint8Array(result.pdf), 200, {
@@ -1088,7 +1257,7 @@ app.get("/api/quotes/:id/pdf", requireAccount, (c) => {
 
 app.get("/api/quotes/:id/audit", requireAccount, (c) => {
   const q = ownedQuote(c, param(c, "id"));
-  if (!q) return c.json({ error: "报价不存在" }, 404);
+  if (!q) return c.json({ error: "Quote not found" }, 404);
   return c.json({ events: appCtx.repos.auditEvents.filter((e) => e.quoteId === q.id) });
 });
 
@@ -1096,7 +1265,7 @@ app.get("/api/quotes/:id/audit", requireAccount, (c) => {
 
 app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
   const conv = ownedConversation(c, param(c, "id"));
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
   const body = await jsonBody<{ fileName: string; mimeType: string; sizeBytes: number; image: string }>(c);
 
   const { plan, extraction } = await createFloorPlanWithOutcome(
@@ -1108,11 +1277,13 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
         sizeBytes: body.sizeBytes ?? 0,
       },
       at: now(),
+      language: resolveLanguage(conv.preferences?.shared),
     },
     body.image,
     appCtx.vision,
   );
   await appCtx.repos.floorPlans.upsert(plan);
+  const fpLang = resolveLanguage(conv.preferences?.shared);
   return c.json({
     floorPlan: plan,
     ready: isLayoutReady(plan),
@@ -1120,20 +1291,20 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     questions: pendingQuestions(plan),
     // 视觉抽取走没走、为什么没读出东西——四种情况看起来一样，要做的事完全不同
     extraction,
-    ...(extractionNote(extraction) ? { extractionNote: extractionNote(extraction) } : {}),
+    ...(extractionNote(extraction, fpLang) ? { extractionNote: extractionNote(extraction, fpLang) } : {}),
   }, 201);
 });
 
 app.get("/api/floorplans/:id", requireAccount, (c) => {
   const plan = ownedFloorPlan(c, param(c, "id"));
-  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  if (!plan) return c.json({ error: "Floor plan not found" }, 404);
   return c.json({ floorPlan: plan, ready: isLayoutReady(plan), questions: pendingQuestions(plan) });
 });
 
 /** 客户回答追问 / 手动补齐尺寸。 */
 app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   const plan = ownedFloorPlan(c, param(c, "id"));
-  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  if (!plan) return c.json({ error: "Floor plan not found" }, 404);
   const body = await jsonBody<{
     itemId: string; wallRunId: string; length: number; ceilingHeight: number;
     /**
@@ -1170,14 +1341,14 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
     if (body.addFeature) {
       const f = body.addFeature;
       const run = next.parsedGeometry.wallRuns.find((r) => r.id === f.wallRunId);
-      if (!run) return c.json({ error: `墙段 ${f.wallRunId} 不存在` }, 400);
+      if (!run) return c.json({ error: `Wall run ${f.wallRunId} not found` }, 400);
       if (typeof f.offset !== "number" || typeof f.width !== "number" || f.width <= 0) {
-        return c.json({ error: "特征需要 offset 与正的 width（英寸）" }, 400);
+        return c.json({ error: "Feature needs offset and a positive width (inches)" }, 400);
       }
       if (f.offset < 0 || f.offset + f.width > run.length) {
         return c.json({
-          error: `${f.kind} 落在 ${formatInches(f.offset)}–${formatInches(f.offset + f.width)}，` +
-            `超出了 ${run.label} 的 ${formatInches(run.length)}`,
+          error: `${f.kind} at ${formatInches(f.offset)}–${formatInches(f.offset + f.width)} ` +
+            `is outside ${run.label} (${formatInches(run.length)})`,
         }, 400);
       }
       next = addFeature(next, f.wallRunId, {
@@ -1186,7 +1357,7 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
     }
     if (body.appliances) {
       if (!Array.isArray(body.appliances)) {
-        return c.json({ error: "appliances 必须是数组" }, 400);
+        return c.json({ error: "appliances must be an array" }, 400);
       }
       next = {
         ...next,
@@ -1208,13 +1379,18 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
     // 有推定尺寸就如实说出来，并把还能问的问题一并给出——
     // 「我们假设了什么」不该只活在文案里
     ...(next.appliances?.length
-      ? {
-          appliances: next.appliances,
-          ...(provenanceNote(next.appliances) ? { provenanceNote: provenanceNote(next.appliances) } : {}),
-          applianceQuestions: buildApplianceQuestions({
-            known: next.appliances, kindsAnswered: true, maxPerTurn: 2,
-          }),
-        }
+      ? (() => {
+          const fpLang = resolveLanguage(
+            appCtx.repos.conversations.byId(next.conversationId)?.preferences?.shared);
+          const note = provenanceNote(next.appliances, fpLang);
+          return {
+            appliances: next.appliances,
+            ...(note ? { provenanceNote: note } : {}),
+            applianceQuestions: buildApplianceQuestions({
+              known: next.appliances, kindsAnswered: true, maxPerTurn: 2,
+            }),
+          };
+        })()
       : { applianceQuestions: buildApplianceQuestions({ known: [], kindsAnswered: false, maxPerTurn: 1 }) }),
   });
 });
@@ -1229,27 +1405,42 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
  */
 app.get("/api/conversations/:id/design", requireAccount, async (c) => {
   const conv = ownedConversation(c, param(c, "id"));
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
   const companyId = c.req.query("companyId") ?? "";
-  if (!companyId) return c.json({ error: "需要 companyId" }, 400);
+  if (!companyId) return c.json({ error: "companyId is required" }, 400);
 
   const session = await sessionFor(conv.id, companyId);
   const plan = planForConversation(conv.id);
-  const missing = missingFields(conv.designRequirements);
+  const readiness = designReadinessFor(conv.id, companyId);
+  const missing = intakeMissing(conv.id);
 
   const stored = plan
     ? appCtx.repos.storedLayouts.byId(layoutKey(plan.id, companyId))
     : undefined;
 
+  const basePrompt = stagePrompt(session, {
+    language: convLanguage(conv),
+    missingFields: readiness.openItems.map((i) => i.brief),
+    ...(stored ? { planAcceptable: stored.acceptable } : {}),
+  });
+  const prompt = session.stage === "readyToDraw"
+    ? { ...basePrompt, message: `${readiness.confirmationText}\n\n${basePrompt.message}` }
+    : basePrompt;
+
   return c.json({
     session,
-    prompt: stagePrompt(session, {
-      missingFields: missing,
-      ...(stored ? { planAcceptable: stored.acceptable } : {}),
-    }),
+    prompt,
     allowed: allowedArtifacts(session.stage),
     floorPlanReady: plan ? isLayoutReady(plan) : false,
     missingFields: missing,
+    designBrief: {
+      sections: readiness.sections,
+      readyToAskDesign: readiness.readyToAskDesign,
+      openItems: readiness.openItems.map((i) => ({
+        id: i.id, status: i.status, brief: i.brief, askHint: i.askHint,
+      })),
+      confirmationText: readiness.confirmationText,
+    },
   });
 });
 
@@ -1260,7 +1451,7 @@ app.get("/api/conversations/:id/design", requireAccount, async (c) => {
  */
 app.post("/api/conversations/:id/design/advance", requireAccount, async (c) => {
   const conv = ownedConversation(c, param(c, "id"));
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
   const body = await jsonBody<{
     companyId: string;
     action: "consent" | "defer" | "approvePlan" | "backToPlan" | "revise";
@@ -1269,7 +1460,7 @@ app.post("/api/conversations/:id/design/advance", requireAccount, async (c) => {
     changes: Partial<CustomerPreferences>;
   }>(c);
   const companyId = body.companyId ?? "";
-  if (!companyId) return c.json({ error: "需要 companyId" }, 400);
+  if (!companyId) return c.json({ error: "companyId is required" }, 400);
 
   let session = await sessionFor(conv.id, companyId);
   const at = now();
@@ -1287,12 +1478,14 @@ app.post("/api/conversations/:id/design/advance", requireAccount, async (c) => {
           ...(body.note ? { note: body.note } : {}),
           applied: applied.keys,
           ...(applied.keys.length === 0
-            ? { unapplied: "这一轮没有可落到排布上的具体改动，方案与上一版相同。" }
+            ? { unapplied: msg(convLanguage(conv),
+              "Nothing in this round could be applied to the layout — same as the previous version.",
+              "这一轮没有可落到排布上的具体改动，方案与上一版相同。") }
             : {}),
         });
         break;
       }
-      default: return c.json({ error: `未知动作 ${String(body.action)}` }, 400);
+      default: return c.json({ error: `Unknown action ${String(body.action)}` }, 400);
     }
   } catch (e) {
     if (e instanceof StageError) return c.json({ error: e.message, stage: session.stage }, 409);
@@ -1305,6 +1498,7 @@ app.post("/api/conversations/:id/design/advance", requireAccount, async (c) => {
   return c.json({
     session: saved,
     prompt: stagePrompt(saved, {
+      language: convLanguage(conv),
       missingFields: missingFields(conv.designRequirements),
       ...(stored ? { planAcceptable: stored.acceptable } : {}),
     }),
@@ -1324,31 +1518,38 @@ app.post("/api/conversations/:id/design/advance", requireAccount, async (c) => {
  */
 app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
   const plan = ownedFloorPlan(c, param(c, "id"));
-  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  if (!plan) return c.json({ error: "Floor plan not found" }, 404);
   if (!isLayoutReady(plan)) {
-    return c.json({ error: "户型信息还不完整", questions: pendingQuestions(plan) }, 409);
+    return c.json({ error: "Floor plan is still incomplete", questions: pendingQuestions(plan) }, 409);
   }
   const body = await jsonBody<{ companyId: string }>(c);
   const company = body.companyId ? appCtx.repos.companies.byId(body.companyId) : undefined;
-  if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
+  if (!company || !isCompanyActive(company)) return c.json({ error: "Company not found or unavailable" }, 404);
   const bundle = publishedBundle(appCtx, company.id);
-  if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+  if (!bundle) return c.json({ error: "Company has no published catalog" }, 409);
 
   const session = await sessionFor(plan.conversationId, company.id);
+  const convEarly = appCtx.repos.conversations.byId(plan.conversationId);
   if (!allowedArtifacts(session.stage).planView) {
     return c.json({
-      error: "还没到出图阶段——请先确认「需要我帮你生成设计图吗？」",
+      error: msg(resolveLanguage(convEarly?.preferences?.shared),
+        "Not ready to draw yet — please confirm “Shall I generate a design drawing?” first.",
+        "还没到出图阶段——请先确认「需要我帮你生成设计图吗？」"),
       stage: session.stage,
-      prompt: stagePrompt(session, { missingFields: [] }),
+      prompt: stagePrompt(session, {
+        language: resolveLanguage(convEarly?.preferences?.shared),
+        missingFields: [],
+      }),
     }, 409);
   }
 
-  const conv = appCtx.repos.conversations.byId(plan.conversationId);
+  const conv = convEarly;
   const prefs = conv ? prefsFor(conv, company.id) : {};
   const layout = generateLayout(plan.parsedGeometry, bundle.modules, {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
     drawerBias: drawerBiasFor(prefs),
+    language: resolveLanguage(conv?.preferences?.shared),
     // 客户报过的家电按实际尺寸留空；没报过就用兜底（标为推定值，FR-3.2）
     ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
   });
@@ -1358,21 +1559,32 @@ app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
     triggeredBy: session.planRevisions > 0 ? "customerRequest" : "auto",
     // 版本说明要写清「因为客户说了什么才改的」，而不是只留一个轮次编号——
     // 一年后回看这条记录，"第 3 轮调整" 什么也没说明（§3.6 的版本可追溯）
-    changeSummary: lastRevision
-      ? `第 ${session.planRevisions + 1} 版：${lastRevision.note ?? "客户要求调整"}` +
-        (lastRevision.applied.length
-          ? `（改动：${lastRevision.applied.join("、")}）`
-          : "（无可落到排布上的改动）")
-      : "首版全局排布",
+    changeSummary: (() => {
+      const lang = resolveLanguage(conv?.preferences?.shared);
+      if (!lastRevision) {
+        return msg(lang, "Initial overall plan layout", "首版全局排布");
+      }
+      const note = lastRevision.note ?? msg(lang, "customer requested changes", "客户要求调整");
+      const applied = lastRevision.applied.length
+        ? msg(lang, ` (changed: ${lastRevision.applied.join(", ")})`, `（改动：${lastRevision.applied.join("、")}）`)
+        : msg(lang, " (nothing applicable to the layout)", "（无可落到排布上的改动）");
+      return msg(lang,
+        `Revision ${session.planRevisions + 1}: ${note}${applied}`,
+        `第 ${session.planRevisions + 1} 版：${note}${applied}`);
+    })(),
   });
 
   // 交付前审核：把散在各处的检查合起来，回答「这一份现在能不能给客户」
-  const explanation = explanationFor(plan, layout, company.id, prefs);
+  const planLang = resolveLanguage(conv?.preferences?.shared);
+  const explanation = explanationFor(
+    plan, layout, company.id, prefs, planLang);
+  const planNotes = applianceNotes(plan, layout.acceptable, planLang);
   const audit = auditDeliverable({
     deliverable: "planView", stage: session.stage,
     layout, wallRuns: plan.parsedGeometry.wallRuns,
     ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
-    customerFacingText: customerText(explanation, applianceNotes(plan, layout.acceptable)),
+    customerFacingText: customerText(explanation, planNotes),
+    language: planLang,
   });
 
   return c.json({
@@ -1380,16 +1592,19 @@ app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
     stage: session.stage,
     planViews: renderPlanViews(plan.parsedGeometry, layout.placements),
     moduleCounts: layout.moduleCounts,
-    audit, auditText: renderAuditText(audit),
+    audit, auditText: renderAuditText(audit, planLang),
     ergonomics: layout.ergonomics,
     // 推定的家电尺寸会影响硬约束结论——**由推定值导致的否决必须说明它是推定的**，
     // 否则客户会以为自己的厨房真的排不下（FR-3.2）
-    ...applianceNotes(plan, layout.acceptable),
+    ...planNotes,
     aesthetics: layout.aesthetics,
     acceptable: layout.acceptable,
     warnings: layout.warnings,
     explanation,
-    prompt: stagePrompt(session, { planAcceptable: layout.acceptable }),
+    prompt: stagePrompt(session, {
+      language: resolveLanguage(conv?.preferences?.shared),
+      planAcceptable: layout.acceptable,
+    }),
     /** 这一版是应哪次修改而出的——客户能对上自己刚说的话。 */
     ...(lastRevision ? { revision: lastRevision } : {}),
   }, 201);
@@ -1399,56 +1614,70 @@ app.post("/api/floorplans/:id/plan-view", requireAccount, async (c) => {
 
 app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
   const plan = ownedFloorPlan(c, param(c, "id"));
-  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  if (!plan) return c.json({ error: "Floor plan not found" }, 404);
   if (!isLayoutReady(plan)) {
     return c.json({
-      error: "户型信息还不完整，请先补齐待确认项",
+      error: "Floor plan is still incomplete — resolve pending items first",
       questions: pendingQuestions(plan),
     }, 409);
   }
   const body = await jsonBody<{ companyId: string }>(c);
   const company = body.companyId ? appCtx.repos.companies.byId(body.companyId) : undefined;
-  if (!company || !isCompanyActive(company)) return c.json({ error: "公司不存在或暂不可用" }, 404);
+  if (!company || !isCompanyActive(company)) return c.json({ error: "Company not found or unavailable" }, 404);
   const bundle = publishedBundle(appCtx, company.id);
-  if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+  if (!bundle) return c.json({ error: "Company has no published catalog" }, 409);
 
   // 完整四视图要等客户在全局俯视图上点过头——一上来给四张图，
   // 客户不知道该看哪张、该对哪张提意见（design/stages.ts）
   const session = await sessionFor(plan.conversationId, company.id);
+  const convEarly = appCtx.repos.conversations.byId(plan.conversationId);
   if (!allowedArtifacts(session.stage).fourViews) {
     return c.json({
-      error: session.stage === "planReview"
-        ? "请先在全局俯视图上确认排布，再出完整四视图"
-        : "还没到出图阶段——请先确认「需要我帮你生成设计图吗？」",
+      error: (() => {
+        const lang = resolveLanguage(convEarly?.preferences?.shared);
+        return session.stage === "planReview"
+          ? msg(lang,
+              "Confirm the overall plan layout first, then we can produce the full four views",
+              "请先在全局俯视图上确认排布，再出完整四视图")
+          : msg(lang,
+              "Not ready to draw yet — please confirm “Shall I generate a design drawing?” first.",
+              "还没到出图阶段——请先确认「需要我帮你生成设计图吗？」");
+      })(),
       stage: session.stage,
-      prompt: stagePrompt(session, { missingFields: [] }),
+      prompt: stagePrompt(session, {
+        language: resolveLanguage(convEarly?.preferences?.shared),
+        missingFields: [],
+      }),
     }, 409);
   }
 
   // 储物偏好进的是**排布算法**，不是记下来给人看：选"尽量多做抽屉"会改变装箱
   // 候选的偏好项，进而改变实际排出来的柜型（preferences/questions.ts 的 storage 题）
-  const conv = appCtx.repos.conversations.byId(plan.conversationId);
+  const conv = convEarly;
   const prefs = conv ? prefsFor(conv, company.id) : {};
   const layout = generateLayout(plan.parsedGeometry, bundle.modules, {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
     drawerBias: drawerBiasFor(prefs),
+    language: resolveLanguage(conv?.preferences?.shared),
     // 客户报过的家电按实际尺寸留空；没报过就用兜底（标为推定值，FR-3.2）
     ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
   });
   const { designLayoutId, revisionNo } = await persistLayout({
     plan, companyId: company.id, layout,
     triggeredBy: "auto",
-    changeSummary: "按户型自动生成初版方案",
+    changeSummary: msg(resolveLanguage(conv?.preferences?.shared), "Auto-generated initial layout from floor plan", "按户型自动生成初版方案"),
   });
 
   // 交付前审核（FR-14）。四视图这一步已经有完整 BOM 与偏好落实结果，
   // 所以查得比俯视图那一步更全
-  const bom = bomFor(plan, layout, company.id);
+  const layoutLang = resolveLanguage(conv?.preferences?.shared);
+  const bom = bomFor(plan, layout, company.id, layoutLang);
   const selections = applyPreferencesToSelections(bomToSelections(bom), prefs, bundle);
-  const unapplied = unappliedPreferences(bomToSelections(bom), prefs, bundle);
-  const explanation = explanationFor(plan, layout, company.id, prefs);
-  const notes = applianceNotes(plan, layout.acceptable);
+  const unapplied = unappliedPreferences(bomToSelections(bom), prefs, bundle, layoutLang);
+  const explanation = explanationFor(
+    plan, layout, company.id, prefs, layoutLang);
+  const notes = applianceNotes(plan, layout.acceptable, layoutLang);
   const audit = auditDeliverable({
     deliverable: "fourViews", stage: session.stage,
     layout, wallRuns: plan.parsedGeometry.wallRuns,
@@ -1456,6 +1685,7 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
     unappliedPreferences: unapplied,
     customerFacingText: customerText(explanation, notes),
+    language: layoutLang,
   });
 
   return c.json({
@@ -1464,7 +1694,7 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
     revisionNo,
     warnings: layout.warnings,
     moduleCounts: layout.moduleCounts,
-    audit, auditText: renderAuditText(audit),
+    audit, auditText: renderAuditText(audit, layoutLang),
     // 人体工程硬约束与美观评分（FR-4）
     ergonomics: layout.ergonomics,
     ...notes,
@@ -1489,13 +1719,13 @@ app.post("/api/floorplans/:id/layout", requireAccount, async (c) => {
 /** 局部重算：只重排指定墙段，其余原样保留（场景 D 第 4 点）。 */
 app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
   const plan = ownedFloorPlan(c, param(c, "id"));
-  if (!plan) return c.json({ error: "户型图不存在" }, 404);
+  if (!plan) return c.json({ error: "Floor plan not found" }, 404);
   const body = await jsonBody<{ companyId: string; wallRunId: string }>(c);
   const companyId = body.companyId ?? "";
   const current = storedLayoutFor(plan.id, companyId);
-  if (!current) return c.json({ error: "还没有生成过方案" }, 404);
+  if (!current) return c.json({ error: "No layout has been generated yet" }, 404);
   const bundle = companyId ? publishedBundle(appCtx, companyId) : undefined;
-  if (!bundle) return c.json({ error: "该公司尚无已发布规格" }, 409);
+  if (!bundle) return c.json({ error: "Company has no published catalog" }, 409);
 
   const conv = appCtx.repos.conversations.byId(plan.conversationId);
   const prefs = conv ? prefsFor(conv, companyId) : {};
@@ -1503,13 +1733,16 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
     ...(plan.parsedGeometry.ceilingHeight !== undefined
       ? { ceilingHeight: plan.parsedGeometry.ceilingHeight } : {}),
     drawerBias: drawerBiasFor(prefs),
+    language: resolveLanguage(conv?.preferences?.shared),
     // 客户报过的家电按实际尺寸留空；没报过就用兜底（标为推定值，FR-3.2）
     ...(plan.appliances?.length ? { appliances: plan.appliances } : {}),
   });
   const { designLayoutId, revisionNo } = await persistLayout({
     plan, companyId, layout: next,
     triggeredBy: "customerRequest",
-    changeSummary: `客户要求重排 ${body.wallRunId ?? ""} 段`,
+    changeSummary: msg(resolveLanguage(conv?.preferences?.shared),
+      `Customer requested re-layout of run ${body.wallRunId ?? ""}`,
+      `客户要求重排 ${body.wallRunId ?? ""} 段`),
   });
   return c.json({
     layoutKey: layoutKey(plan.id, companyId),
@@ -1521,9 +1754,10 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
     aesthetics: next.aesthetics,
     acceptable: next.acceptable,
     selections: applyPreferencesToSelections(toSelections(next), prefs, bundle),
-    unappliedPreferences: unappliedPreferences(toSelections(next), prefs, bundle),
+    unappliedPreferences: unappliedPreferences(toSelections(next), prefs, bundle, resolveLanguage(conv?.preferences?.shared)),
     views: viewsFor(plan, next, companyId),
-    explanation: explanationFor(plan, next, companyId, prefs),
+    explanation: explanationFor(
+      plan, next, companyId, prefs, resolveLanguage(conv?.preferences?.shared)),
     appliedPreferences: prefs,
   });
 });
@@ -1532,14 +1766,20 @@ app.post("/api/floorplans/:id/layout/regenerate", requireAccount, async (c) => {
 
 app.get("/api/conversations/:id/comparison", requireAccount, (c) => {
   const conv = ownedConversation(c, param(c, "id"));
-  if (!conv) return c.json({ error: "会话不存在" }, 404);
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
+  const cmpLang = resolveLanguage(conv.preferences?.shared);
   const cmp = buildComparison(
     conv.id,
     appCtx.repos.quotes.filter((q) => q.conversationId === conv.id),
     (id) => appCtx.repos.companies.byId(id)?.name,
     now(),
+    cmpLang,
   );
-  return c.json({ comparison: cmp, text: renderComparisonText(cmp), html: renderComparisonHtml(cmp) });
+  return c.json({
+    comparison: cmp,
+    text: renderComparisonText(cmp, cmpLang),
+    html: renderComparisonHtml(cmp, cmpLang),
+  });
 });
 
 // ── 视图渲染（脸型文法）───────────────────────────────────────────────────
@@ -1553,11 +1793,11 @@ app.get("/api/render/face", (c) => {
 
   if (code) {
     const match = matchFaceTemplate(code);
-    if (!match) return c.json({ error: `型号 ${code} 未能匹配脸型，需人工确认` }, 422);
+    if (!match) return c.json({ error: `SKU ${code} did not match a face template — needs manual mapping` }, 422);
     templateId = match.templateId;
     params = match.params;
   }
-  if (!templateId) return c.json({ error: "需提供 code 或 template" }, 400);
+  if (!templateId) return c.json({ error: "code or template is required" }, 400);
 
   try {
     const layout = layoutFace(buildFace(templateId, params), width, height, {
@@ -1594,7 +1834,7 @@ app.post("/api/subscribe", async (c) => {
     return c.json({ ok: true, unsubscribeToken: sub.unsubscribeToken }, 201);
   } catch (e) {
     if (e instanceof SubscriptionError) return c.json({ error: e.message, code: e.code }, 400);
-    return c.json({ error: "该邮箱已在邮件列表中" }, 409);
+    return c.json({ error: "Email is already on the mailing list" }, 409);
   }
 });
 
@@ -1603,9 +1843,9 @@ app.get("/unsubscribe", async (c) => {
   try {
     const updated = unsubscribeByToken(appCtx.repos.subscriptions.all(), c.req.query("token") ?? "", now());
     await appCtx.repos.subscriptions.update(updated.id, updated);
-    return c.html("<p>已退订。你不会再收到我们的邮件。</p>");
+    return c.html("<p>You have been unsubscribed. You will not receive further emails from us.</p>");
   } catch {
-    return c.html("<p>退订链接无效或已失效。</p>", 400);
+    return c.html("<p>This unsubscribe link is invalid or has expired.</p>", 400);
   }
 });
 
@@ -1622,8 +1862,8 @@ app.get("/unsubscribe", async (c) => {
 app.get("/api/company/:companyId/spec/templates", requireCompany, (c) =>
   c.json({
     templates: blankTemplates(),
-    note: "每张表第一行是表头、第二行起是示例，照着替换即可。" +
-      "boxMaterials 是可选表——只做一种箱体板材的商家可以整张不给。",
+    note: "Row 1 of each sheet is the header; row 2+ are examples — replace with your catalog. " +
+      "boxMaterials is optional — sellers with a single box material can omit that sheet.",
   }));
 
 /** 开一段录入会话，同时产生一个 draft 版本。已有未发布的草稿就接着那一段。 */
@@ -1645,7 +1885,7 @@ app.post("/api/company/:companyId/spec/sessions", requireCompany, async (c) => {
 
 app.get("/api/company/:companyId/spec/sessions/:sessionId", requireCompany, (c) => {
   const session = ownedSession(c);
-  return session ? c.json({ session, ...sessionView(session) }) : c.json({ error: "录入会话不存在" }, 404);
+  return session ? c.json({ session, ...sessionView(session) }) : c.json({ error: "Onboarding session not found" }, 404);
 });
 
 /**
@@ -1657,10 +1897,10 @@ app.get("/api/company/:companyId/spec/sessions/:sessionId", requireCompany, (c) 
  */
 app.post("/api/company/:companyId/spec/sessions/:sessionId/import", requireCompany, async (c) => {
   const session = ownedSession(c);
-  if (!session) return c.json({ error: "录入会话不存在" }, 404);
+  if (!session) return c.json({ error: "Onboarding session not found" }, 404);
   const body = await jsonBody<{ sources: ImportSources; faceOverrides: CompanyOverrides }>(c);
   if (!body.sources?.modules) {
-    return c.json({ error: "至少要给 modules 表（型号、类型、尺寸档位）" }, 400);
+    return c.json({ error: "modules sheet is required (SKUs, types, size steps)" }, 400);
   }
 
   // 上一版已经确认过的型号带进来：商家改一次价，不该被要求把"NS-B12 是单门"
@@ -1705,7 +1945,7 @@ app.post("/api/company/:companyId/spec/sessions/:sessionId/import", requireCompa
  */
 app.post("/api/company/:companyId/spec/sessions/:sessionId/answer", requireCompany, async (c) => {
   const session = ownedSession(c);
-  if (!session) return c.json({ error: "录入会话不存在" }, 404);
+  if (!session) return c.json({ error: "Onboarding session not found" }, 404);
   const body = await jsonBody<{
     questionId: string; unresolvedIndex: number; answer: QuestionAnswer;
   }>(c);
@@ -1715,7 +1955,7 @@ app.post("/api/company/:companyId/spec/sessions/:sessionId/answer", requireCompa
     // 答案要**带着值**进来，落到规格上。只把警报关掉而不补数据，等于没答——
     // 那个柜子会带着一张空脸一路走到正视图上
     const bundle = appCtx.repos.specBundles.byId(session.specVersionId);
-    if (!bundle) return c.json({ error: "这段会话还没有导入过任何规格" }, 409);
+    if (!bundle) return c.json({ error: "This session has not imported any catalog yet" }, 409);
     try {
       const outcome = answerQuestion(session, bundle, body.questionId, body.answer ?? {}, now());
       next = outcome.session;
@@ -1728,8 +1968,8 @@ app.post("/api/company/:companyId/spec/sessions/:sessionId/answer", requireCompa
     }
   } else {
     return c.json({
-      error: "要指明回答的是哪一条追问（questionId），并给出答案（answer）。" +
-        "表里写错的那几条不在这里改——在表里改好后重新导入，队列会自动重算。",
+      error: "Specify which follow-up you are answering (questionId) and the answer. " +
+        "Rows that were wrong in the sheet are not fixed here — correct the sheet and re-import; the queue recalculates.",
     }, 400);
   }
   await appCtx.repos.onboardingSessions.update(session.id, next);
@@ -1745,10 +1985,10 @@ app.post("/api/company/:companyId/spec/sessions/:sessionId/answer", requireCompa
  */
 app.post("/api/company/:companyId/spec/sessions/:sessionId/publish", requireCompany, async (c) => {
   const session = ownedSession(c);
-  if (!session) return c.json({ error: "录入会话不存在" }, 404);
+  if (!session) return c.json({ error: "Onboarding session not found" }, 404);
   const companyId = param(c, "companyId");
   const bundle = appCtx.repos.specBundles.byId(session.specVersionId);
-  if (!bundle) return c.json({ error: "这段会话还没有导入过任何规格" }, 409);
+  if (!bundle) return c.json({ error: "This session has not imported any catalog yet" }, 409);
 
   const body = await jsonBody<{ publishedBy: string }>(c);
   const versions = appCtx.repos.specVersions.all().filter((v) => v.companyId === companyId);
@@ -1792,14 +2032,17 @@ app.post("/api/company/:companyId/spec/sessions/:sessionId/publish", requireComp
   const readiness = bomReadiness(bundle.modules, outcome.result.published.toeKickSystem);
   const blockers: string[] = [];
   if (!active) {
-    blockers.push("个性化服务订阅还没生效——客户 @ 你仍然能问到产品，" +
-      "但拿到的是通用预估（EstimateDraft），不是绑定你家的正式报价。");
+    blockers.push(
+      "Personalization subscription is not active — customers can still @ you for product Q&A, " +
+      "but they get a generic EstimateDraft, not a formal quote bound to your catalog.",
+    );
   }
   if (!readiness.ready) {
     blockers.push(
-      `规格里缺这几样，每一份报价都会被交付前检查拦下：${readiness.missing.join("、")}。` +
-      "这些不是柜体，是装完一套厨房必须有的收口件——缺一条踢脚板，客户照单下的货就装不完整。" +
-      "补进价目表后开一版新草稿即可。");
+      `Catalog is missing items every quote will fail delivery audit on: ${readiness.missing.join(", ")}. ` +
+      "These are not cabinets — they are finishing parts a complete kitchen needs (e.g. toe kick). " +
+      "Add them to the price list and open a new draft.",
+    );
   }
 
   return c.json({
@@ -1841,7 +2084,7 @@ app.get("/api/company/:companyId/billing", requireCompany, (c) => {
 app.post("/api/company/:companyId/billing/:eventId/dispute", requireCompany, async (c) => {
   const scope = new TenantScope(param(c, "companyId"));
   const event = scope.find(appCtx.repos.billingEvents.all(), (e) => e.id === param(c, "eventId"));
-  if (!event) return c.json({ error: "计费事件不存在" }, 404);
+  if (!event) return c.json({ error: "Billing event not found" }, 404);
   const body = await jsonBody<{ reason: string; evidence: string; openedBy: string }>(c);
   try {
     const updated = openDispute(event, {
@@ -1872,10 +2115,10 @@ app.post("/api/admin/companies", requireAdmin, async (c) => {
     subscription: "none" | "trial" | "active"; leadFeeEnabled: boolean;
   }>(c);
   if (!body.name || !body.quoteEmail) {
-    return c.json({ error: "至少要有公司名与报价邮箱" }, 400);
+    return c.json({ error: "Company name and quote email are required" }, 400);
   }
   const id = body.id || `co_${randomUUID().slice(0, 8)}`;
-  if (appCtx.repos.companies.byId(id)) return c.json({ error: `公司 ${id} 已存在` }, 409);
+  if (appCtx.repos.companies.byId(id)) return c.json({ error: `Company ${id} already exists` }, 409);
 
   const accessToken = generateCompanyToken();
   const company: CabinetCompany = {
@@ -1896,17 +2139,17 @@ app.post("/api/admin/companies", requireAdmin, async (c) => {
     company: { ...company, accessToken: undefined },
     // 只此一次
     accessToken,
-    note: "这个令牌只在这一次回包里出现，请立刻交给商家并妥善保存。",
+    note: "This token appears only in this response — give it to the seller and store it securely.",
   }, 201);
 });
 
 /** 改订阅状态。发布 + 订阅同时满足，公司才真的 active（场景 A 第 8 点）。 */
 app.post("/api/admin/companies/:id/subscription", requireAdmin, async (c) => {
   const company = appCtx.repos.companies.byId(param(c, "id"));
-  if (!company) return c.json({ error: "公司不存在" }, 404);
+  if (!company) return c.json({ error: "Company not found" }, 404);
   const body = await jsonBody<{ subscription: "none" | "trial" | "active" }>(c);
   if (!["none", "trial", "active"].includes(body.subscription ?? "")) {
-    return c.json({ error: "订阅状态只能是 none / trial / active" }, 400);
+    return c.json({ error: "Subscription status must be none / trial / active" }, 400);
   }
   const next: CabinetCompany = {
     ...company,
@@ -1922,7 +2165,7 @@ app.post("/api/admin/companies/:id/subscription", requireAdmin, async (c) => {
 
 app.post("/api/admin/billing/:eventId/resolve", requireAdmin, async (c) => {
   const event = appCtx.repos.billingEvents.byId(param(c, "eventId"));
-  if (!event) return c.json({ error: "计费事件不存在" }, 404);
+  if (!event) return c.json({ error: "Billing event not found" }, 404);
   const body = await jsonBody<{ resolution: string; resolvedBy: string }>(c);
   try {
     const updated = resolveDispute(event, {
@@ -2041,9 +2284,11 @@ app.get("/api/me/profile", requireAccount, (c) => {
     /** 定价实际按哪种账号走——与 accountType 可能不同，如实告知。 */
     effectiveAccountType: effective,
     interaction: interactionProfile(effective),
-    // 界面开场白里那一段"这里卖的是 RTA"。措辞从服务端来，与助手在对话里说的、
-    // 与报价单末尾写的是**同一份**——三处各写一版，迟早有一处说得比另两处松。
-    rtaIntro: RTA_INTRO,
+    // 界面开场白里那一段"这里卖的是 RTA"。默认英文；会话里若客户切了中文，
+    // 前端用会话 language 再取一次（见 GET conversation）。
+    rtaIntro: rtaIntro(DEFAULT_LANGUAGE),
+    rtaIntroByLang: { en: rtaIntro("en"), zh: rtaIntro("zh") },
+    defaultLanguage: DEFAULT_LANGUAGE,
     tradePricing: gate,
     verification: verification
       ? { status: verification.status, submittedAt: verification.submittedAt,
@@ -2056,7 +2301,7 @@ app.get("/api/me/profile", requireAccount, (c) => {
 app.post("/api/me/verification", requireAccount, async (c) => {
   const account = c.get("account");
   if (account.accountType !== "trade") {
-    return c.json({ error: "只有贸易账号需要提交资质" }, 400);
+    return c.json({ error: "Only trade accounts submit verification" }, 400);
   }
   const body = await jsonBody<{ businessNumber: string; legalName: string }>(c);
   try {
@@ -2093,7 +2338,7 @@ app.get("/api/admin/verifications", requireAdmin, (c) => {
 
 app.post("/api/admin/verifications/:accountId/review", requireAdmin, async (c) => {
   const current = appCtx.repos.tradeVerifications.byId(param(c, "accountId"));
-  if (!current) return c.json({ error: "资质申请不存在" }, 404);
+  if (!current) return c.json({ error: "Verification request not found" }, 404);
   const body = await jsonBody<{ approve: boolean; reviewedBy: string; reason: string }>(c);
   try {
     const next = reviewVerification(current, {
@@ -2212,6 +2457,7 @@ function explanationFor(
   layout: GeneratedLayout,
   companyId: string,
   prefs: CustomerPreferences,
+  language: UiLanguage = DEFAULT_LANGUAGE,
 ) {
   const { construction, overlay } = renderStyleFor(appCtx, companyId);
   const guide = explainViews({
@@ -2219,6 +2465,7 @@ function explanationFor(
     hasWallCabinets: layout.placements.some((p) => p.layer === "wall"),
     hasFillers: layout.placements.some((p) => p.kind === "filler"),
     hasAppliances: layout.placements.some((p) => p.kind === "appliance"),
+    language,
   });
 
   const perRun = plan.parsedGeometry.wallRuns.map((run) => {
@@ -2230,6 +2477,7 @@ function explanationFor(
       ergonomics: layout.ergonomics.filter((v) => !v.wallRunId || v.wallRunId === run.id),
       warnings: layout.warnings.filter((w) => !w.wallRunId || w.wallRunId === run.id),
       acceptable: layout.acceptable,
+      language,
       ...(prefs.storage ? { storagePreference: prefs.storage } : {}),
     });
     return {
@@ -2243,14 +2491,30 @@ function explanationFor(
 
   return {
     viewGuide: guide,
-    viewGuideText: renderViewGuideText(guide),
-    viewGuideHtml: renderViewGuideHtml(guide),
+    viewGuideText: renderViewGuideText(guide, language),
+    viewGuideHtml: renderViewGuideHtml(guide, language),
     perRun,
   };
 }
 
+function convLanguage(conv: Conversation): UiLanguage {
+  return resolveLanguage(conv.preferences?.shared);
+}
+
 function toHistory(m: ChatMessage): { role: "user" | "assistant"; content: string } {
   return { role: m.role, content: m.content };
+}
+
+/** 这句话是不是「只在切换语言」，没有夹带别的需求。 */
+function isLanguageSwitchOnly(text: string): boolean {
+  if (!detectLanguageSwitch(text)) return false;
+  const stripped = text
+    .replace(/用中文|说中文|讲中文|改成中文|切换到中文|请用中文|能不能用中文|可以中文|中文回答|中文交流/g, "")
+    .replace(/用英文|说英文|讲英文|改成英文|切换到英文|请用英文|英文回答|英文交流/g, "")
+    .replace(/\b(in\s+chinese|speak\s+chinese|switch\s+to\s+chinese|reply\s+in\s+chinese|in\s+english|speak\s+english|switch\s+to\s+english|talk\s+in\s+english|reply\s+in\s+english|can you (?:talk|speak|reply) in english)\b/gi, "")
+    .replace(/[,.!?，。！？\s]+/g, "")
+    .trim();
+  return stripped.length === 0;
 }
 
 /**
@@ -2276,7 +2540,10 @@ function askedSameFieldsBefore(conv: Conversation, nextRequirements: string): nu
   // 这句话本身会把连续计数打断，于是下一轮又从"第一次问"开始，客户会看到
   // 「问 → 换选择题 → 软化 → 又问」的循环。问过两次就是问过两次。
   return conv.messages.filter(
-    (m) => m.role === "assistant" && !m.companyId && stillMissing.some((f) => m.content.includes(f)),
+    (m) => m.role === "assistant" && !m.companyId && stillMissing.some((f) =>
+      m.content.includes(f)
+      || m.content.includes(fieldLabel(f, "en"))
+      || m.content.includes(fieldLabel(f, "zh"))),
   ).length;
 }
 
@@ -2337,17 +2604,17 @@ function renderQuoteText(q: Quote): string {
     `  ${l.moduleCode.padEnd(10)} ${l.width}"x${l.height}"x${l.depth}"  x${String(l.qty).padStart(2)}  ` +
     `${format(l.unitNetPrice).padStart(10)}  ${format(l.lineSubtotal).padStart(11)}`);
   return [
-    "  型号        规格                数量        单价          小计",
+    "  SKU         Size                Qty         Net           Line",
     "  " + "-".repeat(62),
     ...lines,
     "  " + "-".repeat(62),
-    `  小计: ${format(q.subtotal)}`,
+    `  Subtotal: ${format(q.subtotal)}`,
     ...q.discounts.map((d) => `  ${d.description}: -${format(d.amount)}`),
-    `  运费: ${format(q.shipping.amount)}`,
+    `  Shipping: ${format(q.shipping.amount)}`,
     ...q.taxes.map((t) => `  ${t.name} ${t.ratePercent}%: ${format(t.amount)}`),
-    `  总计（${q.currency}）: ${format(q.total)}`,
+    `  Total (${q.currency}): ${format(q.total)}`,
     "",
-    `  报价有效期至 ${q.validUntil.slice(0, 10)}`,
+    `  Valid until ${q.validUntil.slice(0, 10)}`,
   ].join("\n");
 }
 
@@ -2382,6 +2649,7 @@ export async function start(port = Number(process.env.PORT || 8790)) {
     console.log(`[rta-hub] http://localhost:${info.port}`);
     console.log(`[rta-hub] 试点公司：${company?.name ?? "（无）"}（${bundle?.modules.length ?? 0} 个型号）`);
     console.log(`[rta-hub] LLM：${appCtx.llm ? "已接入" : "未配置 —— 对话降级为确定性问答"}`);
+    console.log(`[rta-hub] Vision(户型图)：${appCtx.vision ? "已接入" : "未配置 —— 上传后手动录入尺寸"}`);
     console.log(`[rta-hub] SMTP：${smtp ? "已配置" : "未配置 —— 发送为 dry-run"}`);
     console.log(`[rta-hub] ${startupNotice(gate)}`);
     for (const line of tierReport(resolveModelTiers())) console.log(`[rta-hub] ${line}`);

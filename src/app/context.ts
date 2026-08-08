@@ -13,6 +13,7 @@ import { SEED_TAX_RULES } from "../pricing/tax.js";
 import { createLlmClient } from "../agents/llm-client.js";
 import type { CompletionClient } from "../agents/types.js";
 import type { VisionExtractor } from "../floorplan/parse.js";
+import { createVisionExtractorFromEnv } from "../floorplan/ollama-vision.js";
 import type { CabinetCompany, GenericCatalog, TaxRule } from "../domain/types.js";
 import { deriveCompanyStatus } from "../spec/version.js";
 import { genericCatalogVerified } from "./launch-gates.js";
@@ -21,6 +22,7 @@ import type { PricingContext } from "../pricing/engine.js";
 import * as seed from "./seed.js";
 import * as second from "./seed-second.js";
 import * as third from "./seed-third.js";
+import * as fourth from "./seed-fourth.js";
 
 export interface AppContext {
   repos: Repositories;
@@ -64,7 +66,8 @@ export async function createAppContext(opts: CreateContextOptions = {}): Promise
     taxRules: SEED_TAX_RULES,
     catalog: seed.genericCatalog,
     llm: opts.llm !== undefined ? opts.llm : createLlmClient(),
-    vision: opts.vision,
+    // 显式传入（含 undefined）尊重调用方；否则按 OPENAI_BASE_URL_VISION 装配
+    vision: "vision" in opts ? opts.vision : createVisionExtractorFromEnv(),
     mailTransport: opts.mailTransport,
     // 来源尚未定案（开放问题 5 / 闸门 A4），预估文案必须如实标注为占位数据
     catalogSourceVerified: genericCatalogVerified(),
@@ -114,6 +117,22 @@ export async function seedInitialData(ctx: AppContext): Promise<void> {
   await repos.companies.upsert({ ...third.thirdCompany, accessToken: generateCompanyToken() });
   await repos.specVersions.upsert(third.thirdSpecVersion);
   await repos.specBundles.upsert(third.buildThirdCompanyBundle().bundle);
+
+  // 第四家：Oppein Canada（欧派海外渠道）
+  const oppeinBundle: SpecBundle = {
+    ...emptyBundle(fourth.OPPEIN_SPEC_VERSION_ID, fourth.OPPEIN_COMPANY_ID),
+    priceGroups: fourth.oppeinPriceGroups,
+    doorStyles: fourth.oppeinDoorStyles,
+    modules: fourth.oppeinModuleSpecs,
+    priceMatrix: fourth.oppeinPriceMatrix,
+    hardwareOptions: [],
+    accessoryOptions: [],
+    discountRules: [],
+    shippingRule: undefined,
+  };
+  await repos.companies.upsert({ ...fourth.oppeinCompany, accessToken: generateCompanyToken() });
+  await repos.specVersions.upsert(fourth.oppeinSpecVersion);
+  await repos.specBundles.upsert(oppeinBundle);
 }
 
 /** 公司是否 active —— 由发布状态与订阅派生，不读独立字段（§6.2）。 */

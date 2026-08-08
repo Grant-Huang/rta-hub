@@ -27,6 +27,7 @@
  */
 import type { ModuleSpec, ModuleType, ToeKickSystem } from "../domain/types.js";
 import type { WallRun } from "../floorplan/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 import type { GeneratedLayout, Placement } from "./generate.js";
 
 /** 宽度超过这个值的地柜要 6 条腿而不是 4 条——中间会塌。 */
@@ -65,6 +66,8 @@ export interface BomInput {
   wallRuns: readonly WallRun[];
   modules: readonly ModuleSpec[];
   toeKickSystem: ToeKickSystem;
+  /** 客户语言偏好；物料名称 / reason 跟它走，默认英文。 */
+  language?: UiLanguage;
 }
 
 export interface BomResult {
@@ -82,6 +85,7 @@ export interface BomResult {
 export function buildBom(input: BomInput): BomResult {
   const lines: BomLine[] = [];
   const missing: string[] = [];
+  const lang = input.language ?? DEFAULT_LANGUAGE;
 
   // ── 柜体：沿用排布器的统计 ──
   for (const m of input.layout.moduleCounts) {
@@ -99,7 +103,9 @@ export function buildBom(input: BomInput): BomResult {
     if (group.length === 0) continue;
     const spec = pickFiller(input.modules, layer);
     if (!spec) {
-      missing.push(`${layer === "wall" ? "吊柜" : "地柜"}层填缝条`);
+      missing.push(msg(lang,
+        `${layer === "wall" ? "Wall" : "Base"}-cabinet filler strip`,
+        `${layer === "wall" ? "吊柜" : "地柜"}层填缝条`));
       continue;
     }
     // 填缝条按需裁切，所以按**条数**下单，宽度取型号的标称宽度
@@ -109,7 +115,9 @@ export function buildBom(input: BomInput): BomResult {
       height: spec.heightOptions[0] ?? 34.5,
       depth: spec.depthOptions[0] ?? 0.75,
       category: "filler",
-      reason: `${group.length} 处需要填缝（墙长与柜体宽度之和的差额，现场裁切）`,
+      reason: msg(lang,
+        `${group.length} filler(s) needed (gap between wall length and cabinet widths; field-cut)`,
+        `${group.length} 处需要填缝（墙长与柜体宽度之和的差额，现场裁切）`),
     });
   }
 
@@ -129,10 +137,12 @@ export function buildBom(input: BomInput): BomResult {
         height: legSpec.heightOptions[0] ?? 4.5,
         depth: legSpec.depthOptions[0] ?? 2,
         category: "leg",
-        reason: `${baseCabinets.length} 个地柜，宽于 ${SIX_LEG_WIDTH}" 的用 6 条腿、其余 4 条`,
+        reason: msg(lang,
+          `${baseCabinets.length} base cabinet(s): 6 legs if wider than ${SIX_LEG_WIDTH}", otherwise 4`,
+          `${baseCabinets.length} 个地柜，宽于 ${SIX_LEG_WIDTH}" 的用 6 条腿、其余 4 条`),
       });
     } else if (legs > 0) {
-      missing.push("塑料可调地脚");
+      missing.push(msg(lang, "Adjustable plastic legs", "塑料可调地脚"));
     }
   }
 
@@ -147,11 +157,17 @@ export function buildBom(input: BomInput): BomResult {
         depth: spec.depthOptions[0] ?? 0.25,
         category: "toeKick",
         reason: input.toeKickSystem === "plasticLegs"
-          ? `踢脚扣板，夹在地脚上；共 ${Math.round(runLength)}" 墙长，每根 ${TOE_KICK_STOCK}"`
-          : `整长踢脚板；共 ${Math.round(runLength)}" 墙长，每根 ${TOE_KICK_STOCK}"`,
+          ? msg(lang,
+            `Toe-kick skin clipped onto legs; ${Math.round(runLength)}" of wall, ${TOE_KICK_STOCK}" per stick`,
+            `踢脚扣板，夹在地脚上；共 ${Math.round(runLength)}" 墙长，每根 ${TOE_KICK_STOCK}"`)
+          : msg(lang,
+            `Full-length toe-kick board; ${Math.round(runLength)}" of wall, ${TOE_KICK_STOCK}" per stick`,
+            `整长踢脚板；共 ${Math.round(runLength)}" 墙长，每根 ${TOE_KICK_STOCK}"`),
       });
     } else {
-      missing.push(input.toeKickSystem === "plasticLegs" ? "踢脚扣板" : "踢脚板");
+      missing.push(input.toeKickSystem === "plasticLegs"
+        ? msg(lang, "Toe-kick skin", "踢脚扣板")
+        : msg(lang, "Toe-kick board", "踢脚板"));
     }
   }
 
@@ -161,14 +177,21 @@ export function buildBom(input: BomInput): BomResult {
     if (count === 0) continue;
     const target = layer === "wall" ? WALL_PANEL_HEIGHT : BASE_PANEL_HEIGHT;
     const spec = pickPanel(input.modules, target);
-    if (!spec) { missing.push(`${layer === "wall" ? "吊柜" : "地柜"}收口板`); continue; }
+    if (!spec) {
+      missing.push(msg(lang,
+        `${layer === "wall" ? "Wall" : "Base"}-cabinet finished end panel`,
+        `${layer === "wall" ? "吊柜" : "地柜"}收口板`));
+      continue;
+    }
     lines.push({
       moduleId: spec.id, moduleCode: spec.code, qty: count,
       width: spec.widthOptions[0] ?? 24,
       height: heightAtLeast(spec, target) ?? spec.heightOptions[0] ?? target,
       depth: spec.depthOptions[0] ?? 0.25,
       category: "panel",
-      reason: `${count} 个外露侧面需要与门板同色的收口板`,
+      reason: msg(lang,
+        `${count} exposed end(s) need a door-matched finished panel`,
+        `${count} 个外露侧面需要与门板同色的收口板`),
     });
   }
 
@@ -184,11 +207,16 @@ export function buildBom(input: BomInput): BomResult {
         height: heightAtLeast(spec, FRIDGE_PANEL_HEIGHT) ?? spec.heightOptions[0] ?? FRIDGE_PANEL_HEIGHT,
         depth: spec.depthOptions[0] ?? 0.25,
         category: "panel",
-        reason: `冰箱空当有 ${fridgeSides} 侧不靠墙，要贴通高收口板` +
-          `（冰箱比两边的柜子高，只贴地柜那一截会露出上面半截刨花板边）`,
+        reason: msg(lang,
+          `Fridge opening has ${fridgeSides} side(s) not against a wall — needs full-height panel` +
+            ` (fridge is taller than flanking cabinets; a base-height panel leaves particleboard above)`,
+          `冰箱空当有 ${fridgeSides} 侧不靠墙，要贴通高收口板` +
+            `（冰箱比两边的柜子高，只贴地柜那一截会露出上面半截刨花板边）`),
       });
     } else {
-      missing.push(`冰箱侧通高收口板（需要高度 ≥${FRIDGE_PANEL_HEIGHT}"）`);
+      missing.push(msg(lang,
+        `Full-height fridge-side panel (height ≥${FRIDGE_PANEL_HEIGHT}")`,
+        `冰箱侧通高收口板（需要高度 ≥${FRIDGE_PANEL_HEIGHT}"）`));
     }
   }
 
@@ -266,23 +294,39 @@ function countExposedEnds(
 export function bomReadiness(
   modules: readonly ModuleSpec[],
   toeKickSystem: ToeKickSystem = "plywoodPanel",
+  language: UiLanguage = DEFAULT_LANGUAGE,
 ): { ready: boolean; missing: string[] } {
+  const lang = language ?? DEFAULT_LANGUAGE;
   const missing: string[] = [];
-  if (!pickFiller(modules, "base")) missing.push("地柜层填缝条");
-  if (!pickFiller(modules, "wall")) missing.push("吊柜层填缝条");
-  if (toeKickSystem === "plasticLegs") {
-    if (!modules.some((m) => m.type === "leg")) missing.push("塑料可调地脚");
-    if (!pickToeKick(modules, "plasticLegs")) missing.push("踢脚扣板");
-  } else if (!pickToeKick(modules, "plywoodPanel")) {
-    missing.push("踢脚板");
+  if (!pickFiller(modules, "base")) {
+    missing.push(msg(lang, "Base-cabinet filler strip", "地柜层填缝条"));
   }
-  if (!pickPanel(modules, BASE_PANEL_HEIGHT)) missing.push("地柜收口板");
-  if (!pickPanel(modules, WALL_PANEL_HEIGHT)) missing.push("吊柜收口板");
+  if (!pickFiller(modules, "wall")) {
+    missing.push(msg(lang, "Wall-cabinet filler strip", "吊柜层填缝条"));
+  }
+  if (toeKickSystem === "plasticLegs") {
+    if (!modules.some((m) => m.type === "leg")) {
+      missing.push(msg(lang, "Adjustable plastic legs", "塑料可调地脚"));
+    }
+    if (!pickToeKick(modules, "plasticLegs")) {
+      missing.push(msg(lang, "Toe-kick skin", "踢脚扣板"));
+    }
+  } else if (!pickToeKick(modules, "plywoodPanel")) {
+    missing.push(msg(lang, "Toe-kick board", "踢脚板"));
+  }
+  if (!pickPanel(modules, BASE_PANEL_HEIGHT)) {
+    missing.push(msg(lang, "Base-cabinet finished end panel", "地柜收口板"));
+  }
+  if (!pickPanel(modules, WALL_PANEL_HEIGHT)) {
+    missing.push(msg(lang, "Wall-cabinet finished end panel", "吊柜收口板"));
+  }
   // 冰箱比两边的柜子高，只贴地柜那一截会露出上面半截刨花板边。
   // 「有冰箱且它至少一侧不靠墙」是绝大多数厨房的样子，所以这一条按必需算——
   // 漏了它，客户下单时才会被 SR-M1 拦下，而那时候能修的人已经不在场了。
   if (!pickPanel(modules, FRIDGE_PANEL_HEIGHT)) {
-    missing.push(`冰箱侧通高收口板（高度 ≥${FRIDGE_PANEL_HEIGHT}"）`);
+    missing.push(msg(lang,
+      `Full-height fridge-side panel (height ≥${FRIDGE_PANEL_HEIGHT}")`,
+      `冰箱侧通高收口板（高度 ≥${FRIDGE_PANEL_HEIGHT}"）`));
   }
   return { ready: missing.length === 0, missing };
 }

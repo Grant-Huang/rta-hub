@@ -57,9 +57,9 @@ test("只在两组都有报价的型号上比较——否则比的是不同的�
   const premiums = priceGroupPremiums(b);
   // 天真实现会算出"贵 800%"——那跟门板无关，是型号不同
   assert.deepEqual(premiums.get("pg_prem"), {
-    kind: "unknown", reason: "与基准价位没有可比型号",
+    kind: "unknown", reason: "No overlapping SKUs with the base tier",
   });
-  assert.match(describeImpact(premiums.get("pg_prem")!), /价格待确认/);
+  assert.match(describeImpact(premiums.get("pg_prem")!), /Price TBD/);
 });
 
 test("有交集时溢价只反映门板差价", () => {
@@ -96,18 +96,18 @@ test("五金加价用真实修饰项，知道柜体数时给出合计", () => {
   const plain = hardwareQuestion(bundle())!;
   const soft = plain.options.find((o) => o.id === "hw_softclose")!;
   assert.deepEqual(soft.priceImpact, { kind: "perCabinet", amount: fromDollars("22.00") });
-  assert.match(soft.priceNote, /每个柜体 \+\$22\.00/);
+  assert.match(soft.priceNote, /\+\$22\.00 per cabinet/);
   assert.ok(!soft.priceNote.includes("合计"));
 
   const withCount = hardwareQuestion(bundle(), { estimatedCabinetCount: 12 })!;
   const soft12 = withCount.options.find((o) => o.id === "hw_softclose")!;
-  assert.match(soft12.priceNote, /12 个柜体.*\$264\.00/);
+  assert.match(soft12.priceNote, /\$264\.00 for 12 cabinets/);
 });
 
 test("配件标出能装在哪些型号上", () => {
   const q = accessoryQuestion(bundle())!;
   const rollout = q.options.find((o) => o.id === "ac_rollout")!;
-  assert.match(rollout.detail ?? "", /可装于/);
+  assert.match(rollout.detail ?? "", /Fits|可装于/);
   assert.deepEqual(rollout.priceImpact, { kind: "percentOfList", percent: 12 });
 });
 
@@ -149,11 +149,11 @@ test("没有户型尺寸就不问预算——凭空给区间是编数字", () =>
 
 test("有尺寸时给出锚定区间，来源未核实必须标注", () => {
   const unverified = budgetQuestion({ baseRunInches: 144, catalog, sourceVerified: false })!;
-  assert.match(unverified.why, /尚未逐条核实/);
+  assert.match(unverified.why, /not fully verified|order-of-magnitude/i);
   assert.match(unverified.prompt, /144"/);
 
   const verified = budgetQuestion({ baseRunInches: 144, catalog, sourceVerified: true })!;
-  assert.ok(!verified.why.includes("尚未逐条核实"));
+  assert.ok(!/not fully verified|尚未逐条核实/i.test(verified.why));
 
   // 三档 + 一个"还没想好"——不强迫客户在不知道的时候硬选
   assert.ok(verified.options.some((o) => o.id === "unsure"));
@@ -318,7 +318,7 @@ test("没落实的偏好要如实说出来，不能静默部分落实", () => {
   );
   assert.equal(notes.length, 1);
   assert.match(notes[0]!, /W3630/);
-  assert.match(notes[0]!, /组装好发货/);
+  assert.match(notes[0]!, /assembled|组装好发货/);
 });
 
 test("全都能落实时不报无谓的提示", () => {
@@ -338,5 +338,5 @@ test("配件在这版方案里一个都装不了时如实说明", () => {
   );
   assert.equal(notes.length, 1);
   assert.match(notes[0]!, /抽拉层板/);
-  assert.match(notes[0]!, /未计入报价/);
+  assert.match(notes[0]!, /not included in the quote|未计入报价/);
 });

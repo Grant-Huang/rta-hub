@@ -114,7 +114,7 @@ test("待确认项没清空不许发布，并说清拦的是哪一条", async ()
     method: "POST", company: token, body: JSON.stringify({ publishedBy: "店长" }),
   });
   assert.equal(pub.__status, 409);
-  assert.match(String(pub.error), /待确认/);
+  assert.match(String(pub.error), /unresolved/i);
   assert.equal(pub.code, "UNRESOLVED_ITEMS");
   // 「发布失败」对商家毫无用处——要把剩下的问题一起带回去
   assert.ok((pub.pendingQuestions ?? []).length > 0);
@@ -133,7 +133,7 @@ test("回答追问要带值，并且真的落到规格上", async () => {
       },
     }),
   });
-  const faceQ = imported.pendingQuestions.find((q: Json) => /正视图/.test(q.prompt));
+  const faceQ = imported.pendingQuestions.find((q: Json) => /elevation/i.test(q.prompt));
   assert.ok(faceQ, "认不出脸型的型号应该有一条追问");
 
   // 不带值 → 不算答完
@@ -164,7 +164,7 @@ async function publishable(): Promise<{ id: string; token: string; sessionId: st
   let guard = 0;
   while ((state.pendingQuestions ?? []).length > 0 && guard++ < 40) {
     const q = state.pendingQuestions[0];
-    const answer = /正视图/.test(String(q.prompt))
+    const answer = /elevation/i.test(String(q.prompt))
       ? { faceTemplateId: "F2_DOUBLE_DOOR" }
       : { roles: ["doorStorage"] };
     state = await req(`/api/company/${id}/spec/sessions/${s.session.id}/answer`, {
@@ -187,9 +187,9 @@ test("发布后明确说「还出不了报价」，并列出到底缺什么", as
   assert.equal(pub.canQuote, false);
 
   // 两道门槛都要说：订阅 + 规格完整性
-  assert.ok(pub.blockers.some((b: string) => /订阅/.test(b)), JSON.stringify(pub.blockers));
+  assert.ok(pub.blockers.some((b: string) => /subscription/i.test(b)), JSON.stringify(pub.blockers));
   assert.equal(pub.specCompleteness.ready, false);
-  assert.ok(pub.specCompleteness.missing.some((m: string) => /踢脚|收口|填缝/.test(m)),
+  assert.ok(pub.specCompleteness.missing.some((m: string) => /toe.?kick|filler|end panel/i.test(m)),
     JSON.stringify(pub.specCompleteness));
 });
 
@@ -202,7 +202,7 @@ test("已发布的那一版不能再改，要开新草稿", async () => {
     method: "POST", company: token, body: JSON.stringify({ sources: SOURCES }),
   });
   assert.equal(tamper.__status, 409);
-  assert.match(String(tamper.error), /开新草稿/);
+  assert.match(String(tamper.error), /new draft/i);
 });
 
 test("改价不用把「这个柜子长什么样」再答一遍", async () => {
@@ -230,7 +230,7 @@ test("改价不用把「这个柜子长什么样」再答一遍", async () => {
       method: "POST", company: token,
       body: JSON.stringify({
         questionId: q.id,
-        answer: /正视图/.test(String(q.prompt))
+        answer: /elevation/i.test(String(q.prompt))
           ? { faceTemplateId: "F2_DOUBLE_DOOR" } : { roles: ["doorStorage"] },
       }),
     });
@@ -322,7 +322,7 @@ test("没有「跳过」这个动作——不给答案就不许划掉", () => {
       method: "POST", company: token, body: JSON.stringify({ unresolvedIndex: 0 }),
     });
     assert.equal(skip.__status, 400);
-    assert.match(String(skip.error), /重新导入/, "没有告诉商家该怎么处理表里写错的那几条");
+    assert.match(String(skip.error), /re-import/i, "没有告诉商家该怎么处理表里写错的那几条");
 
     const still = await req(`/api/company/${id}/spec/sessions/${s.session.id}`, { company: token });
     assert.ok(still.unresolvedCount > 0, "那一条被划掉了");

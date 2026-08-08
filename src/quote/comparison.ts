@@ -6,8 +6,9 @@
  * 关键点（REQUIREMENTS FR-6 最后一句）：必须注明各家报价的**含税口径是否一致**，
  * 避免拿含税价和未税价直接比——这是同类平台上真实发生过的误导来源。
  */
-import { add, format, sub, type Money } from "../domain/money.js";
+import { format, sub, type Money } from "../domain/money.js";
 import type { Quote } from "../domain/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export interface ComparisonRow {
   companyId: string;
@@ -61,7 +62,9 @@ export function buildComparison(
   quotes: readonly Quote[],
   nameOf: CompanyNameLookup,
   at: string,
+  language: UiLanguage = DEFAULT_LANGUAGE,
 ): QuoteComparison {
+  const lang = language;
   const warnings: ComparisonWarning[] = [];
   const usable = quotes.filter((q) => q.conversationId === conversationId);
 
@@ -74,7 +77,9 @@ export function buildComparison(
   if (currencies.size > 1) {
     warnings.push({
       code: "MIXED_CURRENCY",
-      message: `这几份报价的币种不一致（${[...currencies].join("、")}），总价不能直接比较。`,
+      message: msg(lang,
+        `These quotes use different currencies (${[...currencies].join(", ")}), so totals cannot be compared directly.`,
+        `这几份报价的币种不一致（${[...currencies].join("、")}），总价不能直接比较。`),
     });
   }
 
@@ -83,8 +88,11 @@ export function buildComparison(
   if (withTax > 0 && withTax < usable.length) {
     warnings.push({
       code: "MIXED_TAX_BASIS",
-      message: `有 ${withTax} 份报价含税、${usable.length - withTax} 份未税。` +
-        "下表的「总计」列口径不一致，请以「未税小计」列做横向比较。",
+      message: msg(lang,
+        `${withTax} quote(s) include tax and ${usable.length - withTax} do not. ` +
+          "The Total column is not on a consistent basis — compare the Pre-tax subtotal column instead.",
+        `有 ${withTax} 份报价含税、${usable.length - withTax} 份未税。` +
+          "下表的「总计」列口径不一致，请以「未税小计」列做横向比较。"),
     });
   }
 
@@ -95,8 +103,11 @@ export function buildComparison(
   if (minCount > 0 && maxCount > minCount * 1.25) {
     warnings.push({
       code: "DIFFERENT_SCOPE",
-      message: `各家方案的柜体数量差异较大（${minCount}–${maxCount} 件），可能不是同一套配置，` +
-        "总价差异未必反映单价差异。",
+      message: msg(lang,
+        `Cabinet counts differ a lot across sellers (${minCount}–${maxCount} pieces) — ` +
+          "these may not be the same configuration, so total differences may not reflect unit-price differences.",
+        `各家方案的柜体数量差异较大（${minCount}–${maxCount} 件），可能不是同一套配置，` +
+          "总价差异未必反映单价差异。"),
     });
   }
 
@@ -104,15 +115,20 @@ export function buildComparison(
   if (priceGroups.size > 1) {
     warnings.push({
       code: "DIFFERENT_PRICE_GROUP",
-      message: "各家选的门板落在不同价格组，价差有一部分来自门板档次而非公司本身。",
+      message: msg(lang,
+        "Sellers selected door styles in different price groups — some of the spread comes from door grade, not the company itself.",
+        "各家选的门板落在不同价格组，价差有一部分来自门板档次而非公司本身。"),
     });
   }
 
   for (const q of usable) {
     if (Date.parse(at) >= Date.parse(q.validUntil)) {
+      const who = nameOf(q.companyId) ?? q.companyId;
       warnings.push({
         code: "EXPIRED_QUOTE",
-        message: `${nameOf(q.companyId) ?? q.companyId} 的报价已于 ${q.validUntil.slice(0, 10)} 过期，需重新生成。`,
+        message: msg(lang,
+          `${who}'s quote expired on ${q.validUntil.slice(0, 10)} and needs to be regenerated.`,
+          `${who} 的报价已于 ${q.validUntil.slice(0, 10)} 过期，需重新生成。`),
       });
     }
   }
@@ -157,21 +173,33 @@ export function buildComparison(
 }
 
 /** 纯文本呈现，用于对话里直接回给客户。 */
-export function renderComparisonText(cmp: QuoteComparison): string {
-  if (cmp.rows.length === 0) return "还没有可对比的报价。";
+export function renderComparisonText(
+  cmp: QuoteComparison,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const lang = language;
+  if (cmp.rows.length === 0) {
+    return msg(lang, "No quotes available to compare yet.", "还没有可对比的报价。");
+  }
 
-  const header = "  公司".padEnd(24) + "未税小计".padStart(12) + "税".padStart(11) + "总计".padStart(13) + "差额".padStart(12);
+  const header = msg(lang, "  Company", "  公司").padEnd(24)
+    + msg(lang, "Pre-tax", "未税小计").padStart(12)
+    + msg(lang, "Tax", "税").padStart(11)
+    + msg(lang, "Total", "总计").padStart(13)
+    + msg(lang, "Delta", "差额").padStart(12);
   const lines = cmp.rows.map((r, i) => {
     const marker = i === 0 ? "★" : " ";
     return `${marker} ${r.companyName.slice(0, 20).padEnd(22)}` +
       format(r.netBeforeTax).padStart(12) +
       format(r.taxTotal).padStart(11) +
       format(r.total).padStart(13) +
-      (r.deltaFromLowest === 0 ? "最低".padStart(12) : `+${format(r.deltaFromLowest)}`.padStart(12));
+      (r.deltaFromLowest === 0
+        ? msg(lang, "lowest", "最低").padStart(12)
+        : `+${format(r.deltaFromLowest)}`.padStart(12));
   });
 
   const out = [
-    "多家报价对比",
+    msg(lang, "Multi-seller quote comparison", "多家报价对比"),
     "─".repeat(72),
     header,
     "─".repeat(72),
@@ -179,19 +207,29 @@ export function renderComparisonText(cmp: QuoteComparison): string {
     "─".repeat(72),
   ];
   if (cmp.spread !== undefined) {
-    out.push(`  最高与最低相差 ${format(cmp.spread)}`);
+    out.push(msg(lang,
+      `  Spread between highest and lowest: ${format(cmp.spread)}`,
+      `  最高与最低相差 ${format(cmp.spread)}`));
   }
   if (cmp.warnings.length > 0) {
-    out.push("", "⚠️ 比较前请注意：");
+    out.push("", msg(lang, "⚠️ Before you compare:", "⚠️ 比较前请注意："));
     out.push(...cmp.warnings.map((w) => `  · ${w.message}`));
   }
-  out.push("", "注：本表只比价格，不做图纸对比。各家的设计方案请分别查看。");
+  out.push("", msg(lang,
+    "Note: this table compares price only — not drawings. Review each seller's design separately.",
+    "注：本表只比价格，不做图纸对比。各家的设计方案请分别查看。"));
   return out.join("\n");
 }
 
 /** HTML 呈现，用于前端与邮件。 */
-export function renderComparisonHtml(cmp: QuoteComparison): string {
-  if (cmp.rows.length === 0) return "<p>还没有可对比的报价。</p>";
+export function renderComparisonHtml(
+  cmp: QuoteComparison,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const lang = language;
+  if (cmp.rows.length === 0) {
+    return `<p>${msg(lang, "No quotes available to compare yet.", "还没有可对比的报价。")}</p>`;
+  }
 
   const rows = cmp.rows.map((r, i) => `
     <tr${i === 0 ? ' style="font-weight:600"' : ""}>
@@ -200,28 +238,32 @@ export function renderComparisonHtml(cmp: QuoteComparison): string {
       <td style="text-align:right">${format(r.shipping)}</td>
       <td style="text-align:right">${format(r.taxTotal)}</td>
       <td style="text-align:right">${format(r.total)}</td>
-      <td style="text-align:right">${r.deltaFromLowest === 0 ? "最低" : "+" + format(r.deltaFromLowest)}</td>
+      <td style="text-align:right">${r.deltaFromLowest === 0
+        ? msg(lang, "lowest", "最低")
+        : "+" + format(r.deltaFromLowest)}</td>
     </tr>`).join("");
 
   const warnings = cmp.warnings.length
     ? `<div style="margin-top:12px;padding:10px;background:#fff8e1;border-left:3px solid #f0b429;font-size:13px">
-         <strong>比较前请注意</strong><ul style="margin:6px 0 0;padding-left:18px">
+         <strong>${msg(lang, "Before you compare", "比较前请注意")}</strong><ul style="margin:6px 0 0;padding-left:18px">
          ${cmp.warnings.map((w) => `<li>${escapeHtml(w.message)}</li>`).join("")}</ul></div>`
     : "";
 
   return `
 <table style="width:100%;border-collapse:collapse;font-size:13px">
   <thead><tr style="border-bottom:2px solid #ddd">
-    <th style="text-align:left;padding:6px">公司</th>
-    <th style="text-align:right;padding:6px">未税小计</th>
-    <th style="text-align:right;padding:6px">运费</th>
-    <th style="text-align:right;padding:6px">税</th>
-    <th style="text-align:right;padding:6px">总计</th>
-    <th style="text-align:right;padding:6px">差额</th>
+    <th style="text-align:left;padding:6px">${msg(lang, "Company", "公司")}</th>
+    <th style="text-align:right;padding:6px">${msg(lang, "Pre-tax", "未税小计")}</th>
+    <th style="text-align:right;padding:6px">${msg(lang, "Shipping", "运费")}</th>
+    <th style="text-align:right;padding:6px">${msg(lang, "Tax", "税")}</th>
+    <th style="text-align:right;padding:6px">${msg(lang, "Total", "总计")}</th>
+    <th style="text-align:right;padding:6px">${msg(lang, "Delta", "差额")}</th>
   </tr></thead>
   <tbody>${rows}</tbody>
 </table>${warnings}
-<p style="font-size:12px;color:#777;margin-top:10px">本表只比价格，不做图纸对比。</p>`.trim();
+<p style="font-size:12px;color:#777;margin-top:10px">${msg(lang,
+    "This table compares price only — not drawings.",
+    "本表只比价格，不做图纸对比。")}</p>`.trim();
 }
 
 function escapeHtml(s: string): string {

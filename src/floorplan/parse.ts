@@ -14,6 +14,7 @@ import type {
   FloorPlan, FloorPlanUnresolved, ParsedGeometry, WallFeature, WallRun,
 } from "./types.js";
 import { quantize } from "./types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 /** 低于此置信度的字段必须人工确认。 */
 export const CONFIDENCE_THRESHOLD = 0.75;
@@ -67,7 +68,11 @@ export interface ParseResult {
  *
  * 这个函数是**纯的**，不调模型——便于对"哪些情况该进待确认队列"做穷举测试。
  */
-export function normalizeExtraction(raw: RawExtraction | undefined): ParseResult {
+export function normalizeExtraction(
+  raw: RawExtraction | undefined,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): ParseResult {
+  const lang = language;
   const unresolved: FloorPlanUnresolved[] = [];
   const wallRuns: WallRun[] = [];
 
@@ -76,7 +81,9 @@ export function normalizeExtraction(raw: RawExtraction | undefined): ParseResult
       id: newId("fpu"),
       target: { kind: "global" },
       field: "wallRuns",
-      reason: "没能从图上识别出任何墙段，需要你手动告诉我厨房有几面墙、各多长",
+      reason: msg(lang,
+        "Couldn't identify any wall runs from the image — please tell me how many walls your kitchen has and how long each is",
+        "没能从图上识别出任何墙段，需要你手动告诉我厨房有几面墙、各多长"),
       resolved: false,
     });
     return {
@@ -87,7 +94,7 @@ export function normalizeExtraction(raw: RawExtraction | undefined): ParseResult
 
   raw.wallRuns.forEach((rawRun, i) => {
     const runId = newId("wr");
-    const label = rawRun.label?.trim() || `墙段 ${i + 1}`;
+    const label = rawRun.label?.trim() || msg(lang, `Wall ${i + 1}`, `墙段 ${i + 1}`);
     const lengthConf = rawRun.lengthConfidence ?? 0;
 
     // 长度缺失或置信度不足 → 进待确认，**不猜**
@@ -100,8 +107,12 @@ export function normalizeExtraction(raw: RawExtraction | undefined): ParseResult
         target: { kind: "wallRun", id: runId },
         field: "length",
         reason: typeof rawRun.length === "number"
-          ? `${label} 的长度看不太准（置信度 ${(lengthConf * 100).toFixed(0)}%），请确认实际尺寸`
-          : `${label} 的长度没能识别出来，请量一下告诉我`,
+          ? msg(lang,
+            `${label} length looks uncertain (confidence ${(lengthConf * 100).toFixed(0)}%) — please confirm the actual size`,
+            `${label} 的长度看不太准（置信度 ${(lengthConf * 100).toFixed(0)}%），请确认实际尺寸`)
+          : msg(lang,
+            `${label} length could not be read — please measure and tell me`,
+            `${label} 的长度没能识别出来，请量一下告诉我`),
         resolved: false,
         ...(typeof rawRun.length === "number" ? { suggestion: quantize(rawRun.length) } : {}),
       };
@@ -117,7 +128,9 @@ export function normalizeExtraction(raw: RawExtraction | undefined): ParseResult
           id: newId("fpu"),
           target: { kind: "wallRun", id: runId },
           field: "feature.kind",
-          reason: `${label} 上有个识别不出类型的东西（${rawFeature.note ?? "未标注"}），是窗、门、还是上下水？`,
+          reason: msg(lang,
+            `${label} has something we couldn't classify (${rawFeature.note ?? "unlabeled"}) — is it a window, door, or plumbing?`,
+            `${label} 上有个识别不出类型的东西（${rawFeature.note ?? "未标注"}），是窗、门、还是上下水？`),
           resolved: false,
         });
         continue;
@@ -127,7 +140,9 @@ export function normalizeExtraction(raw: RawExtraction | undefined): ParseResult
           id: newId("fpu"),
           target: { kind: "wallRun", id: runId },
           field: `feature.${kind}.offset`,
-          reason: `${label} 上的${featureName(kind)}位置不确定，请告诉我它距墙角多远`,
+          reason: msg(lang,
+            `${label}: ${featureName(kind, lang)} position is uncertain — how far is it from the corner?`,
+            `${label} 上的${featureName(kind, lang)}位置不确定，请告诉我它距墙角多远`),
           resolved: false,
           ...(typeof rawFeature.offset === "number" ? { suggestion: quantize(rawFeature.offset) } : {}),
         });
@@ -163,7 +178,9 @@ export function normalizeExtraction(raw: RawExtraction | undefined): ParseResult
       id: newId("fpu"),
       target: { kind: "global" },
       field: "ceilingHeight",
-      reason: "天花板高度没法从图上看出来（它决定吊柜和高柜的高度档位），你家层高大概是多少？",
+      reason: msg(lang,
+        "Ceiling height can't be read from the image (it sets wall/tall cabinet height options) — roughly how high are your ceilings?",
+        "天花板高度没法从图上看出来（它决定吊柜和高柜的高度档位），你家层高大概是多少？"),
       resolved: false,
       ...(typeof raw.ceilingHeight === "number" ? { suggestion: quantize(raw.ceilingHeight) } : {}),
     });
@@ -187,14 +204,24 @@ export function normalizeExtraction(raw: RawExtraction | undefined): ParseResult
   };
 }
 
-function featureName(kind: WallFeature["kind"]): string {
-  return { window: "窗", door: "门", plumbing: "上下水", gas: "燃气口", electrical: "电源", obstruction: "障碍物" }[kind];
+function featureName(kind: WallFeature["kind"], lang: UiLanguage = DEFAULT_LANGUAGE): string {
+  const en = {
+    window: "window", door: "door", plumbing: "plumbing", gas: "gas line",
+    electrical: "electrical", obstruction: "obstruction",
+  }[kind];
+  const zh = {
+    window: "窗", door: "门", plumbing: "上下水", gas: "燃气口",
+    electrical: "电源", obstruction: "障碍物",
+  }[kind];
+  return msg(lang, en, zh);
 }
 
 export interface CreateFloorPlanInput {
   conversationId: string;
   file: { name: string; mimeType: string; sizeBytes: number };
   at: string;
+  /** 客户可见文案语言；默认英文。 */
+  language?: UiLanguage;
 }
 
 /**
@@ -254,7 +281,7 @@ export async function createFloorPlanWithOutcome(
     }
   }
 
-  const { geometry, unresolved } = normalizeExtraction(raw);
+  const { geometry, unresolved } = normalizeExtraction(raw, input.language ?? DEFAULT_LANGUAGE);
   return {
     plan: {
       id: newId("fp"),
@@ -271,27 +298,43 @@ export async function createFloorPlanWithOutcome(
 }
 
 /** 把抽取结果翻成一句给客户看的话。 */
-export function extractionNote(outcome: ExtractionOutcome): string | undefined {
+export function extractionNote(
+  outcome: ExtractionOutcome,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string | undefined {
+  const lang = language;
   switch (outcome.status) {
     case "ok": return undefined;
     case "notConfigured":
-      return "没有配置视觉模型，这张图我读不了——下面一段墙一段墙地填尺寸就行。";
+      return msg(lang,
+        "No vision model is configured, so I can't read this image — fill in each wall's dimensions below.",
+        "没有配置视觉模型，这张图我读不了——下面一段墙一段墙地填尺寸就行。");
     case "noImage":
-      return "只收到了文件信息、没收到图片内容，所以没能识别。" +
-        "（这多半是上传环节的问题，可以先手动录入尺寸继续。）";
+      return msg(lang,
+        "Got file metadata but no image content, so nothing was recognized. " +
+          "(Usually an upload issue — you can keep going by entering sizes manually.)",
+        "只收到了文件信息、没收到图片内容，所以没能识别。" +
+          "（这多半是上传环节的问题，可以先手动录入尺寸继续。）");
     case "emptyResult":
-      return "视觉模型没能从这张图里读出可用的尺寸——图纸太模糊或标注不清时会这样。" +
-        "下面手动填一下就行，手填的数比猜的准。";
+      return msg(lang,
+        "The vision model couldn't read usable sizes from this image — that happens when drawings are blurry or unlabeled. " +
+          "Enter sizes manually below; measured numbers beat guesses.",
+        "视觉模型没能从这张图里读出可用的尺寸——图纸太模糊或标注不清时会这样。" +
+          "下面手动填一下就行，手填的数比猜的准。");
     case "failed":
-      return `视觉识别没跑成功（${outcome.reason}）。先手动录入尺寸继续，` +
-        "这条路一直是通的；识别的问题请检查视觉模型端点配置。";
+      return msg(lang,
+        `Vision recognition failed (${outcome.reason}). Enter sizes manually for now — that path always works; check the vision endpoint if recognition keeps failing.`,
+        `视觉识别没跑成功（${outcome.reason}）。先手动录入尺寸继续，` +
+          "这条路一直是通的；识别的问题请检查视觉模型端点配置。");
   }
 }
 
 /** 手动录入/修正一段墙的长度，同时消解对应的待确认项。 */
 export function resolveWallLength(plan: FloorPlan, wallRunId: string, length: number, at: string): FloorPlan {
   const value = quantize(length);
-  if (value <= 0) throw new RangeError("墙长必须为正");
+  if (value <= 0) {
+    throw new RangeError(msg(DEFAULT_LANGUAGE, "Wall length must be positive", "墙长必须为正"));
+  }
 
   return {
     ...plan,
