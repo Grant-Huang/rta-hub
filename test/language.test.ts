@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  DEFAULT_LANGUAGE, detectLanguageSwitch, languageRuleForLlm, languageSwitchAck,
+  DEFAULT_LANGUAGE, detectLanguageSwitch, inferLanguageFromText, languageRuleForLlm, languageSwitchAck,
   resolveLanguage,
 } from "../src/i18n/language.js";
 import { rtaIntro, renderRtaComparison } from "../src/quote/rta-disclosure.js";
@@ -20,12 +20,15 @@ test("默认语言是英文", () => {
   assert.equal(resolveLanguage({}), "en");
 });
 
-test("只有明确要求才切换语言，夹几个中文字不算", () => {
+test("明确切换语言；整段中文对话跟随中文；夹几个中文字的英文不切", () => {
   assert.equal(detectLanguageSwitch("用中文聊"), "zh");
   assert.equal(detectLanguageSwitch("please reply in Chinese"), "zh");
   assert.equal(detectLanguageSwitch("can you talk in english?"), "en");
-  assert.equal(detectLanguageSwitch("厨房大概 12 尺，L 型"), undefined);
-  assert.equal(detectLanguageSwitch("hello, budget around 15k"), undefined);
+
+  assert.equal(inferLanguageFromText("厨房大概十二尺，L 型，想换橱柜"), "zh");
+  assert.equal(inferLanguageFromText("hello, budget around 15k for an L-shape kitchen"), "en");
+  // 英文为主、夹少量中文 → 仍英文
+  assert.equal(inferLanguageFromText("We want a 质感 kitchen, about 12 ft"), "en");
 });
 
 test("开场白与快捷回答默认英文", () => {

@@ -27,6 +27,22 @@
 
 ---
 
+## 0.1 知识分层：系统语义 ≠ 厂商编码（v1.2）
+
+在「编码不映射」之上，再拆清三件事（详见 [KNOWLEDGE_LAYERS.md](./KNOWLEDGE_LAYERS.md)）：
+
+| 层 | 内容 | 例子 |
+|----|------|------|
+| **L0 系统** | 售卖单元与后缀语义；独立件类型；能力枚举 | `-BOX`→柜体，`-DOOR`→门板，材质+花色且无拆分后缀→组合件；filler 为 standalone |
+| **L1 厂商** | 规格、价格、**柜型前缀规则**、公司手册、公司偏好 | 本厂 `B12` vs 另厂 `DB12` 含义不同；Agent 记忆按 `companyId` 隔离 |
+| **独立件** | filler / panel / toeKick / crown / leg | 不参与 BOX/DOOR 组合逻辑；报价单独成区 |
+
+**禁止**：把某一试点厂的前缀表写进总控 Agent；把 `-BOX`/`-DOOR` 伪装成门板 `PriceGroup`。
+
+后缀与组合件细则：[product-codes.md](./product-codes.md)。需求条目：REQUIREMENTS **FR-16**。
+
+---
+
 ## 1. 为什么不能做「通用码 ↔ 商家码」的映射表
 
 这是最容易想到的方案，也是错的。理由不是工程量，是**语义不守恒**。

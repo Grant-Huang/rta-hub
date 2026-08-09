@@ -14,11 +14,12 @@ import { createLlmClient } from "../agents/llm-client.js";
 import type { CompletionClient } from "../agents/types.js";
 import type { VisionExtractor } from "../floorplan/parse.js";
 import { createVisionExtractorFromEnv } from "../floorplan/ollama-vision.js";
-import type { CabinetCompany, GenericCatalog, TaxRule } from "../domain/types.js";
+import type { CabinetCompany, GenericCatalog, SessionOrigin, TaxRule } from "../domain/types.js";
 import { deriveCompanyStatus } from "../spec/version.js";
 import { genericCatalogVerified } from "./launch-gates.js";
 import { generateCompanyToken } from "../tenancy/company-auth.js";
 import type { PricingContext } from "../pricing/engine.js";
+import { newRunId, upsertSessionRun } from "../session/runs.js";
 import * as seed from "./seed.js";
 import * as second from "./seed-second.js";
 import * as third from "./seed-third.js";
@@ -43,22 +44,42 @@ export interface AppContext {
   catalogSourceVerified: boolean;
   termsVersion: string;
   baseUrl: string;
+  /** 本进程数据目录（绝对或相对路径）。 */
+  dataDir: string;
+  /** 本次运行来源；缺省 production。 */
+  origin: SessionOrigin;
+  /** 本次 SessionRun.id */
+  runId: string;
 }
 
 export interface CreateContextOptions {
   dataDir?: string;
-  /** 用临时目录，测试用。 */
+  /**
+   * 用 OS 临时目录。仅留给**无会话语义**的纯单元测试。
+   * 会创建 Conversation 的路径请改用 `dataDir` + `origin` + `runId`（FR-21）。
+   */
   ephemeral?: boolean;
+  /** 会话来源标签；未指定时：ephemeral→test，否则 production。 */
+  origin?: SessionOrigin;
+  /** 显式 runId；未指定则按 origin 生成（production 用稳定 id `prod`）。 */
+  runId?: string;
   llm?: CompletionClient | undefined;
   vision?: VisionExtractor | undefined;
   mailTransport?: AppContext["mailTransport"];
   seedIfEmpty?: boolean;
+  /** 跳过写入 SessionRun 索引（极少用）。 */
+  skipSessionRun?: boolean;
 }
 
 export async function createAppContext(opts: CreateContextOptions = {}): Promise<AppContext> {
   const dataDir = opts.ephemeral
     ? mkdtempSync(path.join(tmpdir(), "rta-hub-"))
     : (opts.dataDir ?? process.env.DATA_DIR ?? path.join(process.cwd(), "data"));
+
+  const origin: SessionOrigin = opts.origin
+    ?? (opts.ephemeral ? "test" : "production");
+  const runId = opts.runId
+    ?? (origin === "production" ? "prod" : newRunId(origin));
 
   const repos = openRepositories(dataDir);
   const ctx: AppContext = {
@@ -73,11 +94,30 @@ export async function createAppContext(opts: CreateContextOptions = {}): Promise
     catalogSourceVerified: genericCatalogVerified(),
     termsVersion: process.env.TERMS_VERSION || "2026-01",
     baseUrl: process.env.BASE_URL || `http://localhost:${process.env.PORT || 8790}`,
+    dataDir,
+    origin,
+    runId,
   };
 
   if (opts.seedIfEmpty !== false && repos.companies.all().length === 0) {
     await seedInitialData(ctx);
   }
+
+  if (!opts.skipSessionRun) {
+    const existing = repos.sessionRuns.byId(runId);
+    await upsertSessionRun(repos, {
+      id: runId,
+      origin,
+      dataDir,
+      startedAt: existing?.startedAt ?? new Date().toISOString(),
+      conversationIds: existing?.conversationIds ?? [],
+      ...(existing?.endedAt ? { endedAt: existing.endedAt } : {}),
+      ...(existing?.scenarioSource ? { scenarioSource: existing.scenarioSource } : {}),
+      ...(existing?.note ? { note: existing.note } : {}),
+      ...(existing?.exitCode !== undefined ? { exitCode: existing.exitCode } : {}),
+    });
+  }
+
   return ctx;
 }
 
@@ -125,6 +165,7 @@ export async function seedInitialData(ctx: AppContext): Promise<void> {
     doorStyles: fourth.oppeinDoorStyles,
     modules: fourth.oppeinModuleSpecs,
     priceMatrix: fourth.oppeinPriceMatrix,
+    boxMaterialOptions: fourth.oppeinBoxMaterials,
     hardwareOptions: [],
     accessoryOptions: [],
     discountRules: [],

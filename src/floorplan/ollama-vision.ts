@@ -73,6 +73,30 @@ export function createVisionExtractorFromEnv(
   });
 }
 
+/**
+ * 测试 / simulate 专用视觉抽取。
+ * 读 `OPENAI_BASE_URL_TEST_VISION`（或 TEST 文本端点去 `/v1`）+ `LLM_MODEL_TEST_VISION`，
+ * **不**使用生产 `LLM_MODEL_VISION` / `OPENAI_BASE_URL_VISION`。
+ */
+export function createVisionExtractorFromTestEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): VisionExtractor | undefined {
+  const hasTestSignal = Boolean(
+    env.LLM_MODEL_TEST_VISION?.trim()
+    || env.OPENAI_BASE_URL_TEST_VISION?.trim()
+    || env.LLM_MODEL_TEST_CHAT?.trim()
+    || env.OPENAI_BASE_URL_TEST?.trim(),
+  );
+  if (!hasTestSignal) return undefined;
+
+  const rawBase = env.OPENAI_BASE_URL_TEST_VISION?.trim()
+    || env.OPENAI_BASE_URL_TEST?.trim()
+    || "http://localhost:11434";
+  const baseURL = rawBase.replace(/\/v1\/?$/, "");
+  const model = env.LLM_MODEL_TEST_VISION?.trim() || "qwen2.5vl:latest";
+  return createOllamaVisionExtractor(baseURL, { model });
+}
+
 export function createOllamaVisionExtractor(
   baseURL: string,
   opts: Omit<OllamaVisionOptions, "baseURL"> = {},

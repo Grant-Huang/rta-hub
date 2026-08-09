@@ -25,7 +25,7 @@ import type { SpecBundle } from "../spec/bundle.js";
 import { hasRole } from "../spec/capabilities.js";
 import { sortBoxMaterials } from "../spec/carcass.js";
 import {
-  APPLIANCE_LABEL, COMMON_WIDTHS, type ApplianceKind, type ApplianceSpec,
+  applianceLabel, COMMON_WIDTHS, type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
@@ -93,27 +93,43 @@ export function resolvePreferences(
 
 // ── 价格影响的格式化 ──────────────────────────────────────────────────────
 
-export function describeImpact(impact: PriceImpact): string {
+export function describeImpact(
+  impact: PriceImpact,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): string {
   switch (impact.kind) {
     case "included":
-      return "Included in base price";
+      return msg(lang, "Included in base price", "已含在基础价中");
     case "perCabinet":
-      return `+${format(impact.amount)} per cabinet`;
+      return msg(lang,
+        `+${format(impact.amount)} per cabinet`,
+        `每个柜子 +${format(impact.amount)}`);
     case "percentOfList":
-      return `+${impact.percent}% of applicable cabinet list`;
+      return msg(lang,
+        `+${impact.percent}% of applicable cabinet list`,
+        `适用柜体目录价 +${impact.percent}%`);
     case "relativeToCheapest":
       return impact.percent === 0
-        ? "Lowest price tier"
-        : `About ${impact.percent}% above the lowest tier`;
+        ? msg(lang, "Lowest price tier", "最低价档")
+        : msg(lang,
+          `About ${impact.percent}% above the lowest tier`,
+          `约比最低档贵 ${impact.percent}%`);
     case "range":
-      return `About ${format(impact.low)} – ${format(impact.high)}`;
+      return msg(lang,
+        `About ${format(impact.low)} – ${format(impact.high)}`,
+        `约 ${format(impact.low)} – ${format(impact.high)}`);
     case "unknown":
-      return `Price TBD (${impact.reason})`;
+      return msg(lang,
+        `Price TBD (${impact.reason})`,
+        `价格待确认（${impact.reason}）`);
   }
 }
 
-function option(o: Omit<PreferenceOption, "priceNote">): PreferenceOption {
-  return { ...o, priceNote: describeImpact(o.priceImpact) };
+function option(
+  o: Omit<PreferenceOption, "priceNote">,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceOption {
+  return { ...o, priceNote: describeImpact(o.priceImpact, lang) };
 }
 
 // ── 门板样式：价格组的相对价位 ────────────────────────────────────────────
@@ -127,7 +143,10 @@ function option(o: Omit<PreferenceOption, "priceNote">): PreferenceOption {
  *
  * 交集为空时返回 `unknown` 而不是硬算一个数。
  */
-export function priceGroupPremiums(bundle: SpecBundle): Map<string, PriceImpact> {
+export function priceGroupPremiums(
+  bundle: SpecBundle,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): Map<string, PriceImpact> {
   const out = new Map<string, PriceImpact>();
   const groups = bundle.priceGroups;
   if (groups.length === 0) return out;
@@ -153,7 +172,12 @@ export function priceGroupPremiums(bundle: SpecBundle): Map<string, PriceImpact>
     const mine = byGroup.get(g.id) ?? new Map();
     const shared = [...mine.keys()].filter((id) => basePrices.has(id));
     if (shared.length === 0) {
-      out.set(g.id, { kind: "unknown", reason: "No overlapping SKUs with the base tier" });
+      out.set(g.id, {
+        kind: "unknown",
+        reason: msg(lang,
+          "No overlapping SKUs with the base tier",
+          "与基准档没有可对比的共同型号"),
+      });
       continue;
     }
     let sumMine = 0;
@@ -163,7 +187,10 @@ export function priceGroupPremiums(bundle: SpecBundle): Map<string, PriceImpact>
       sumBase += basePrices.get(id)!;
     }
     if (sumBase === 0) {
-      out.set(g.id, { kind: "unknown", reason: "Base tier price is zero" });
+      out.set(g.id, {
+        kind: "unknown",
+        reason: msg(lang, "Base tier price is zero", "基准档价格为 0"),
+      });
       continue;
     }
     out.set(g.id, {
@@ -174,16 +201,22 @@ export function priceGroupPremiums(bundle: SpecBundle): Map<string, PriceImpact>
   return out;
 }
 
-export function doorStyleQuestion(bundle: SpecBundle): PreferenceQuestion | undefined {
+export function doorStyleQuestion(
+  bundle: SpecBundle,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion | undefined {
   // 只有一种门板就不用问——问一个没得选的问题只是浪费客户一轮
   if (bundle.doorStyles.length < 2) return undefined;
 
-  const premiums = priceGroupPremiums(bundle);
+  const premiums = priceGroupPremiums(bundle, lang);
   const cheapest = bundle.doorStyles.find(
     (d) => premiumPercent(premiums.get(d.priceGroupId)) === 0);
 
   const options = bundle.doorStyles.map((d) => {
-    const impact = premiums.get(d.priceGroupId) ?? { kind: "unknown" as const, reason: "No list price for this tier" };
+    const impact = premiums.get(d.priceGroupId) ?? {
+      kind: "unknown" as const,
+      reason: msg(lang, "No list price for this tier", "该档暂无目录价"),
+    };
     const parts = [d.material, d.color].filter(Boolean);
     return option({
       id: d.id,
@@ -191,13 +224,15 @@ export function doorStyleQuestion(bundle: SpecBundle): PreferenceQuestion | unde
       ...(parts.length ? { detail: parts.join(" · ") } : {}),
       priceImpact: impact,
       ...(cheapest && d.id === cheapest.id ? { recommended: true } : {}),
-    });
+    }, lang);
   });
 
   return {
     key: "doorStyle",
-    prompt: "Which door style do you want?",
-    why: "The door drives the look and is usually the biggest price swing — same boxes, different doors can move the total by 20%+.",
+    prompt: msg(lang, "Which door style do you want?", "想要哪种门板样式？"),
+    why: msg(lang,
+      "The door drives the look and is usually the biggest price swing — same boxes, different doors can move the total by 20%+.",
+      "门板决定观感，通常也是价差最大的一项——同样柜体换门板，总价可差 20% 以上。"),
     multiSelect: false,
     options,
     skippable: false,
@@ -214,7 +249,10 @@ export function doorStyleQuestion(bundle: SpecBundle): PreferenceQuestion | unde
  * `why` 里要说清**差在哪**，不是只说贵多少：客户不知道夹板箱体值不值
  * 那 18%，除非有人告诉他水槽柜下面那一格最能看出区别。
  */
-export function boxMaterialQuestion(bundle: SpecBundle): PreferenceQuestion | undefined {
+export function boxMaterialQuestion(
+  bundle: SpecBundle,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion | undefined {
   const materials = sortBoxMaterials(bundle.boxMaterialOptions ?? []);
   // 只有一档就不问——问一个没得选的问题只是浪费客户一轮
   if (materials.length < 2) return undefined;
@@ -222,9 +260,12 @@ export function boxMaterialQuestion(bundle: SpecBundle): PreferenceQuestion | un
   const baseline = materials.find((m) => m.isDefault) ?? materials[0];
   return {
     key: "boxMaterial",
-    prompt: "What box (carcass) material do you want?",
-    why: "This is separate from the door finish: doors are what you see; the box is what the cabinet is made of. "
-      + "Pricing is separate too — same door on different boxes are two prices. The difference shows most under the sink.",
+    prompt: msg(lang, "What box (carcass) material do you want?", "想要哪种箱体板材？"),
+    why: msg(lang,
+      "This is separate from the door finish: doors are what you see; the box is what the cabinet is made of. "
+        + "Pricing is separate too — same door on different boxes are two prices. The difference shows most under the sink.",
+      "这与门板花色是两件事：门板是外观，箱体是柜子本身的板材。"
+        + "计价也分开——同门板不同箱体是两个价。差别在水槽柜下格最明显。"),
     multiSelect: false,
     options: materials.map((m) => option({
       id: m.id,
@@ -232,7 +273,7 @@ export function boxMaterialQuestion(bundle: SpecBundle): PreferenceQuestion | un
       ...(m.note ? { detail: m.note } : {}),
       priceImpact: impactOfModifier(m.priceModifier),
       ...(baseline && m.id === baseline.id ? { recommended: true } : {}),
-    })),
+    }, lang)),
     skippable: true,
   };
 }
@@ -251,47 +292,71 @@ function impactOfModifier(mod: Modifier): PriceImpact {
 
 export function hardwareQuestion(
   bundle: SpecBundle,
-  opts: { estimatedCabinetCount?: number } = {},
+  opts: { estimatedCabinetCount?: number; language?: UiLanguage } = {},
 ): PreferenceQuestion | undefined {
   if (bundle.hardwareOptions.length === 0) return undefined;
+  const lang = opts.language ?? DEFAULT_LANGUAGE;
 
   return {
     key: "hardware",
-    prompt: "Want any hardware upgrades? Multi-select, or skip.",
-    why: "Hardware is what you touch every day, and where wear shows first. Prices below are per cabinet.",
+    prompt: msg(lang,
+      "Want any hardware upgrades? Multi-select, or skip.",
+      "要升级五金吗？可多选，也可跳过。"),
+    why: msg(lang,
+      "Hardware is what you touch every day, and where wear shows first. Prices below are per cabinet.",
+      "五金是每天都会摸到的部分，也最先显出磨损。下列价格按每个柜子计。"),
     multiSelect: true,
-    options: bundle.hardwareOptions.map((h) => hardwareOption(h, opts.estimatedCabinetCount)),
+    options: bundle.hardwareOptions.map((h) =>
+      hardwareOption(h, opts.estimatedCabinetCount, lang)),
     skippable: true,
   };
 }
 
-function hardwareOption(h: HardwareOption, cabinetCount?: number): PreferenceOption {
+function hardwareOption(
+  h: HardwareOption,
+  cabinetCount?: number,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceOption {
   const impact = impactOfModifier(h.priceModifier);
-  const base = option({ id: h.id, label: h.name, priceImpact: impact });
+  const base = option({ id: h.id, label: h.name, priceImpact: impact }, lang);
   // 知道柜体数时把总价也算出来——"每个 +$22" 对客户来说不如"这套约 +$400"直观
   if (cabinetCount && cabinetCount > 0 && impact.kind === "perCabinet") {
+    const total = format(mulQty(impact.amount, cabinetCount));
     return {
       ...base,
-      priceNote: `${base.priceNote} (≈ ${format(mulQty(impact.amount, cabinetCount))} for ${cabinetCount} cabinets)`,
+      priceNote: msg(lang,
+        `${base.priceNote} (≈ ${total} for ${cabinetCount} cabinets)`,
+        `${base.priceNote}（约 ${cabinetCount} 个柜子合计 ${total}）`),
     };
   }
   return base;
 }
 
-export function accessoryQuestion(bundle: SpecBundle): PreferenceQuestion | undefined {
+export function accessoryQuestion(
+  bundle: SpecBundle,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion | undefined {
   if (bundle.accessoryOptions.length === 0) return undefined;
 
   return {
     key: "accessories",
-    prompt: "Any functional accessories to add? Multi-select OK.",
-    why: "Accessories only go on cabinets that can take them — you don't pay per cabinet across the whole kitchen.",
+    prompt: msg(lang,
+      "Any functional accessories to add? Multi-select OK.",
+      "要加功能配件吗？可多选。"),
+    why: msg(lang,
+      "Accessories only go on cabinets that can take them — you don't pay per cabinet across the whole kitchen.",
+      "配件只装在能装的柜子上——不会按整厨每个柜子都收一遍。"),
     multiSelect: true,
-    options: bundle.accessoryOptions.map((a) => accessoryOption(a, bundle)),
+    options: bundle.accessoryOptions.map((a) => accessoryOption(a, bundle, lang)),
     skippable: true,
   };
 }
 
-function accessoryOption(a: AccessoryOption, bundle: SpecBundle): PreferenceOption {
+function accessoryOption(
+  a: AccessoryOption,
+  bundle: SpecBundle,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceOption {
   const codes = (a.appliesToModuleIds ?? [])
     .map((id) => bundle.modules.find((m) => m.id === id)?.code)
     .filter((c): c is string => Boolean(c));
@@ -300,9 +365,13 @@ function accessoryOption(a: AccessoryOption, bundle: SpecBundle): PreferenceOpti
     label: a.name,
     priceImpact: impactOfModifier(a.priceModifier),
     ...(codes.length
-      ? { detail: `Fits ${codes.slice(0, 4).join(", ")}${codes.length > 4 ? ", …" : ""}` }
+      ? {
+          detail: msg(lang,
+            `Fits ${codes.slice(0, 4).join(", ")}${codes.length > 4 ? ", …" : ""}`,
+            `适用于 ${codes.slice(0, 4).join("、")}${codes.length > 4 ? "…" : ""}`),
+        }
       : {}),
-  });
+  }, lang);
   return base;
 }
 
@@ -314,7 +383,10 @@ function accessoryOption(a: AccessoryOption, bundle: SpecBundle): PreferenceOpti
  * 加价取价格矩阵里 `assembledUpcharge` 的**实际分布**，不是拍一个百分比。
  * 各型号的加价方式可能不同（有的按件、有的按比例），所以给区间而不是单值。
  */
-export function assemblyQuestion(bundle: SpecBundle): PreferenceQuestion | undefined {
+export function assemblyQuestion(
+  bundle: SpecBundle,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion | undefined {
   const upcharges = bundle.priceMatrix
     .map((e) => ({ mod: e.assembledUpcharge, list: e.listPrice }))
     .filter((x): x is { mod: Modifier; list: Money } => x.mod !== undefined);
@@ -327,21 +399,27 @@ export function assemblyQuestion(bundle: SpecBundle): PreferenceQuestion | undef
 
   return {
     key: "assembly",
-    prompt: "Ship flat-pack (RTA) for you to assemble, or assembled?",
-    why: "RTA is cheaper but you (or a hired installer) assemble the set; assembled ships ready but usually costs more to freight.",
+    prompt: msg(lang,
+      "Ship flat-pack (RTA) for you to assemble, or assembled?",
+      "要平板发货（RTA，自行组装），还是组装好发货？"),
+    why: msg(lang,
+      "RTA is cheaper but you (or a hired installer) assemble the set; assembled ships ready but usually costs more to freight.",
+      "RTA 更便宜，但需自行或请人组装；组装好发货省事，运费通常更高。"),
     multiSelect: false,
     options: [
       option({
-        id: "RTA" satisfies AssemblyOption, label: "Flat-pack (RTA) — assemble yourself",
+        id: "RTA" satisfies AssemblyOption,
+        label: msg(lang, "Flat-pack (RTA) — assemble yourself", "平板发货（RTA）— 自行组装"),
         priceImpact: { kind: "included" }, recommended: true,
-      }),
+      }, lang),
       option({
-        id: "assembled" satisfies AssemblyOption, label: "Assembled",
-        detail: "Skip assembly labor",
+        id: "assembled" satisfies AssemblyOption,
+        label: msg(lang, "Assembled", "组装好发货"),
+        detail: msg(lang, "Skip assembly labor", "省去组装人力"),
         priceImpact: low === high
           ? { kind: "perCabinet", amount: low }
           : { kind: "range", low, high },
-      }),
+      }, lang),
     ],
     skippable: false,
   };
@@ -355,35 +433,52 @@ export function assemblyQuestion(bundle: SpecBundle): PreferenceQuestion | undef
  * 这个偏好**不只是外观**：抽屉柜比同宽的门板柜贵，但取放锅具方便得多。
  * 选择结果进排布算法的 `preference` 项（`biasTowardDrawers`），不是记下来给人看。
  */
-export function storageQuestion(bundle: SpecBundle): PreferenceQuestion | undefined {
+export function storageQuestion(
+  bundle: SpecBundle,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion | undefined {
   // 「这家有没有抽屉柜」问能力，不问型号码——与 M5-2 同一条原则：
   // 靠 /^\dDB/ 判断，第二家公司（NW- 命名）会答"没有抽屉柜"而其实有
   const hasDrawers = bundle.modules.some(
     (m) => m.type === "base" && hasRole(m, "drawerStorage") && !hasRole(m, "doorStorage"));
   if (!hasDrawers) return undefined;
 
+  const layoutDelta = msg(lang,
+    "Depends on the final layout",
+    "取决于最终排布");
+  const layoutDeltaAfter = msg(lang,
+    "Depends on the final layout — delta shows after we generate",
+    "取决于最终排布——出图后才能看到价差");
+
   return {
     key: "storage",
-    prompt: "Prefer drawers or doors on the base run?",
-    why: "Drawers are easier for pots and pans (no deep crouching), but cost more than door cabinets of the same width. Highest payoff near the range and sink.",
+    prompt: msg(lang,
+      "Prefer drawers or doors on the base run?",
+      "地柜更倾向抽屉还是门板柜？"),
+    why: msg(lang,
+      "Drawers are easier for pots and pans (no deep crouching), but cost more than door cabinets of the same width. Highest payoff near the range and sink.",
+      "抽屉取锅更方便（不用深蹲），但比同宽门板柜贵。灶台与水槽附近收益最大。"),
     multiSelect: false,
     options: [
       option({
-        id: "drawers", label: "As many drawers as possible",
-        detail: "Most convenient, highest cost",
-        priceImpact: { kind: "unknown", reason: "Depends on the final layout — delta shows after we generate" },
-      }),
+        id: "drawers",
+        label: msg(lang, "As many drawers as possible", "尽量多抽屉"),
+        detail: msg(lang, "Most convenient, highest cost", "最方便，成本最高"),
+        priceImpact: { kind: "unknown", reason: layoutDeltaAfter },
+      }, lang),
       option({
-        id: "balanced", label: "Drawers near range/sink; doors elsewhere",
-        detail: "Common approach",
-        priceImpact: { kind: "unknown", reason: "Depends on the final layout" },
+        id: "balanced",
+        label: msg(lang, "Drawers near range/sink; doors elsewhere", "灶台/水槽旁抽屉，其余门板"),
+        detail: msg(lang, "Common approach", "常见做法"),
+        priceImpact: { kind: "unknown", reason: layoutDelta },
         recommended: true,
-      }),
+      }, lang),
       option({
-        id: "doors", label: "Mostly door cabinets",
-        detail: "Lowest cost",
-        priceImpact: { kind: "unknown", reason: "Depends on the final layout" },
-      }),
+        id: "doors",
+        label: msg(lang, "Mostly door cabinets", "以门板柜为主"),
+        detail: msg(lang, "Lowest cost", "成本最低"),
+        priceImpact: { kind: "unknown", reason: layoutDelta },
+      }, lang),
     ],
     skippable: true,
   };
@@ -398,28 +493,47 @@ export function storageQuestion(bundle: SpecBundle): PreferenceQuestion | undefi
  * 冰箱，都没识别到就一个家电也不放——而没有哪家厨房是没冰箱的。
  * 家电是客户已经拥有或已经选定的东西，得问。
  */
-export function applianceQuestion(): PreferenceQuestion {
+export function applianceQuestion(
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion {
   const kinds: ApplianceKind[] = [
     "refrigerator", "range", "wallOven", "rangeHood", "dishwasher", "microwave",
   ];
-  const why =
-    "Appliances take wall space out of the cabinet run — 3\" can cost you a whole cabinet. " +
-    "Fridge handle side and both sides of the range also need landing clearance, which reshapes the layout.";
+  const why = msg(lang,
+    "Appliances take wall space out of the cabinet run — 3\" can cost you a whole cabinet. "
+      + "Fridge handle side and both sides of the range also need landing clearance, which reshapes the layout.",
+    "家电会占掉柜体墙面——差 3\" 可能少一整柜。"
+      + "冰箱把手侧与灶台两侧还要落台空间，会改变整段排布。");
+  const priceReason = msg(lang,
+    "Appliances aren't in the quote; they change cabinet count",
+    "家电不计入报价；会改变柜体数量");
 
   return {
     key: "appliances",
-    prompt: "Which appliances will be in the kitchen?",
+    prompt: msg(lang, "Which appliances will be in the kitchen?", "这间厨房会有哪些家电？"),
     why,
     multiSelect: true,
     options: kinds.map((kind) => option({
       id: kind,
-      label: APPLIANCE_LABEL[kind],
-      ...(kind === "rangeHood" ? { detail: "Uses the wall-cabinet bay above the range" } : {}),
-      ...(kind === "dishwasher" ? { detail: "Needs to sit next to the sink (NKBA: within 36\")" } : {}),
-      priceImpact: { kind: "unknown", reason: "Appliances aren't in the quote; they change cabinet count" },
+      label: applianceLabel(kind, lang),
+      ...(kind === "rangeHood"
+        ? {
+            detail: msg(lang,
+              "Uses the wall-cabinet bay above the range",
+              "占用灶台上方的吊柜位"),
+          }
+        : {}),
+      ...(kind === "dishwasher"
+        ? {
+            detail: msg(lang,
+              "Needs to sit next to the sink (NKBA: within 36\")",
+              "需紧邻水槽（NKBA：36\" 以内）"),
+          }
+        : {}),
+      priceImpact: { kind: "unknown", reason: priceReason },
       ...(kind === "refrigerator" || kind === "range" || kind === "dishwasher"
         ? { recommended: true } : {}),
-    })),
+    }, lang)),
     skippable: false,
   };
 }
@@ -431,42 +545,64 @@ export function applianceQuestion(): PreferenceQuestion {
  * 继续，是把系统的困难转嫁给他。选了它就走常见尺寸，但会标成推定值
  * （`provenance: "assumed"`），并在图纸解释与硬约束提示里如实说明。
  */
-export function applianceWidthQuestion(kind: ApplianceKind): PreferenceQuestion | undefined {
+export function applianceWidthQuestion(
+  kind: ApplianceKind,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion | undefined {
   const widths = COMMON_WIDTHS[kind];
   if (!widths || widths.length === 0) return undefined;
-  const label = APPLIANCE_LABEL[kind];
+  const label = applianceLabel(kind, lang);
+  const affectReason = msg(lang,
+    "Affects how many cabinets fit, not unit price",
+    "影响能排几个柜子，不改变单价");
 
   return {
     key: "applianceWidths",
-    prompt: `How wide is the ${label}?`,
-    why: "We'll reserve the bay to your size (fridge also needs 1\" clearance each side). " +
-      "Guessing a common size means a wider unit won't fit, or a narrower one wastes storage.",
+    prompt: msg(lang, `How wide is the ${label}?`, `${label}多宽？`),
+    why: msg(lang,
+      "We'll reserve the bay to your size (fridge also needs 1\" clearance each side). "
+        + "Guessing a common size means a wider unit won't fit, or a narrower one wastes storage.",
+      "我们会按你的尺寸留位（冰箱两侧各还需 1\" 间隙）。"
+        + "猜常见尺寸时：偏大装不进，偏小会浪费储物空间。"),
     multiSelect: false,
     options: [
       ...widths.map((w, i) => option({
         id: `${kind}:${w}`,
         label: `${w}"`,
-        ...(widthDetail(kind, w) ? { detail: widthDetail(kind, w)! } : {}),
-        priceImpact: { kind: "unknown", reason: "Affects how many cabinets fit, not unit price" },
+        ...(widthDetail(kind, w, lang) ? { detail: widthDetail(kind, w, lang)! } : {}),
+        priceImpact: { kind: "unknown", reason: affectReason },
         ...(i === Math.floor(widths.length / 2) ? { recommended: true } : {}),
-      })),
+      }, lang)),
       option({
         id: `${kind}:unsure`,
-        label: "I'll measure and come back",
-        detail: `Reserve a common ${label} width for now; the drawing will mark it as assumed`,
-        priceImpact: { kind: "unknown", reason: "Common size reserved; changeable later" },
-      }),
+        label: msg(lang, "I'll measure and come back", "我量好了再说"),
+        detail: msg(lang,
+          `Reserve a common ${label} width for now; the drawing will mark it as assumed`,
+          `先按常见 ${label} 宽度预留；图纸上会标明为推定`),
+        priceImpact: {
+          kind: "unknown",
+          reason: msg(lang, "Common size reserved; changeable later", "先按常见尺寸预留，之后可改"),
+        },
+      }, lang),
     ],
     skippable: true,
   };
 }
 
 /** 常见宽度的口语化说明。没有说法的就不编一个。 */
-function widthDetail(kind: ApplianceKind, width: number): string | undefined {
+function widthDetail(
+  kind: ApplianceKind,
+  width: number,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): string | undefined {
   if (kind !== "refrigerator") return undefined;
-  if (width === 30) return "Narrow — common in small kitchens";
-  if (width === 33) return "Most common";
-  if (width === 36) return "French door / side-by-side";
+  if (width === 30) {
+    return msg(lang, "Narrow — common in small kitchens", "窄款——小厨房常见");
+  }
+  if (width === 33) return msg(lang, "Most common", "最常见");
+  if (width === 36) {
+    return msg(lang, "French door / side-by-side", "法式对开 / 对开门");
+  }
   return undefined;
 }
 
@@ -476,30 +612,40 @@ function widthDetail(kind: ApplianceKind, width: number): string | undefined {
  * 位置是客户的偏好，不是几何推导的结果。排布器会尽量满足；满足不了要说明，
  * 不静默忽略——「你说想靠近入口，但那面墙放不下 35" 的冰箱位」是有用的信息。
  */
-export function appliancePlacementQuestion(kind: ApplianceKind): PreferenceQuestion {
-  const label = APPLIANCE_LABEL[kind];
+export function appliancePlacementQuestion(
+  kind: ApplianceKind,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion {
+  const label = applianceLabel(kind, lang);
+  const noPrice = msg(lang, "Doesn't change unit price", "不改变单价");
   return {
     key: "appliances",
-    prompt: `Where should the ${label} go?`,
-    why: `${label} placement drives the work triangle: fridge needs ≥15" landing on the handle side, ` +
-      "the range needs hot-pan landing on both sides, and sink + dishwasher stay together.",
+    prompt: msg(lang, `Where should the ${label} go?`, `${label}想放在哪？`),
+    why: msg(lang,
+      `${label} placement drives the work triangle: fridge needs ≥15" landing on the handle side, `
+        + "the range needs hot-pan landing on both sides, and sink + dishwasher stay together.",
+      `${label}的位置影响工作三角：冰箱把手侧需 ≥15" 落台，`
+        + "灶台两侧要能放热锅，水槽与洗碗机应相邻。"),
     multiSelect: false,
     options: [
       option({
-        id: `${kind}:nearEntry`, label: "Near the entry",
-        detail: "Drop groceries as you walk in",
-        priceImpact: { kind: "unknown", reason: "Doesn't change unit price" },
+        id: `${kind}:nearEntry`,
+        label: msg(lang, "Near the entry", "靠近入口"),
+        detail: msg(lang, "Drop groceries as you walk in", "进门就能放下菜"),
+        priceImpact: { kind: "unknown", reason: noPrice },
         recommended: kind === "refrigerator",
-      }),
+      }, lang),
       option({
-        id: `${kind}:nearSink`, label: "Near the sink",
-        priceImpact: { kind: "unknown", reason: "Doesn't change unit price" },
-      }),
+        id: `${kind}:nearSink`,
+        label: msg(lang, "Near the sink", "靠近水槽"),
+        priceImpact: { kind: "unknown", reason: noPrice },
+      }, lang),
       option({
-        id: `${kind}:any`, label: "Not sure — you decide",
-        detail: "Place by ergonomics and traffic flow",
-        priceImpact: { kind: "unknown", reason: "Doesn't change unit price" },
-      }),
+        id: `${kind}:any`,
+        label: msg(lang, "Not sure — you decide", "不确定——你来定"),
+        detail: msg(lang, "Place by ergonomics and traffic flow", "按人体工学与动线放置"),
+        priceImpact: { kind: "unknown", reason: noPrice },
+      }, lang),
     ],
     skippable: true,
   };
@@ -524,7 +670,10 @@ export interface BudgetContext {
  * 区间从 `GenericCatalog` 的典型价推出来；来源未核实时如实标注，
  * 不让占位数字冒充行业数据（检查清单 A4）。
  */
-export function budgetQuestion(ctx: BudgetContext): PreferenceQuestion | undefined {
+export function budgetQuestion(
+  ctx: BudgetContext,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion | undefined {
   const inches = ctx.baseRunInches;
   if (!inches || inches <= 0) return undefined;
 
@@ -540,31 +689,47 @@ export function budgetQuestion(ctx: BudgetContext): PreferenceQuestion | undefin
 
   const caveat = ctx.sourceVerified
     ? ""
-    : " (Ranges use the platform reference catalog and are not fully verified item-by-item — for order-of-magnitude only.)";
+    : msg(lang,
+      " (Ranges use the platform reference catalog and are not fully verified item-by-item — for order-of-magnitude only.)",
+      "（区间来自平台参考目录，尚未逐项核实——仅供量级感知。）");
 
   return {
     key: "budgetBand",
-    prompt: `For a kitchen this size (about ${Math.round(inches)}" of base run), the cabinet portion usually lands in these bands — which fits you?`,
-    why: `The band steers door-tier and accessory trade-offs. Cabinets only — no countertops, appliances, or install.${caveat}`,
+    prompt: msg(lang,
+      `For a kitchen this size (about ${Math.round(inches)}" of base run), the cabinet portion usually lands in these bands — which fits you?`,
+      `按这个厨房尺寸（地柜走长约 ${Math.round(inches)}"），柜体部分通常落在这些档位——哪一档更贴近你？`),
+    why: msg(lang,
+      `The band steers door-tier and accessory trade-offs. Cabinets only — no countertops, appliances, or install.${caveat}`,
+      `档位会影响门板档次与配件取舍。仅柜体——不含台面、家电与安装。${caveat}`),
     multiSelect: false,
     options: [
       option({
-        id: "economy", label: "Keep cost down",
+        id: "economy",
+        label: msg(lang, "Keep cost down", "尽量控制成本"),
         priceImpact: { kind: "range", low, high: mid },
-      }),
+      }, lang),
       option({
-        id: "standard", label: "Mid range — value first",
+        id: "standard",
+        label: msg(lang, "Mid range — value first", "中档——性价比优先"),
         priceImpact: { kind: "range", low: mid, high },
         recommended: true,
-      }),
+      }, lang),
       option({
-        id: "premium", label: "No hard cap — finish first",
-        priceImpact: { kind: "unknown", reason: "Depends on door and accessory choices" },
-      }),
+        id: "premium",
+        label: msg(lang, "No hard cap — finish first", "不设硬顶——效果优先"),
+        priceImpact: {
+          kind: "unknown",
+          reason: msg(lang, "Depends on door and accessory choices", "取决于门板与配件选择"),
+        },
+      }, lang),
       option({
-        id: "unsure", label: "Not sure yet — show options first",
-        priceImpact: { kind: "unknown", reason: "Not chosen" },
-      }),
+        id: "unsure",
+        label: msg(lang, "Not sure yet — show options first", "还没想好——先看选项"),
+        priceImpact: {
+          kind: "unknown",
+          reason: msg(lang, "Not chosen", "尚未选择"),
+        },
+      }, lang),
     ],
     skippable: true,
   };
@@ -578,16 +743,37 @@ export function budgetQuestion(ctx: BudgetContext): PreferenceQuestion | undefin
  * 这个问题看着虚，但它决定了后续每一次"要不要加这个配件"的默认答案。
  * 没有它，系统只能每次都问一遍。
  */
-export function tradeoffQuestion(): PreferenceQuestion {
+export function tradeoffQuestion(
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion {
   return {
     key: "tradeoff",
-    prompt: "If the budget needs trade-offs, which one do you want to keep first?",
-    why: "With this, later trade-offs can follow your priority instead of asking every time.",
+    prompt: msg(lang,
+      "If the budget needs trade-offs, which one do you want to keep first?",
+      "预算需要取舍时，你最想先保住哪一项？"),
+    why: msg(lang,
+      "With this, later trade-offs can follow your priority instead of asking every time.",
+      "有了这个，后续取舍可按你的优先级走，不必每次都问。"),
     multiSelect: false,
     options: [
-      option({ id: "price", label: "Total price", detail: "Keep accessories and upgrades light", priceImpact: { kind: "included" } }),
-      option({ id: "quality", label: "Materials & hardware", detail: "Panels can be plain; hardware shouldn't be", priceImpact: { kind: "included" } }),
-      option({ id: "lookAndFeel", label: "Look & finish", detail: "Door style and color first", priceImpact: { kind: "included" } }),
+      option({
+        id: "price",
+        label: msg(lang, "Total price", "总价"),
+        detail: msg(lang, "Keep accessories and upgrades light", "配件与升级从简"),
+        priceImpact: { kind: "included" },
+      }, lang),
+      option({
+        id: "quality",
+        label: msg(lang, "Materials & hardware", "板材与五金"),
+        detail: msg(lang, "Panels can be plain; hardware shouldn't be", "面板可以朴素，五金别省"),
+        priceImpact: { kind: "included" },
+      }, lang),
+      option({
+        id: "lookAndFeel",
+        label: msg(lang, "Look & finish", "观感与饰面"),
+        detail: msg(lang, "Door style and color first", "门板样式与颜色优先"),
+        priceImpact: { kind: "included" },
+      }, lang),
     ],
     skippable: true,
   };
@@ -603,6 +789,7 @@ export interface QuestionSetInput {
   /** 每轮最多问几题——沿用 trade/consumer 的交互差异。 */
   maxPerTurn: number;
   estimatedCabinetCount?: number;
+  language?: UiLanguage;
 }
 
 /**
@@ -613,20 +800,22 @@ export interface QuestionSetInput {
  */
 export function buildQuestionSet(input: QuestionSetInput): PreferenceQuestion[] {
   const { bundle, answered } = input;
+  const lang = input.language ?? DEFAULT_LANGUAGE;
   const all: (PreferenceQuestion | undefined)[] = [
-    input.budget ? budgetQuestion(input.budget) : undefined,
-    bundle ? doorStyleQuestion(bundle) : undefined,
-    bundle ? boxMaterialQuestion(bundle) : undefined,
-    bundle ? storageQuestion(bundle) : undefined,
-    bundle ? assemblyQuestion(bundle) : undefined,
+    input.budget ? budgetQuestion(input.budget, lang) : undefined,
+    bundle ? doorStyleQuestion(bundle, lang) : undefined,
+    bundle ? boxMaterialQuestion(bundle, lang) : undefined,
+    bundle ? storageQuestion(bundle, lang) : undefined,
+    bundle ? assemblyQuestion(bundle, lang) : undefined,
     bundle
       ? hardwareQuestion(bundle, {
           ...(input.estimatedCabinetCount !== undefined
             ? { estimatedCabinetCount: input.estimatedCabinetCount } : {}),
+          language: lang,
         })
       : undefined,
-    bundle ? accessoryQuestion(bundle) : undefined,
-    tradeoffQuestion(),
+    bundle ? accessoryQuestion(bundle, lang) : undefined,
+    tradeoffQuestion(lang),
   ];
 
   return all
@@ -665,14 +854,16 @@ export function buildApplianceQuestions(input: {
   /** 客户是否已经答过「有哪些家电」。没答过就先问这个。 */
   kindsAnswered: boolean;
   maxPerTurn: number;
+  language?: UiLanguage;
 }): PreferenceQuestion[] {
-  if (!input.kindsAnswered) return [applianceQuestion()];
+  const lang = input.language ?? DEFAULT_LANGUAGE;
+  if (!input.kindsAnswered) return [applianceQuestion(lang)];
 
   // 只对**推定尺寸**的家电追问宽度——客户已经给了准确数字的不再打扰
   const out: PreferenceQuestion[] = [];
   for (const a of input.known) {
     if (a.provenance !== "assumed") continue;
-    const q = applianceWidthQuestion(a.kind);
+    const q = applianceWidthQuestion(a.kind, lang);
     if (q) out.push(q);
   }
   return out.slice(0, Math.max(1, input.maxPerTurn));
@@ -744,6 +935,9 @@ export function validatePreferences(
       throw new PreferenceError("language must be en or zh");
     }
     shared.language = raw.language;
+  }
+  if (raw.layoutHints !== undefined && typeof raw.layoutHints === "object") {
+    shared.layoutHints = { ...raw.layoutHints };
   }
   return { shared, company };
 }

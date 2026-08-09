@@ -1,0 +1,120 @@
+/**
+ * 外部测试回归：省份误匹配、对话上下水同步到 Design Basis。
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { missingFields, hasProvinceMention } from "../src/agents/orchestrator.js";
+import { evaluateDesignReadiness, matchProvince } from "../src/design/readiness.js";
+import {
+  applyChatPlumbingAnswer, chatConfirmedPlumbing, parsePlumbingFromChat,
+} from "../src/design/chat-site-answers.js";
+import type { Conversation } from "../src/domain/types.js";
+import type { FloorPlan } from "../src/floorplan/types.js";
+
+const AT = "2026-06-01T00:00:00.000Z";
+
+function conv(over: Partial<Conversation> = {}): Conversation {
+  return {
+    id: "cv_1",
+    customerAccountId: "ca_1",
+    messages: [],
+    designRequirements: "",
+    perCompanyThreads: [],
+    createdAt: AT,
+    ...over,
+  };
+}
+
+function planTwoWalls(): FloorPlan {
+  return {
+    id: "fp_1",
+    conversationId: "cv_1",
+    sourceFile: { name: "k.png", mimeType: "image/png", sizeBytes: 1 },
+    parsedGeometry: {
+      wallRuns: [
+        {
+          id: "wr_a", label: "Wall A", length: 120,
+          startsAtCorner: true, endsAtCorner: true, features: [],
+        },
+        {
+          id: "wr_b", label: "Wall B", length: 100,
+          startsAtCorner: true, endsAtCorner: true, features: [],
+        },
+      ],
+      ceilingHeight: 96,
+      confidence: 0.9,
+    },
+    parseConfidence: 0.9,
+    unresolvedItems: [],
+    createdAt: AT,
+    updatedAt: AT,
+  };
+}
+
+test("BC省不会被英文 on 抢成 Ontario", () => {
+  assert.equal(matchProvince("BC省")?.code, "BC");
+  assert.equal(matchProvince("我在BC省")?.code, "BC");
+  assert.equal(matchProvince("sink on left wall, BC省")?.code, "BC");
+  assert.equal(matchProvince("Plumbing on Wall A ~60\", BC省")?.code, "BC");
+  assert.equal(matchProvince("Modern style on a budget, BC省")?.code, "BC");
+  assert.equal(matchProvince("Ontario ON")?.code, "ON");
+  assert.equal(matchProvince("British Columbia BC")?.code, "BC");
+});
+
+test("英文介词 on 不能让 missingFields 认为省份已填", () => {
+  assert.equal(hasProvinceMention("sink on left wall"), false);
+  assert.ok(missingFields("Modern style\nsink on left wall\nbudget CAD $10k").includes("province"));
+  assert.equal(hasProvinceMention("BC省"), true);
+  assert.equal(hasProvinceMention("Ontario ON"), true);
+  assert.ok(!missingFields("Modern style\nBC省\nbudget CAD $10k").includes("province"));
+});
+
+test("对话确认 sink on left wall 写入 plumbing feature", () => {
+  const fp = planTwoWalls();
+  const parsed = parsePlumbingFromChat("sink on left wall", fp);
+  assert.ok(parsed);
+  assert.equal(parsed!.wallRunId, "wr_a"); // left → 第一面墙
+  const next = applyChatPlumbingAnswer(fp, "sink on left wall", AT);
+  assert.ok(next);
+  assert.ok(next!.parsedGeometry.wallRuns[0]!.features.some((f) => f.kind === "plumbing"));
+});
+
+test("对话确认上下水后 Design Basis 不再显示 not confirmed", () => {
+  const req = "Modern style\nBudget CAD $10-20k\nBC省\nAppliances later\nNo windows\nsink on left wall";
+  assert.equal(chatConfirmedPlumbing(req), true);
+  const r = evaluateDesignReadiness({
+    conversation: conv({ designRequirements: req }),
+    plan: planTwoWalls(),
+    language: "en",
+  });
+  const plumbing = r.items.find((i) => i.id === "plumbing");
+  assert.equal(plumbing?.status, "ok");
+  assert.doesNotMatch(plumbing?.brief ?? "", /not confirmed/i);
+  assert.equal(r.items.find((i) => i.id === "province")?.status, "ok");
+  assert.match(r.items.find((i) => i.id === "province")?.brief ?? "", /British Columbia|BC/i);
+});
+
+test("门板偏好可满足风格关键项", () => {
+  const r = evaluateDesignReadiness({
+    conversation: conv({
+      designRequirements: "Budget CAD $10-20k\nOntario ON\nAppliances later\nNo windows",
+      preferences: {
+        shared: {},
+        byCompany: { co_1: { doorStyleId: "ds_shaker_white" } },
+      },
+    }),
+    plan: {
+      ...planTwoWalls(),
+      parsedGeometry: {
+        ...planTwoWalls().parsedGeometry,
+        wallRuns: [{
+          id: "wr_a", label: "Wall A", length: 120,
+          startsAtCorner: true, endsAtCorner: true,
+          features: [{ id: "wf_1", kind: "plumbing", offset: 48, width: 24 }],
+        }],
+      },
+    },
+    language: "en",
+  });
+  assert.equal(r.items.find((i) => i.id === "style")?.status, "ok");
+});

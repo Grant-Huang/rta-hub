@@ -576,7 +576,7 @@ async function main(): Promise<void> {
   check(retention.__status === 200, "留存清除计划出得来", "留存清除计划出不来", sb);
   sb.push({
     kind: "warn",
-    text: "⚠ 清除计划只生成不执行——定时任务尚未接线（上线阻断项 B6，需部署侧配 cron）",
+    text: "留存清除：计划已生成；定时任务见 RETENTION_CRON_MS / POST /api/admin/retention/run（B6）",
   });
 
   const noAuth = await call("/api/admin/launch-gates");

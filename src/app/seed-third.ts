@@ -60,6 +60,17 @@ export const thirdSpecVersion: ProductSpecVersion = {
   currency: "CAD",
   construction: "frameless",
   overlay: "full",
+  codingRules: {
+    usesBoxDoorSuffixes: false,
+    prefixGuide: [
+      { pattern: "^BL-B", meaning: "Birchline base", mapsToRoles: ["doorStorage", "drawerStorage"] },
+      { pattern: "^BL-SK", meaning: "sink base", mapsToRoles: ["sinkBase"] },
+      { pattern: "^BL-W", meaning: "wall cabinet", mapsToRoles: ["doorStorage"] },
+      { pattern: "^BL-PC", meaning: "split pantry segment (stackable)", mapsToRoles: ["doorStorage"] },
+      { pattern: "^BL-CW|^BL-LS", meaning: "corner wall / lazy susan", mapsToRoles: ["cornerAccess"] },
+      { pattern: "^BL-F|^BL-TK", meaning: "filler / toe kick", mapsToRoles: ["trim"] },
+    ],
+  },
   effectiveFrom: NOW,
   publishedAt: NOW,
   publishedBy: "ops@birchline.example",

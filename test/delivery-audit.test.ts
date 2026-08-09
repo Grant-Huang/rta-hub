@@ -21,11 +21,12 @@ import type { Money } from "../src/domain/money.js";
 const zh = { language: "zh" as const };
 
 const wall: WallRun = {
-  id: "wr_1", label: "北墙", length: 144,
+  id: "wr_1", label: "北墙", length: 216,
   startsAtCorner: false, endsAtCorner: false,
   features: [
-    { id: "f_w", kind: "window", offset: 60, width: 36 },
-    { id: "f_p", kind: "plumbing", offset: 66, width: 24 },
+    { id: "f_w", kind: "window", offset: 48, width: 36 },
+    // 上下水靠一端，另一侧留给默认冰箱+灶（中置会让 soft sink 把家电挤没）
+    { id: "f_p", kind: "plumbing", offset: 24, width: 24 },
   ],
 };
 const geometry: ParsedGeometry = { wallRuns: [wall], ceilingHeight: 96, confidence: 1 };
@@ -40,6 +41,34 @@ const emptyList = (delta: number): QuoteList => ({
 });
 
 // ── 基本形状 ──────────────────────────────────────────────────────────────
+
+test("家电放不下时 APPLIANCE_FIT 阻断交付", () => {
+  const short: WallRun = {
+    id: "wr_s", label: "北墙", length: 84,
+    startsAtCorner: false, endsAtCorner: false,
+    features: [{ id: "f_p", kind: "plumbing", offset: 36, width: 24 }],
+  };
+  const geo: ParsedGeometry = { wallRuns: [short], ceilingHeight: 96, confidence: 1 };
+  const apps = [
+    applianceFrom({ kind: "refrigerator", width: 36 }),
+    applianceFrom({ kind: "range", width: 30 }),
+  ];
+  const bad = generateLayout(geo, pilotModules, {
+    ceilingHeight: 96, appliances: apps, language: "zh",
+  });
+  assert.equal(bad.acceptable, false);
+  assert.ok(bad.warnings.some((w) => w.code === "APPLIANCE_NO_ROOM"));
+  const r = auditDeliverable({
+    ...zh,
+    deliverable: "planView",
+    stage: "planReview",
+    layout: bad,
+    wallRuns: [short],
+    appliances: apps,
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.blockers.some((b) => b.code === "APPLIANCE_FIT"));
+});
 
 test("干净的方案能过，并且报出**查了哪几项**", () => {
   const r = auditDeliverable({ ...zh, 
@@ -106,7 +135,7 @@ test("柜体超出墙长会被抓住——SVG 照画不误，到现场才发现�
   const bad: GeneratedLayout = {
     ...layout,
     placements: [
-      { kind: "cabinet", layer: "base", wallRunId: wall.id, x: 130, width: 36,
+      { kind: "cabinet", layer: "base", wallRunId: wall.id, x: wall.length - 12, width: 36,
         height: 34.5, depth: 24, moduleCode: "B36" },
     ],
   };

@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>RTA-Hub · System trainer</title>
+<script src="/ui-i18n.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"IBM Plex Sans","Segoe UI",sans-serif;
+         background:#0e1116; color:#e7eaf0; height:100vh; display:flex; flex-direction:column; }
+  header { padding:12px 16px; border-bottom:1px solid #2a3140; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .hint { font-size:11px; color:#8b94a3; flex:1; }
+  input, button { font: inherit; }
+  input { background:#171c24; border:1px solid #2a3140; color:inherit; border-radius:8px; padding:7px 10px; }
+  button { background:#2f6fed; border:none; color:#fff; padding:7px 12px; border-radius:8px; cursor:pointer; }
+  button.ghost { background:#262b33; }
+  button.warn { background:#8a4b2e; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  main { flex:1; min-height:0; display:grid; grid-template-columns:1fr 380px; }
+  .pane { min-width:0; min-height:0; display:flex; flex-direction:column; border-right:1px solid #2a3140; }
+  .pane:last-child { border-right:none; }
+  .pane h2 { margin:0; padding:10px 12px; font-size:12px; color:#9aa4b2; font-weight:500; border-bottom:1px solid #2a3140; }
+  .log { flex:1; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .msg { max-width:92%; padding:8px 12px; border-radius:10px; font-size:13px; line-height:1.5; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; background:#2a5bd7; }
+  .msg.assistant { align-self:flex-start; background:#1c2129; }
+  .composer { display:flex; gap:8px; padding:10px 12px; border-top:1px solid #2a3140; }
+  .composer input { flex:1; }
+  .cards { flex:1; overflow:auto; padding:10px; }
+  .card { border:1px solid #2a3140; border-radius:10px; padding:10px; margin-bottom:8px; background:#151a22; }
+  .card .title { font-size:13px; font-weight:600; margin:0 0 4px; }
+  .card .meta { font-size:11px; color:#8b94a3; margin-bottom:6px; }
+  .card .body { font-size:12.5px; color:#c6cdd6; white-space:pre-wrap; margin-bottom:8px; }
+  .card .actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .tag { display:inline-block; font-size:10px; padding:2px 6px; border-radius:6px; background:#262b33; margin-right:4px; }
+  .tag.sink { background:#1e3566; color:#9ec0ff; }
+  .err { color:#f0a0a0; font-size:12px; padding:8px 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 data-i18n="adminTrainerH1">System trainer</h1>
+  <span class="hint"><span data-i18n="adminTrainerHint">FR-22 · Teach defaults / process; settle by target · </span>
+    <a href="/admin" style="color:#9ec0ff" data-i18n="adminNavReview">Review</a> ·
+    <a href="/admin/l1-learn" style="color:#9ec0ff" data-i18n="adminNavL1">L1 queue</a> ·
+    <a href="/admin/regression" style="color:#9ec0ff" data-i18n="adminNavRegression">Regression</a></span>
+  <input id="token" type="password" placeholder="X-Admin-Token" style="width:180px" />
+  <button type="button" id="btnNew" class="ghost" data-i18n="adminNewSession">New session</button>
+  <button type="button" class="ghost" id="langBtn" data-i18n="langToggle" data-i18n-title="langToggleTitle">中文</button>
+</header>
+<main>
+  <section class="pane">
+    <h2 data-i18n="adminTrainerChat">Training chat</h2>
+    <div class="log" id="log"></div>
+    <div class="err" id="err" hidden></div>
+    <form class="composer" id="form">
+      <input id="input" data-i18n-placeholder="adminTrainerPlaceholder" placeholder="e.g. Usually no separate range cabinet…" autocomplete="off" />
+      <button type="submit" data-i18n="send">Send</button>
+    </form>
+  </section>
+  <aside class="pane">
+    <h2 data-i18n="adminKnowledgeCards">Session knowledge cards (settle targets)</h2>
+    <div class="cards" id="cards"></div>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const t = (...a) => window.RTA_UI.t(...a);
+function applyI18n() {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang());
+  document.title = t("adminTrainerTitle");
+  window.RTA_UI.applyDataI18n();
+  $("langBtn").textContent = t("langToggle");
+}
+applyI18n();
+$("langBtn").onclick = () => {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang() === "zh" ? "en" : "zh");
+  applyI18n();
+  if (convId) refresh().catch(() => {});
+};
+let convId = null;
+const cardsById = new Map();
+
+function token() {
+  const t = $("token").value.trim() || localStorage.getItem("rta-admin-token") || "";
+  if ($("token").value.trim()) localStorage.setItem("rta-admin-token", $("token").value.trim());
+  return t || localStorage.getItem("rta-admin-token") || "";
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    ...opts,
+    headers: {
+      "content-type": "application/json",
+      "x-admin-token": token(),
+      ...(opts.headers || {}),
+    },
+  });
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { message: text }; }
+  if (!r.ok) throw new Error(data.message || data.error || r.statusText);
+  return data;
+}
+
+function showErr(msg) {
+  const el = $("err");
+  if (!msg) { el.hidden = true; el.textContent = ""; return; }
+  el.hidden = false;
+  el.textContent = msg;
+}
+
+function renderLog(messages) {
+  const log = $("log");
+  log.innerHTML = "";
+  for (const m of messages || []) {
+    const d = document.createElement("div");
+    d.className = "msg " + m.role;
+    d.textContent = m.content;
+    log.appendChild(d);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderCards(list) {
+  const root = $("cards");
+  root.innerHTML = "";
+  for (const c of list) {
+    cardsById.set(c.id, c);
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `
+      <div class="title">${escapeHtml(c.title)}</div>
+      <div class="meta">
+        <span class="tag sink">→ ${escapeHtml(c.settleTarget)}</span>
+        <span class="tag">${escapeHtml(c.status)}</span>
+        <span class="tag">${escapeHtml(c.settleStatus || "—")}</span>
+        <span class="tag">${escapeHtml(c.kind)}</span>
+      </div>
+      <div class="body">${escapeHtml(c.body?.en || "")}</div>
+      <div class="actions"></div>`;
+    const actions = el.querySelector(".actions");
+    if (c.status === "draft" || c.status === "confirmed") {
+      actions.appendChild(btn(t("adminConfirm"), () => patch(c.id, { confirm: true })));
+      actions.appendChild(btn(t("adminPublish"), () => post(`/api/admin/knowledge/${c.id}/publish`)));
+    }
+    if (c.status === "published") {
+      actions.appendChild(btn(t("adminDeprecate"), () => post(`/api/admin/knowledge/${c.id}/deprecate`), "warn"));
+      if (c.settleTarget === "review.rule") {
+        actions.appendChild(btn(t("adminPromoteList"), () => showPromote(c.id), "ghost"));
+        if (c.settleStatus === "awaiting_code_settle") {
+          actions.appendChild(btn(t("adminMarkSettled"), () => markSettled(c.id), "ghost"));
+        }
+      }
+    }
+    root.appendChild(el);
+  }
+  if (!list.length) {
+    root.innerHTML = `<div class="meta" style="padding:8px">${t("adminCardsEmpty")}</div>`;
+  }
+}
+
+function btn(label, onClick, cls) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = label;
+  if (cls) b.className = cls;
+  b.onclick = onClick;
+  return b;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (ch) =>
+    ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[ch]));
+}
+
+async function refresh() {
+  if (!convId) return;
+  const res = await api(`/api/admin/trainer/conversations/${convId}`);
+  renderLog(res.data.conversation.messages);
+  renderCards(res.data.cards || []);
+}
+
+async function newConv() {
+  showErr("");
+  const res = await api("/api/admin/trainer/conversations", { method: "POST", body: "{}" });
+  convId = res.data.conversation.id;
+  localStorage.setItem("rta-trainer-conv", convId);
+  renderLog([]);
+  renderCards([]);
+}
+
+async function send(text) {
+  if (!convId) await newConv();
+  const res = await api(`/api/admin/trainer/conversations/${convId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+  if (res.data.rejected) showErr(`${res.data.rejected.code}: ${res.data.rejected.message}`);
+  else showErr("");
+  renderLog(res.data.conversation.messages);
+  // merge proposed into refresh
+  await refresh();
+}
+
+async function patch(id, body) {
+  await api(`/api/admin/knowledge/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+  await refresh();
+}
+
+async function post(path) {
+  await api(path, { method: "POST", body: "{}" });
+  await refresh();
+}
+
+async function showPromote(id) {
+  const res = await api(`/api/admin/knowledge/${id}/promote`);
+  const steps = (res.data.checklist.steps || [])
+    .map((s) => `${s.n}. ${s.action}\n${s.detail}`).join("\n\n");
+  alert(steps || "no checklist");
+}
+
+async function markSettled(id) {
+  const note = prompt(t("adminSettleNotePrompt"), "settled in code");
+  if (note == null) return;
+  await api(`/api/admin/knowledge/${id}/mark-settled`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+  await refresh();
+}
+
+$("btnNew").onclick = () => newConv().catch((e) => showErr(e.message));
+$("form").onsubmit = (e) => {
+  e.preventDefault();
+  const text = $("input").value.trim();
+  if (!text) return;
+  $("input").value = "";
+  send(text).catch((err) => showErr(err.message));
+};
+
+$("token").value = localStorage.getItem("rta-admin-token") || "";
+const saved = localStorage.getItem("rta-trainer-conv");
+if (saved && $("token").value) {
+  convId = saved;
+  refresh().catch(() => newConv().catch((e) => showErr(e.message)));
+}
+</script>
+</body>
+</html>

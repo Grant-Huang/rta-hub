@@ -27,7 +27,7 @@
   不是服务端日志——「你选的组装方式有几个柜体不提供」只写进日志的话，
   客户永远不会知道。
 
-当前共 26 条：阻断 20 条、提示 6 条。
+当前共 27 条：阻断 21 条、提示 6 条。
 
 ## 速查表
 
@@ -38,6 +38,7 @@
 | SR-G3 | No overlapping footprints across wall runs | 🚫 阻断 | 交付前审核 |
 | SR-G4 | Clearance beside openings for countertop overhang | 🚫 阻断 | 交付前审核 |
 | SR-G5 | Inside corners must yield or use a corner cabinet | 🚫 阻断 | 排布层 |
+| SR-G6 | Tall appliances clear door and window openings | 🚫 阻断 | 交付前审核 |
 | SR-E1 | Sink landing zones 24" / 18" | 🚫 阻断 | 交付前审核 |
 | SR-E2 | Cooktop landing zones 15" / 12" | 🚫 阻断 | 交付前审核 |
 | SR-E3 | Refrigerator landing ≥15" on handle side | 🚫 阻断 | 交付前审核 |
@@ -71,9 +72,9 @@
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts geometryProblems`） |
 
-**判据**：每个构件的 [x, x+width] 必须落在 [0, run.length] 内。
+**判据**：Each component's [x, x+width] must fall within [0, run.length].
 
-**为什么**：超出墙长的柜子现场装不进去。这是最基本的一条，但它只在单段墙内成立——跨墙段的问题要靠 SR-G3。
+**为什么**：A cabinet that overhangs the wall run cannot be installed on site. This is the most basic rule, but it only holds within a single wall run—cross-run issues are covered by SR-G3.
 
 #### SR-G2　No overlap within the same wall run and layer
 
@@ -82,9 +83,9 @@
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts geometryProblems`） |
 
-**判据**：同一 wallRunId、同一 layer 的构件，横向区间与**高度区间**不同时相交（容差 0.01"）。叠装吊柜的上下两段共用一个横向区间、靠 `stackBase` 在高度上错开，不算重叠。
+**判据**：Components on the same wallRunId and layer must not have both horizontal and height intervals intersecting at once (0.01" tolerance). Stacked wall cabinets that share a horizontal span but are offset in height via `stackBase` do not count as overlapping.
 
-**为什么**：两个柜子占同一段墙面，装的时候必然有一个放不下。
+**为什么**：Two cabinets occupying the same wall face means one of them cannot fit at install time.
 
 #### SR-G3　No overlapping footprints across wall runs
 
@@ -93,9 +94,9 @@
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts interferenceProblems`） |
 
-**判据**：把每个构件放到平面世界坐标（layout/plan-model.ts），竖直方向重叠的两个构件（高柜同时占地柜层与吊柜层）足迹不得相交。
+**判据**：Place each component in plan-world coordinates (layout/plan-model.ts); two components that overlap vertically (e.g. a tall cabinet that occupies both base and wall layers) must not have intersecting footprints.
 
-**为什么**：内墙角处两段墙的柜子会占同一块 24"×24"，而它们**不在同一段墙上**——SR-G1/G2 的盲区正好在这里。客户的原话：「只有把它们连起来的时候，才会发现开关门的问题、干涉的问题」。
+**为什么**：At an inside corner, cabinets on two wall runs can claim the same 24"×24" square even though they are not on the same run—exactly the blind spot of SR-G1/G2. Customers discover door-swing and interference problems only when the runs are joined.
 
 #### SR-G4　Clearance beside openings for countertop overhang
 
@@ -104,9 +105,9 @@
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts doorClearanceProblems`） |
 
-**判据**：柜体箱体不得侵入门洞的净空区间。净空 = 门洞宽度 + 每侧（台面端头外伸 1-1/2" + 门套线 1"）；吊柜层没有台面，只让门套线。
+**判据**：Cabinet boxes must not intrude into the door opening's clear span. Clear span = opening width + on each side (countertop end overhang 1-1/2" + casing 1"); wall layers have no countertop, so only casing applies.
 
-**为什么**：台面不是柜体的投影，它四周比箱体大出一圈。按柜体判「没超墙」的方案，现场台面会压在门套线上，门开到一半就顶住。客户的说法是「至少要让出一点点距离」——那一点就是台面外伸。
+**为什么**：A countertop is not a cabinet projection—it overhangs the box on all sides. A layout that looks "within the wall" by box geometry can still put the countertop onto the casing so the door stops mid-swing. That "little bit of space" customers ask for is the overhang.
 
 #### SR-G5　Inside corners must yield or use a corner cabinet
 
@@ -115,9 +116,20 @@
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 排布层（`layout/plan-model.ts buildKitchenPlan`） |
 
-**判据**：相接的两段墙中，短的那一段在墙角一侧让开「转角方块 24" + 转角填缝条 3"」；长的那一段拥有墙角，优先排 cornerAccess 型号。
+**判据**：Of two adjoining wall runs, the shorter run yields on the corner side by "corner block 24" + corner filler 3""; the longer run owns the corner and prefers a cornerAccess SKU.
 
-**为什么**：不留转角填缝条的话，让位侧的门与抽屉一拉出来就撞上相邻墙柜体的门和拉手——两个柜子各自「没超墙」，合起来开不了。
+**为什么**：Without a corner filler, doors and drawers on the yielding side hit the adjacent run's doors and pulls as soon as they open—each cabinet "stays within its wall," but together they cannot open.
+
+#### SR-G6　Tall appliances clear door and window openings
+
+| | |
+|---|---|
+| 严重度 | 🚫 阻断 |
+| 由谁执行 | 交付前审核（`delivery/audit.ts tallApplianceOpeningProblems`） |
+
+**判据**：Refrigerator and wall-oven openings must not overlap a door clear span (same as SR-G4) or a window opening on the same wall run.
+
+**为什么**：A fridge under a window or into a doorway looks fine in a 2D base-only sketch but is unbuildable: the box blocks the sash or the door swing. Layout placement must refuse the spot; audit is the exit check.
 
 ## 人体工程与安全
 
@@ -130,9 +142,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`layout/ergonomics.ts SINK_LANDING`） |
 
-**判据**：水槽柜两侧连续台面，一侧 ≥24"、另一侧 ≥18"。洗碗机上方算连续台面（它在台面**底下**）。
+**判据**：Continuous countertop on both sides of the sink cabinet: one side ≥24", the other ≥18". Countertop above a dishwasher counts as continuous (it sits under the countertop).
 
-**为什么**：洗菜、沥水、备餐都要放东西。两侧都不够的厨房用起来处处别扭，而这是排布阶段就能避免的。
+**为什么**：Washing, draining, and prep all need a place to set things down. A kitchen short on both sides is awkward in daily use—and this is avoidable at layout time.
 
 #### SR-E2　Cooktop landing zones 15" / 12"
 
@@ -141,9 +153,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`layout/ergonomics.ts COOKTOP_LANDING`） |
 
-**判据**：灶具/嵌入式灶台两侧连续台面，一侧 ≥15"、另一侧 ≥12"。
+**判据**：Continuous countertop on both sides of a range/cooktop: one side ≥15", the other ≥12".
 
-**为什么**：**这是安全要求**：端下来的热锅要有地方放。不够就是烫伤风险，不是「用起来不方便」。
+**为什么**：This is a safety requirement: a hot pan needs somewhere to land. Falling short is a burn risk, not merely inconvenience.
 
 #### SR-E3　Refrigerator landing ≥15" on handle side
 
@@ -152,9 +164,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`layout/ergonomics.ts REFRIGERATOR_LANDING`） |
 
-**判据**：冰箱位任一侧有 ≥15" 的连续台面。
+**判据**：At least one side of the fridge opening has ≥15" of continuous countertop.
 
-**为什么**：从冰箱里拿出来的东西要有地方搁，否则只能端着走。
+**为什么**：Items leaving the fridge need a place to rest, otherwise they have to be carried.
 
 #### SR-E4　Dishwasher adjacent to sink (≤36")
 
@@ -163,9 +175,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`layout/ergonomics.ts DISHWASHER_TOO_FAR`） |
 
-**判据**：洗碗机边缘距水槽最近边 ≤36"。
+**判据**：Distance from dishwasher edge to nearest sink edge ≤36".
 
-**为什么**：每次装碗都要端着滴水的餐具走一段。
+**为什么**：Every load means carrying dripping dishes across a gap.
 
 #### SR-E5　Island aisle ≥36" (prefer 42")
 
@@ -174,9 +186,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`layout/ergonomics.ts AISLE_TOO_NARROW`） |
 
-**判据**：岛台台面外沿与正对着的柜列台面外沿之间 ≥36"；<42" 出提示。量的是**台面外沿之间**，不是柜体箱体之间。
+**判据**：Distance between island countertop outer edge and facing run countertop outer edge ≥36"; warn if <42". Measure between countertop outer edges, not box faces.
 
-**为什么**：<36" 人过不去。按箱体量会算出一条实际上并不存在的合格过道——两边台面各外伸 1-1/2"，正好卡在分界上。
+**为什么**：<36" is impassable. Measuring boxes invents a clear aisle that does not exist—each side overhangs 1-1/2", which lands exactly on the boundary.
 
 #### SR-E6　Work triangle within recommended range
 
@@ -185,9 +197,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | ⚠️ 提示 |
 | 由谁执行 | 交付前审核（`layout/ergonomics.ts WORK_TRIANGLE`） |
 
-**判据**：水槽↔灶具↔冰箱三边各 4-9 英尺，总和 ≤26 英尺。
+**判据**：Each leg sink↔cooktop↔fridge is 4–9 ft; total ≤26 ft.
 
-**为什么**：超出范围只是走动多，不影响能不能用——所以是提示不是阻断。三点坐标必须来自同一份连通平面，否则算出来的距离是假的。
+**为什么**：Out of range only means more walking—it does not block usability, so this is advisory. The three points must come from one connected plan, or the distances are fictional.
 
 #### SR-E7　Blind-corner cabinets warn about reach
 
@@ -196,9 +208,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | ⚠️ 提示 |
 | 由谁执行 | 交付前审核（`layout/ergonomics.ts UNREACHABLE_BLIND_CORNER`） |
 
-**判据**：排到盲角柜（blind corner）时提示客户配拉篮或换转角柜。
+**判据**：When a blind-corner cabinet is placed, advise the customer to add a pull-out or switch to a corner cabinet.
 
-**为什么**：盲角深处够不着是这类柜体的固有特性，不是排布错了——但客户要知道，否则装完才发现里面的东西拿不出来。
+**为什么**：Deep blind corners are inherent to the SKU, not a layout mistake—but customers need to know, or they discover contents are unreachable after install.
 
 #### SR-E8　At least one ≥36" continuous prep counter
 
@@ -207,9 +219,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | ⚠️ 提示 |
 | 由谁执行 | 交付前审核（`layout/ergonomics.ts NO_CONTINUOUS_PREP`） |
 
-**判据**：整段墙上最长的连续台面 ≥36"。
+**判据**：Longest continuous countertop along any wall run ≥36".
 
-**为什么**：切菜和面需要一块完整的台面。达不到只是不好用，不影响下单。
+**为什么**：Chopping and dough need an unbroken stretch. Falling short is inconvenience, not an order blocker.
 
 ## 物料与规格
 
@@ -222,9 +234,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts BOM_INCOMPLETE`） |
 
-**判据**：BOM 的 missing 为空——踢脚、填缝、收口、连接件都齐。
+**判据**：BOM `missing` is empty—toe kicks, fillers, moldings, and connectors are all present.
 
-**为什么**：缺一条踢脚板，客户就是装不上。方案再好看也没用。
+**为什么**：One missing toe kick and the customer cannot install. Looks do not matter then.
 
 #### SR-M2　Only real catalog SKUs and sizes
 
@@ -233,9 +245,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts specProblems`） |
 
-**判据**：清单里每个型号 id 与宽/高/深都能在该公司 published 规格里查到。
+**判据**：Every SKU id and width/height/depth on the list exists in that company's published catalog.
 
-**为什么**：规格库里不存在的尺寸，定价时会在价格矩阵里查不到而整单拒绝——那时客户看到的只是一句「报价校验未通过」，根因在几百行之外。
+**为什么**：A size not in the catalog fails the price matrix and rejects the whole quote—the customer only sees "quote validation failed," with the root cause hundreds of lines away.
 
 #### SR-M3　Disclose assembly forms you do not offer
 
@@ -244,9 +256,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | ⚠️ 提示 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts UNAPPLIED_PREFERENCE`） |
 
-**判据**：客户选了 assembled 但某些型号只发平板时，逐个列出来。
+**判据**：If the customer chose assembled but some SKUs ship flat-pack only, list each one.
 
-**为什么**：多数公司只对地柜提供组装服务。不说的话，客户以为整单都是装好的，货到了才发现吊柜要自己拼。
+**为什么**：Most companies assemble base cabinets only. Without disclosure, the customer assumes the whole order arrives built, then finds wall cabinets need assembly.
 
 ## 报价
 
@@ -259,9 +271,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts QUOTE_RECONCILIATION`） |
 
-**判据**：报价清单每一行的金额加起来等于小计，小计加税费等于总价。
+**判据**：Sum of each quote line equals the subtotal; subtotal plus tax/fees equals the total.
 
-**为什么**：客户拿去跟别家比，比的是个错数。
+**为什么**：Customers compare quotes against competitors using a wrong number.
 
 #### SR-Q2　Price snapshot recomputes consistently
 
@@ -270,9 +282,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts PRICE_SNAPSHOT`） |
 
-**判据**：用快照里的价格表重算一遍，结果与报价单一致。
+**判据**：Recompute with the snapshot price table; result must match the quote.
 
-**为什么**：报价单是要发出去的承诺。价格表改了而快照没跟上，客户手里的单据与系统里的价格对不上。
+**为什么**：A quote is a commitment you send out. If the price table changed and the snapshot did not follow, the customer's document disagrees with system prices.
 
 ## 披露与阶段
 
@@ -285,9 +297,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts UNDISCLOSED_ASSUMPTION`） |
 
-**判据**：任何 provenance = "assumed" 的家电尺寸，都要在交付文字里出现「推定」或等价说明。
+**判据**：Any appliance size with provenance = "assumed" must appear in deliverable text with "assumed" or an equivalent disclosure.
 
-**为什么**：查的是**文字，不是数据字段**。`provenance` 存在数据里，但客户读到的是文字——两者可能脱节，而脱节的那一次正是出事的那一次：客户按图订柜，冰箱塞不进去。
+**为什么**：We check the text, not a data field. `provenance` lives in data, but customers read words—those can diverge, and divergence is when things go wrong: cabinets ordered to the drawing, fridge will not fit.
 
 #### SR-D2　State customer requests that could not be applied
 
@@ -296,9 +308,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | ⚠️ 提示 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts UNAPPLIED_PREFERENCE`） |
 
-**判据**：客户的偏好项没能落到排布或报价上时，逐条说明。
+**判据**：When a preference does not land on the layout or quote, explain each one.
 
-**为什么**：「整体看着大气一点」这类话落不到具体参数上。系统要说「这一版与上一版相同」，而不是重画一张一样的图假装改过。
+**为什么**：Vague asks like "make it feel more spacious" do not map to parameters. The system should say "this revision matches the last," not redraw the same plan and pretend it changed.
 
 #### SR-D3　Deliverable is allowed at this stage
 
@@ -307,9 +319,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts STAGE`） |
 
-**判据**：交付物种类必须在当前 DesignStage 允许的清单里。
+**判据**：Deliverable kind must be on the current DesignStage allow-list.
 
-**为什么**：客户还没看过全局排布就拿到报价单，等于跳过了他确认的那一步。
+**为什么**：Handing a quote before the customer has reviewed the overall layout skips the confirmation step they need.
 
 #### SR-D4　Quote states which product the price covers
 
@@ -318,9 +330,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts UNDISCLOSED_PRODUCT_SCOPE`） |
 
-**判据**：报价清单文字里必须写明：(1) 这是 RTA（板件平装、需要组装、不含安装）；(2) 按的是哪一档箱体板材（商家给了多于一档时）。
+**判据**：Quote text must state: (1) this is RTA (flat-pack panels, assembly required, install not included); (2) which box-material tier applies (when the merchant offers more than one).
 
-**为什么**：客户拿这张单子去跟另一家比。那一家可能报的是全定制、或者是颗粒板箱体——不写清楚，两个数看起来就是同一件东西的两个价，而它们相差可能过半。这不是「客户没问」的问题：他不知道有这两个维度存在，所以问不出来。
+**为什么**：Customers compare this sheet to another shop that may quote fully custom or particle-board boxes—without disclosure the two numbers look like two prices for the same thing, and they can differ by more than half. This is not "the customer didn't ask": they cannot ask about dimensions they do not know exist.
 
 ## 图纸
 
@@ -333,9 +345,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 渲染层（`render/kernel/annotate.ts annotationFor`） |
 
-**判据**：每张图上，水槽与每个家电位必须有文字标签（型号或名称 + 尺寸）。
+**判据**：On every drawing, the sink and each appliance opening must have a text label (SKU or name + size).
 
-**为什么**：只靠颜色区分，客户分不清哪块是冰箱位哪块是烤箱位。
+**为什么**：Color alone does not tell the customer which block is the fridge vs the oven.
 
 #### SR-V2　Legend matches what is actually drawn
 
@@ -344,9 +356,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 渲染层（`render/kernel/legend.ts renderLegend`） |
 
-**判据**：图例只列图上出现过的元素，且图上出现的都在图例里。
+**判据**：The legend lists only elements that appear on the drawing, and every drawn element appears in the legend.
 
-**为什么**：图例里有图上没有的东西，客户会在图上找一个不存在的构件；反过来则是看到一个不认识的颜色。
+**为什么**：A legend entry with nothing on the drawing sends the customer hunting for a missing piece; the reverse leaves an unrecognized color.
 
 #### SR-V3　Assumed sizes marked "assumed" on drawings
 
@@ -355,9 +367,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | 🚫 阻断 |
 | 由谁执行 | 渲染层（`render/kernel/annotate.ts annotationFor`） |
 
-**判据**：按常见款猜的家电尺寸，图上的标签要带「（推定）」。
+**判据**：Appliance sizes guessed from common models must carry "(assumed)" on the drawing label.
 
-**为什么**：与 SR-D1 同一条原则的图纸侧：等到装不进去才发现就晚了。
+**为什么**：Same principle as SR-D1 on the drawing side: discovering a fit problem at install is too late.
 
 #### SR-V4　Disconnected overall plan views must be annotated
 
@@ -366,9 +378,9 @@ NKBA 厨房规划指南的常见表述。⚠️ **这是种子数据，上线前
 | 严重度 | ⚠️ 提示 |
 | 由谁执行 | 交付前审核（`delivery/audit.ts planNoteProblems`） |
 
-**判据**：墙段之间拼不上时，图上注明「示意排列，实际方位请以现场为准」。
+**判据**：When wall runs cannot be joined, the drawing notes "schematic arrangement; verify orientation on site."
 
-**为什么**：推不出方位就不假装知道。但也不能不画——不画客户就什么都看不到。
+**为什么**：If orientation cannot be inferred, do not pretend to know it—but still draw something, or the customer sees nothing.
 
 ---
 

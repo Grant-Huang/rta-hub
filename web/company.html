@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Company · RTA-Hub</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:#0f1216; color:#e6e8eb; height:100vh; display:flex; flex-direction:column; }
+  header { padding:12px 20px; border-bottom:1px solid #262b33; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  a.back { color:#7bc0d8; text-decoration:none; font-size:13px; }
+  a.back:hover { text-decoration:underline; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#262b33; color:#9aa4b2; }
+  button { background:#2a5bd7; border:none; color:#fff; padding:7px 13px; border-radius:8px;
+           font-size:13px; cursor:pointer; font:inherit; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.ghost { background:#262b33; }
+  input { font:inherit; background:#1c2129; border:1px solid #262b33; color:inherit;
+          padding:8px 10px; border-radius:8px; font-size:13px; }
+
+  /* 三栏：协作列表 / 线程 / 已确认+工作台 */
+  main { flex:1; display:grid; overflow:hidden; min-height:0;
+         grid-template-columns: var(--rail-w,240px) 5px minmax(0,1fr) 5px var(--panel-w,420px); }
+  .gutter { background:#262b33; cursor:col-resize; position:relative; }
+  .gutter::after { content:""; position:absolute; inset:0 -4px; }
+  .gutter:hover, .gutter.dragging { background:#3a4250; }
+
+  .rail { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .rail-head { padding:10px 12px; border-bottom:1px solid #262b33; display:flex; gap:8px; align-items:center; min-width:0; }
+  .rail-head h2 { font-size:12px; margin:0; color:#9aa4b2; font-weight:500; flex:1; min-width:0;
+                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rail-head .ghost { flex:0 0 auto; padding:6px 10px; font-size:12px; }
+  .rail-list { flex:1; min-height:0; overflow-x:hidden; overflow-y:auto; padding:6px; }
+  .conv { display:block; width:100%; text-align:left; background:none;
+          border:1px solid transparent; border-radius:8px; padding:8px 10px;
+          cursor:pointer; color:inherit; overflow:hidden; margin-bottom:3px; }
+  .conv:hover { background:#1c2129; }
+  .conv.active { background:#1e3566; border-color:#4d7bd7; }
+  .conv .ct { display:block; font-size:12.5px; line-height:1.45; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  .conv .cm { display:block; font-size:11px; color:#6a7382; margin-top:2px; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  .rail-foot { flex:0 0 auto; border-top:1px solid #262b33; padding:8px; display:flex; flex-direction:column; gap:6px; }
+  .rail-foot a, .rail-foot button.linkish {
+    display:flex; align-items:center; gap:8px; padding:8px; border-radius:8px;
+    color:inherit; text-decoration:none; background:none; border:none; width:100%;
+    text-align:left; cursor:pointer; font-size:12.5px; }
+  .rail-foot a:hover, .rail-foot button.linkish:hover { background:#1c2129; }
+  .rail-foot .uhint { display:block; font-size:10.5px; color:#6a7382; }
+
+  .chat { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .chat-head { padding:10px 14px; border-bottom:1px solid #262b33; flex:0 0 auto; min-width:0; }
+  .chat-head h2 { margin:0; font-size:13px; font-weight:600; overflow:hidden;
+                  text-overflow:ellipsis; white-space:nowrap; }
+  .chat-head .sub { margin:3px 0 0; font-size:11.5px; color:#8b94a3; overflow:hidden;
+                    text-overflow:ellipsis; white-space:nowrap; }
+  .chat-log { flex:1; min-height:0; overflow-y:auto; padding:14px 14px 4px;
+              display:flex; flex-direction:column; gap:9px; }
+  .msg { max-width:92%; padding:8px 12px; border-radius:10px; font-size:13px;
+         line-height:1.55; white-space:pre-wrap; }
+  .msg.user { align-self:flex-start; background:#1c2129; }
+  .msg.company_human { align-self:flex-end; background:#2a5bd7; color:#fff; }
+  .msg.assistant { align-self:flex-start; background:#243528; border:1px solid #35543c; }
+  .msg.system { align-self:center; background:#2b2416; color:#d8c37b; font-size:12px; }
+  .chat-empty { margin:auto; padding:24px; text-align:center; color:#6a7382; font-size:13px; max-width:360px; }
+  .chat-input { padding:10px 12px; border-top:1px solid #262b33; background:#0f1216; flex:0 0 auto; }
+  .composer { display:flex; gap:8px; align-items:flex-end; }
+  .composer input { flex:1; min-width:0; }
+  .composer button[type=submit] { flex:0 0 auto; height:36px; }
+
+  .panel { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .panel-tabs { display:flex; gap:0; border-bottom:1px solid #262b33; flex:0 0 auto; }
+  .panel-tab { flex:1; background:transparent; color:#8b94a3; border:none; border-radius:0;
+               border-bottom:2px solid transparent; padding:10px 12px; font-size:12.5px; cursor:pointer; }
+  .panel-tab:hover { color:#e6e8eb; background:#1c2129; }
+  .panel-tab.active { color:#e6e8eb; border-bottom-color:#4d7bd7; background:#151a22; }
+  .pane { display:none; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
+  .pane.active { display:flex; }
+  .confirmed { flex:1; min-height:0; overflow-y:auto; padding:14px 16px; }
+  .confirmed h3 { margin:0 0 8px; font-size:12.5px; color:#9aa4b2; font-weight:600; }
+  .confirmed .block { margin:0 0 16px; }
+  .confirmed .kv { display:grid; grid-template-columns:110px 1fr; gap:4px 10px; font-size:12.5px; margin:0 0 12px; }
+  .confirmed .kv dt { color:#8b94a3; margin:0; }
+  .confirmed .kv dd { margin:0; color:#e6e8eb; word-break:break-word; }
+  .confirmed .body { font-size:12.5px; line-height:1.55; color:#c6cdd6; white-space:pre-wrap; }
+  .hint { color:#6a7382; font-size:12px; margin:0; }
+  .err { color:#d87b7b; font-size:12px; white-space:pre-wrap; margin:0; }
+  .ok { color:#7bd88f; font-size:12px; margin:0; }
+  .ops { flex:1; min-height:0; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; }
+  pre.out { background:#151a22; border:1px solid #262b33; border-radius:8px; padding:10px;
+            font-size:11.5px; overflow:auto; max-height:280px; white-space:pre-wrap; margin:0; }
+
+  /* 设置层：令牌 + 厂商资料；有令牌后默认关闭 */
+  .settings-backdrop {
+    position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40;
+    display:flex; align-items:flex-start; justify-content:center; padding:48px 16px 24px;
+    overflow:auto;
+  }
+  .settings-backdrop[hidden] { display:none; }
+  .settings-card {
+    width:min(560px, 100%); background:#1c2129; border:1px solid #3a4250;
+    border-radius:12px; padding:18px 18px 16px; box-shadow:0 16px 48px rgba(0,0,0,.45);
+  }
+  .settings-card h2 { margin:0 0 6px; font-size:15px; font-weight:600; }
+  .settings-card .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  .settings-card input { min-width:180px; flex:1; }
+  .settings-card .profile { margin-top:16px; padding-top:14px; border-top:1px solid #262b33; }
+  .settings-card .kv { display:grid; grid-template-columns:120px 1fr; gap:6px 12px; font-size:13px; margin:10px 0 0; }
+  .settings-card .kv dt { color:#8b94a3; margin:0; }
+  .settings-card .kv dd { margin:0; word-break:break-word; }
+  .settings-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; flex-wrap:wrap; }
+  .sdk-btn-label { display:inline-flex; align-items:center; gap:6px; }
+</style>
+<link rel="stylesheet" href="/vendor/apps-sdk-ui/assets/bridge.css" />
+<script type="module" src="/vendor/apps-sdk-ui/bridge.js"></script>
+<script src="/ui-i18n.js"></script>
+</head>
+<body>
+<header>
+  <a class="back sdk-btn-label" href="/me">
+    <span data-sdk-icon="ChevronLeft" aria-hidden="true"></span>
+    <span data-i18n="backToAccount">Account</span>
+  </a>
+  <h1 id="title" class="sdk-btn-label">
+    <span data-sdk-icon="Cabinet" aria-hidden="true"></span>
+    <span id="titleText">Company</span>
+  </h1>
+  <span class="badge" id="companyIdBadge">—</span>
+  <span style="flex:1"></span>
+  <button type="button" class="ghost" id="langBtn" data-i18n="langToggle" data-i18n-title="langToggleTitle">中文</button>
+  <button type="button" class="ghost" id="btnOpenSettings" data-i18n="companySettings">Settings</button>
+  <a class="back" href="/" data-i18n="navChat">Chat</a>
+</header>
+
+<main>
+  <aside class="rail">
+    <div class="rail-head">
+      <h2 data-i18n="companyEngInbox">Customer collaborations</h2>
+      <button type="button" class="ghost" id="btnEngRefresh" data-i18n="refresh">Refresh</button>
+    </div>
+    <div class="rail-list" id="engList">
+      <p class="hint" style="padding:8px" data-i18n="companyEngEmpty">No open collaborations.</p>
+    </div>
+    <div class="rail-foot">
+      <button type="button" class="linkish" id="btnOpenSettingsRail">
+        <span data-i18n="companySettings">Settings</span>
+        <span class="uhint" data-i18n="companyAuthHeading">Access</span>
+      </button>
+      <a href="/me">
+        <span data-i18n="backToAccount">Account</span>
+        <span class="uhint" id="sellerHint" data-i18n="companyProfileHeading">Seller</span>
+      </a>
+    </div>
+  </aside>
+  <div class="gutter" id="gutterL" title="Drag to resize" data-i18n-title="dragResize"></div>
+
+  <section class="chat">
+    <div class="chat-head" id="chatHead" hidden>
+      <h2 id="engDetailTitle">—</h2>
+      <p class="sub" id="engHandoffLine"></p>
+    </div>
+    <div class="chat-log" id="engLog">
+      <div class="chat-empty" id="chatEmpty" data-i18n="companyEngPick">
+        Select a collaboration on the left to open the thread.
+      </div>
+    </div>
+    <form class="chat-input" id="engForm" autocomplete="off" hidden>
+      <div class="composer">
+        <input id="engReply" data-i18n-placeholder="companyEngReplyPh" placeholder="Reply as seller…" autocomplete="off" />
+        <button type="submit" id="btnEngSend" data-i18n="send">Send</button>
+      </div>
+    </form>
+  </section>
+  <div class="gutter" id="gutterR" title="Drag to resize" data-i18n-title="dragResize"></div>
+
+  <section class="panel">
+    <div class="panel-tabs" role="tablist">
+      <button type="button" class="panel-tab active" data-tab="confirmed" id="tabConfirmedBtn" data-i18n="tabConfirmed">Confirmed</button>
+      <button type="button" class="panel-tab" data-tab="ops" id="tabOpsBtn" data-i18n="companyOpsHeading">Workspace</button>
+    </div>
+    <div class="pane active" id="paneConfirmed" role="tabpanel">
+      <div class="confirmed" id="confirmedPane">
+        <p class="hint" data-i18n="companyConfirmedEmpty">Open a collaboration to see the handoff brief and confirmed preferences.</p>
+      </div>
+    </div>
+    <div class="pane" id="paneOps" role="tabpanel">
+      <div class="ops">
+        <p class="hint" data-i18n="companyOpsHint">Billing / onboarding require a matching company or admin token.</p>
+        <div class="actions">
+          <button type="button" class="ghost" id="btnSpec" data-i18n="companyBtnSpec">Load public catalog</button>
+          <button type="button" id="btnBilling" data-i18n="companyBtnBilling">Billing</button>
+          <button type="button" id="btnSession" data-i18n="companyBtnSession">Spec onboarding session</button>
+          <button type="button" class="ghost" id="btnTemplates" data-i18n="companyBtnTemplates">Download blank templates (JSON)</button>
+        </div>
+        <pre class="out" id="out" hidden></pre>
+        <p class="err" id="err" hidden></p>
+        <p class="ok" id="ok" hidden></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="settings-backdrop" id="settingsBackdrop" hidden>
+  <div class="settings-card" role="dialog" aria-modal="true" aria-labelledby="authHeading">
+    <h2 id="authHeading" data-i18n="companyAuthHeading">Access</h2>
+    <p class="hint" id="authHint" data-i18n="companyAuthHint">Use X-Company-Token for this seller, or X-Admin-Token to act on their behalf.</p>
+    <div class="row">
+      <input id="companyToken" type="password" placeholder="X-Company-Token" autocomplete="off" />
+      <input id="adminToken" type="password" placeholder="X-Admin-Token (optional)" autocomplete="off" />
+    </div>
+    <div class="profile" id="profileCard">
+      <h2 style="font-size:13px;color:#9aa4b2;margin:0" data-i18n="companyProfileHeading">Seller</h2>
+      <p class="hint" id="loading" data-i18n="loading">Loading…</p>
+    </div>
+    <p class="err" id="settingsErr" hidden></p>
+    <p class="ok" id="settingsOk" hidden></p>
+    <div class="settings-actions">
+      <button type="button" class="ghost" id="btnCloseSettings" data-i18n="close" hidden>Close</button>
+      <button type="button" id="saveTok" data-i18n="save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const companyId = location.pathname.replace(/^\/company\//, "").replace(/\/$/, "") || "";
+const $ = (id) => document.getElementById(id);
+const t = (...a) => window.RTA_UI.t(...a);
+const TOK_C = `rtaCompanyToken:${companyId}`;
+const TOK_A = "rtaAdminToken";
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function hasAuth() {
+  return !!(sessionStorage.getItem(TOK_C) || sessionStorage.getItem(TOK_A)
+    || $("companyToken").value.trim() || $("adminToken").value.trim());
+}
+
+function applyLang() {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang());
+  if (!document.title.includes("·") || document.title.startsWith("Company")) {
+    document.title = t("companyPageTitle");
+  }
+  window.RTA_UI.applyDataI18n();
+  $("langBtn").textContent = t("langToggle");
+}
+
+function openSettings({ allowClose = hasAuth() } = {}) {
+  $("settingsBackdrop").hidden = false;
+  $("btnCloseSettings").hidden = !allowClose;
+  $("settingsErr").hidden = true;
+  $("settingsOk").hidden = true;
+}
+
+function closeSettings() {
+  $("settingsBackdrop").hidden = true;
+  $("settingsErr").hidden = true;
+  $("settingsOk").hidden = true;
+}
+
+async function api(path, opts = {}) {
+  const headers = { "content-type": "application/json", ...(opts.headers || {}) };
+  const ct = sessionStorage.getItem(TOK_C) || $("companyToken").value.trim();
+  const at = sessionStorage.getItem(TOK_A) || $("adminToken").value.trim();
+  if (ct) headers["x-company-token"] = ct;
+  if (at) headers["x-admin-token"] = at;
+  const res = await fetch(path, { ...opts, headers });
+  const text = await res.text();
+  let body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  return { ok: res.ok, status: res.status, body };
+}
+
+function showOut(data) {
+  $("err").hidden = true;
+  $("ok").hidden = true;
+  $("out").hidden = false;
+  $("out").textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  document.querySelectorAll(".panel-tab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === "ops");
+  });
+  document.querySelectorAll(".pane").forEach((p) => {
+    p.classList.toggle("active", p.id === "paneOps");
+  });
+}
+
+function showErr(msg) {
+  $("out").hidden = true;
+  $("ok").hidden = true;
+  $("err").hidden = false;
+  $("err").textContent = msg;
+}
+
+function showOk(msg) {
+  $("err").hidden = true;
+  $("ok").hidden = false;
+  $("ok").textContent = msg;
+}
+
+function setupGutter(id, varName, edge, min, max) {
+  const key = `company${varName}`;
+  const saved = Number(localStorage.getItem(key));
+  if (saved >= min && saved <= max) {
+    document.documentElement.style.setProperty(varName, saved + "px");
+  }
+  $(id).addEventListener("pointerdown", (down) => {
+    down.preventDefault();
+    const el = $(id);
+    el.classList.add("dragging");
+    el.setPointerCapture(down.pointerId);
+    const move = (e) => {
+      const w = edge === "left" ? e.clientX : window.innerWidth - e.clientX;
+      const clamped = Math.min(max, Math.max(min, Math.round(w)));
+      document.documentElement.style.setProperty(varName, clamped + "px");
+    };
+    const up = () => {
+      el.classList.remove("dragging");
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      const cur = document.documentElement.style.getPropertyValue(varName);
+      localStorage.setItem(key, parseInt(cur, 10) || "");
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  });
+}
+setupGutter("gutterL", "--rail-w", "left", 160, 480);
+setupGutter("gutterR", "--panel-w", "right", 280, 720);
+
+document.querySelectorAll(".panel-tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const name = btn.dataset.tab;
+    document.querySelectorAll(".panel-tab").forEach((b) => {
+      b.classList.toggle("active", b.dataset.tab === name);
+    });
+    document.querySelectorAll(".pane").forEach((p) => {
+      p.classList.toggle("active", p.id === (name === "confirmed" ? "paneConfirmed" : "paneOps"));
+    });
+  });
+});
+
+$("companyToken").value = sessionStorage.getItem(TOK_C) || "";
+$("adminToken").value = sessionStorage.getItem(TOK_A) || "";
+$("companyIdBadge").textContent = companyId || t("missing");
+
+let activeEngId = null;
+let companyMeta = null;
+
+function prefLines(prefs) {
+  if (!prefs || typeof prefs !== "object") return [];
+  return Object.entries(prefs)
+    .filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length))
+    .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v)]);
+}
+
+function renderConfirmed(eg) {
+  const pane = $("confirmedPane");
+  if (!eg) {
+    pane.innerHTML = `<p class="hint">${esc(t("companyConfirmedEmpty"))}</p>`;
+    return;
+  }
+  const shared = eg.confirmed?.shared || {};
+  const companySpecific = eg.confirmed?.companySpecific || {};
+  const handoff = eg.handoff || {};
+  const sharedPrefs = prefLines(shared.preferences);
+  const companyPrefs = prefLines(companySpecific);
+  const req = shared.designRequirements || handoff.designRequirements || "";
+  pane.innerHTML = `
+    <div class="block">
+      <h3>${esc(t("companyHandoffHeading"))}</h3>
+      <div class="body">${esc(handoff.sharedSummary || t("companyNoHandoff"))}</div>
+    </div>
+    <div class="block">
+      <h3>${esc(t("companySharedHeading"))}</h3>
+      ${req ? `<div class="body" style="margin-bottom:10px">${esc(req)}</div>` : ""}
+      ${sharedPrefs.length ? `<dl class="kv">${sharedPrefs.map(([k, v]) =>
+        `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
+        : `<p class="hint">${esc(t("companyNoPrefs"))}</p>`}
+    </div>
+    <div class="block">
+      <h3>${esc(t("companySpecificHeading"))}</h3>
+      ${companyPrefs.length ? `<dl class="kv">${companyPrefs.map(([k, v]) =>
+        `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
+        : `<p class="hint">${esc(t("companyNoPrefs"))}</p>`}
+    </div>`;
+}
+
+async function bootProfile() {
+  applyLang();
+  if (!companyId) {
+    $("profileCard").innerHTML = `<p class="err">${esc(t("companyMissingId"))}</p>`;
+    openSettings({ allowClose: false });
+    return false;
+  }
+  const { ok, body } = await api("/api/companies");
+  const co = (body.companies || []).find((c) => c.id === companyId);
+  if (!ok || !co) {
+    $("profileCard").innerHTML = `<p class="err">${esc(t("companyNotFound"))}</p>`;
+    openSettings({ allowClose: false });
+    return false;
+  }
+  companyMeta = co;
+  document.title = `${co.name} · RTA-Hub`;
+  ($("titleText") || $("title")).textContent = co.name;
+  $("sellerHint").textContent = co.name;
+  $("profileCard").innerHTML = `
+    <h2 style="font-size:13px;color:#9aa4b2;margin:0">${esc(t("companyProfileHeading"))}</h2>
+    <dl class="kv">
+      <dt>ID</dt><dd>${esc(co.id)}</dd>
+      <dt>${esc(t("labelName"))}</dt><dd>${esc(co.name)}</dd>
+      <dt>${esc(t("labelAliases"))}</dt><dd>${esc((co.aliases || []).join(" · ") || "—")}</dd>
+      <dt>${esc(t("labelServiceAreas"))}</dt><dd>${esc((co.serviceAreas || []).join(", ") || "—")}</dd>
+    </dl>`;
+  return true;
+}
+
+async function loadEngagements() {
+  const list = $("engList");
+  if (!hasAuth()) {
+    list.innerHTML = `<p class="hint" style="padding:8px">${esc(t("companyNeedToken"))}</p>`;
+    return { ok: false, unauthorized: true };
+  }
+  const { ok, body, status } = await api(`/api/company/${companyId}/engagements`);
+  if (!ok) {
+    list.innerHTML = `<p class="err" style="padding:8px">${esc(body.error || `HTTP ${status}`)}</p>`;
+    return { ok: false, unauthorized: status === 401, error: body.error || `HTTP ${status}` };
+  }
+  const items = body.engagements || [];
+  if (!items.length) {
+    list.innerHTML = `<p class="hint" style="padding:8px">${esc(t("companyEngEmpty"))}</p>`;
+    return { ok: true, items };
+  }
+  list.innerHTML = items.map((e) => `
+    <button type="button" class="conv ${e.id === activeEngId ? "active" : ""}" data-eng="${esc(e.id)}"
+            title="${esc(e.parentTitle || "")}">
+      <span class="ct">${esc(e.parentTitle || e.id)}</span>
+      <span class="cm">${esc(e.sharedSummary || e.id)} · ${esc((e.updatedAt || "").slice(0, 16).replace("T", " "))}</span>
+    </button>`).join("");
+  return { ok: true, items };
+}
+
+async function openEngagement(eid) {
+  activeEngId = eid;
+  const { ok, body, status } = await api(`/api/company/${companyId}/engagements/${eid}`);
+  if (!ok) {
+    showErr(body.error || `HTTP ${status}`);
+    return;
+  }
+  const eg = body.engagement;
+  $("chatEmpty")?.remove();
+  $("chatHead").hidden = false;
+  $("engForm").hidden = false;
+  $("engDetailTitle").textContent = eg.parentTitle || eid;
+  $("engHandoffLine").textContent = eg.handoff?.sharedSummary || "";
+  const log = $("engLog");
+  const msgs = eg.messages || [];
+  if (!msgs.length) {
+    log.innerHTML = `<div class="chat-empty">${esc(t("companyEngNoMessages"))}</div>`;
+  } else {
+    log.innerHTML = msgs.map((m) =>
+      `<div class="msg ${esc(m.role)}">${esc(m.content)}</div>`).join("");
+    log.scrollTop = log.scrollHeight;
+  }
+  renderConfirmed(eg);
+  await loadEngagements();
+}
+
+$("engList").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-eng]");
+  if (btn) openEngagement(btn.dataset.eng);
+});
+
+$("btnEngRefresh").addEventListener("click", () => loadEngagements());
+
+$("engForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!activeEngId) return;
+  const text = $("engReply").value.trim();
+  if (!text) return;
+  $("engReply").value = "";
+  const { ok, body, status } = await api(
+    `/api/company/${companyId}/engagements/${activeEngId}/messages`,
+    { method: "POST", body: JSON.stringify({ text }) },
+  );
+  if (!ok) return showErr(body.error || `HTTP ${status}`);
+  await openEngagement(activeEngId);
+});
+
+async function saveTokens() {
+  const ct = $("companyToken").value.trim();
+  const at = $("adminToken").value.trim();
+  sessionStorage.setItem(TOK_C, ct);
+  sessionStorage.setItem(TOK_A, at);
+  $("settingsErr").hidden = true;
+  $("settingsOk").hidden = true;
+  if (!ct && !at) {
+    $("settingsErr").hidden = false;
+    $("settingsErr").textContent = t("companyNeedToken");
+    return;
+  }
+  const result = await loadEngagements();
+  if (!result.ok) {
+    $("settingsErr").hidden = false;
+    $("settingsErr").textContent = result.error || t("companyTokInvalid");
+    openSettings({ allowClose: false });
+    return;
+  }
+  $("settingsOk").hidden = false;
+  $("settingsOk").textContent = t("companyTokSaved");
+  closeSettings();
+}
+
+$("saveTok").addEventListener("click", () => saveTokens());
+$("btnOpenSettings").addEventListener("click", () => openSettings({ allowClose: true }));
+$("btnOpenSettingsRail").addEventListener("click", () => openSettings({ allowClose: true }));
+$("btnCloseSettings").addEventListener("click", () => closeSettings());
+$("settingsBackdrop").addEventListener("click", (e) => {
+  if (e.target === $("settingsBackdrop") && hasAuth()) closeSettings();
+});
+
+$("btnSpec").addEventListener("click", async () => {
+  const { ok, body } = await api(`/api/companies/${companyId}/spec`);
+  if (!ok) return showErr(body.error || t("httpError"));
+  showOut({
+    doorStyles: (body.doorStyles || []).length,
+    modules: (body.modules || []).length,
+    boxMaterials: (body.boxMaterials || []).length,
+    sampleDoors: (body.doorStyles || []).slice(0, 8),
+  });
+});
+
+$("btnBilling").addEventListener("click", async () => {
+  const { ok, body, status } = await api(`/api/company/${companyId}/billing`);
+  if (!ok) return showErr(body.error || `HTTP ${status}`);
+  showOut(body);
+});
+
+$("btnSession").addEventListener("click", async () => {
+  const { ok, body, status } = await api(`/api/company/${companyId}/spec/sessions`, { method: "POST" });
+  if (!ok) return showErr(body.error || `HTTP ${status}`);
+  showOut(body);
+});
+
+$("btnTemplates").addEventListener("click", async () => {
+  const { ok, body, status } = await api(`/api/company/${companyId}/spec/templates`);
+  if (!ok) return showErr(body.error || `HTTP ${status}`);
+  showOut(body);
+});
+
+$("langBtn").addEventListener("click", async () => {
+  const next = window.RTA_UI.resolveLang() === "zh" ? "en" : "zh";
+  window.RTA_UI.setLang(next);
+  await bootProfile();
+  await loadEngagements();
+  if (activeEngId) await openEngagement(activeEngId);
+  else renderConfirmed(null);
+});
+
+(async () => {
+  const profileOk = await bootProfile();
+  if (!profileOk) return;
+  if (!hasAuth()) {
+    openSettings({ allowClose: false });
+    return;
+  }
+  const result = await loadEngagements();
+  if (!result.ok) {
+    openSettings({ allowClose: false });
+    if (result.error) {
+      $("settingsErr").hidden = false;
+      $("settingsErr").textContent = result.error;
+    }
+  }
+})();
+</script>
+</body>
+</html>

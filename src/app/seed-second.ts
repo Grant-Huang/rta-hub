@@ -41,6 +41,16 @@ export const secondSpecVersion: ProductSpecVersion = {
   // 与第一家不同：无框柜 + 半覆盖门板，用来验证渲染参数确实生效
   construction: "frameless",
   overlay: "partial",
+  codingRules: {
+    usesBoxDoorSuffixes: false,
+    prefixGuide: [
+      { pattern: "^NW-B", meaning: "Lakeside base (NW- namespace)", mapsToRoles: ["doorStorage", "drawerStorage"] },
+      { pattern: "^NW-SB", meaning: "sink base", mapsToRoles: ["sinkBase"] },
+      { pattern: "^NW-W", meaning: "wall cabinet", mapsToRoles: ["doorStorage"] },
+      { pattern: "^NW-T|^NW-P", meaning: "tall / pantry", mapsToRoles: ["doorStorage"] },
+      { pattern: "^NW-F|^NW-TK", meaning: "filler / toe kick", mapsToRoles: ["trim"] },
+    ],
+  },
   effectiveFrom: NOW,
   publishedAt: NOW,
   publishedBy: "ops@lakeside.example",

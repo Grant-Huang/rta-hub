@@ -528,12 +528,56 @@ MVP-1 的其余环节不因规格录入不达标而阻塞。
    与外联话术，不含任何客户身份**（FR-13 第 3 条）。
 4. **贸易资质审核**：待审列表 → 通过/驳回 → 驳回要写原因，且该账号立刻按
    consumer 定价（不是界面隐藏，是定价链路上生效）。
-5. **留存到期清除**：生成清除计划。⚠️ **定时任务尚未接线**（上线阻断项 B6），
-   目前只出计划不执行。
+5. **留存到期清除**：生成清除计划；`RETENTION_CRON_MS` 启动定时执行，或
+   `POST /api/admin/retention/run`（默认 dryRun）。见上线闸门 B6。
+
+---
+
+## 用户 LLM 模拟（v1.3 / FR-20）
+
+对应 REQUIREMENTS **FR-20** | 角色：测试基础设施
+
+### 问题
+
+旧模拟里客户 `turns` 往往「主动报齐」尺寸/风格/预算——真实客户不会知道系统检查表要什么，
+需要被引导才说。
+
+### 模式
+
+1. 每个场景带 `customerFacts`（私有）：姓名意向、厨房几何事实、预算、风格、省份、家电等。
+2. **User agent**（`scripts/user-agent.mts`）只看见：`customerFacts` + 对话历史中助手上一问。
+   **不**注入 FR-15 检查表、missingFields、或「你还需要告诉系统 X」。
+3. **System**（产品 LLM / 编排）只看见会话与户型，**不**看见 `customerFacts` 原文。
+4. 模拟循环：建会话 → user agent 开口（可很含糊）→ 系统回复 → user agent 按被问到的回答
+   → 上传户型（若 facts 含图/墙）→ 继续引导至出图确认。
+5. **FR-15 封口去重**：user-agent 引导已覆盖风格/省份等时，不再叠一段重复 seal；
+   仅对引导未触及的缺口（如无窗声明、家电推迟）补一句。
+6. **独立测试 LLM**：user agent / 场景生成使用 `OPENAI_*_TEST` + `LLM_MODEL_TEST_*`
+   （默认本机 Ollama），**不**使用生产 `OPENAI_API_KEY` / `LLM_MODEL_CHAT`。
+   详见 [LLM_ARCHITECTURE.md](./LLM_ARCHITECTURE.md) §7.1。
+7. 未配测试 LLM：确定性 user agent 仅根据助手上一问的关键词从 facts 里抠对应答案，
+   报告标注 `userAgent: deterministic`。
+
+### 验收
+
+- 时间线可见「助手引导 → 用户作答」，而非开场三句自报全量；
+- 系统 prompt / 编排上下文中不出现 `customerFacts` 全文；
+- `pnpm simulate sim-out/YYYY-MM-DD-NN` 报告含 `userAgent` 来源字段。
+
+### 会话持久化（v1.3 / FR-21）
+
+`pnpm simulate [outRoot]` 在 `outRoot/<runId>/` 下落盘：
+
+- `data/` —— 完整 JSON 仓储（conversations、design-sessions、critiques…）；
+- `designs.html` / SVG / `run.json`；
+- `outRoot/latest-run.txt` 指向最近一次 run。
+
+结束时调用 `POST /api/admin/session-runs/:id/end`，触发 `sessionEnd` DesignCritic。
+运营在 `/admin` 按 `runId` / `origin=simulate` 筛选评审。
 
 ---
 
 请对照 REQUIREMENTS.md 第 4 节的索引表核对场景是否齐全。本轮（v0.4）重点确认：
 **场景 A 第 8 点的矛盾修正**、**场景 A 的验收与降级路径**、**场景 C 的确定性路由**、
 **场景 E 的服务端闸门 / 发送前披露 / 计费去重与争议**、**场景 H 的去标识化硬规则**、
-以及**新增的场景 I**——确认后进入开发任务拆解。
+以及**新增的场景 I**——确认后进入开发任务拆解。v1.3 另见上文「用户 LLM 模拟」。

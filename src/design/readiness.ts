@@ -6,12 +6,16 @@
  */
 import type { Conversation } from "../domain/types.js";
 import type { FloorPlan, WallRun } from "../floorplan/types.js";
-import { isLayoutReady } from "../floorplan/types.js";
-import { assumedOnes } from "../floorplan/appliances.js";
+import { isIsland, isLayoutReady } from "../floorplan/types.js";
+import { assumedOnes, applianceLabel } from "../floorplan/appliances.js";
+import { planAppliances } from "../layout/appliance-plan.js";
 import { missingFields, fieldLabel } from "../agents/orchestrator.js";
+import { geometrySuppressesIntake } from "./site-questions.js";
+import { chatConfirmedPlumbing } from "./chat-site-answers.js";
+import { isConfirmAssumedAppliances } from "./chat-appliance-answers.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
-export type CheckStatus = "ok" | "missing" | "needs_confirm" | "deferred";
+export type CheckStatus = "ok" | "missing" | "needs_confirm" | "deferred" | "assumed";
 
 export type CheckCategory = "geometry" | "site" | "appliances" | "intent" | "seller";
 
@@ -34,6 +38,14 @@ export interface DesignBriefSection {
   status: "locked" | "provisional" | "untouched" | "clarify";
 }
 
+/** 已确认 Tab 用的明确事实行（尺寸/位置等，禁止模糊「已记录」）。 */
+export interface ConfirmedFact {
+  key: string;
+  label: string;
+  value: string;
+  status: CheckStatus;
+}
+
 export interface DesignReadiness {
   items: ReadinessItem[];
   /** 关键项是否都已 ok（或 deferred 且非 critical——critical 不允许 deferred 冒充 ok）。 */
@@ -43,6 +55,8 @@ export interface DesignReadiness {
   sections: DesignBriefSection[];
   /** 出图前给客户看的一整段文字确认。 */
   confirmationText: string;
+  /** 已确认/待确认事实清单（给右栏明确列出）。 */
+  confirmedFacts: ConfirmedFact[];
 }
 
 export interface ReadinessInput {
@@ -72,19 +86,47 @@ function featureKind(plan: FloorPlan, kind: string): { run: WallRun; count: numb
 
 function describeFeatures(
   plan: FloorPlan,
-  kind: "plumbing" | "window",
+  kind: "plumbing" | "window" | "door",
   lang: UiLanguage,
 ): string {
   const hits = featureKind(plan, kind);
   if (hits.length === 0) return "";
-  const parts = hits.map(({ run, count }) => {
+  const parts = hits.map(({ run }) => {
     const feats = run.features.filter((f) => f.kind === kind);
-    const offsets = feats.map((f) => `${f.offset}"`).join(lang === "zh" ? "、" : ", ");
-    return lang === "zh"
-      ? `${run.label}上约 ${offsets} 处（${count} 处）`
-      : `${run.label}: ~${offsets} (${count})`;
+    const detail = feats.map((f) =>
+      lang === "zh"
+        ? `距起点 ${f.offset}"、宽 ${f.width}"`
+        : `offset ${f.offset}", width ${f.width}"`,
+    ).join(lang === "zh" ? "；" : "; ");
+    return lang === "zh" ? `${run.label}：${detail}` : `${run.label}: ${detail}`;
   });
-  return parts.join(lang === "zh" ? "；" : "; ");
+  return parts.join(lang === "zh" ? "\n" : "\n");
+}
+
+function geometryLines(plan: FloorPlan, lang: UiLanguage): string[] {
+  const lines: string[] = [];
+  for (const r of plan.parsedGeometry.wallRuns) {
+    const kind = isIsland(r)
+      ? msg(lang, "island", "岛台")
+      : msg(lang, "wall", "墙");
+    const depth = r.depth != null
+      ? msg(lang, `, depth ${r.depth}"`, `，进深 ${r.depth}"`)
+      : "";
+    if (r.length > 0) {
+      lines.push(msg(lang,
+        `${kind} "${r.label}": ${r.length}"${depth}`,
+        `${kind}「${r.label}」：${r.length}"${depth}`));
+    } else {
+      lines.push(msg(lang,
+        `${kind} "${r.label}": length not set`,
+        `${kind}「${r.label}」：长度未定`));
+    }
+  }
+  const ceil = plan.parsedGeometry.ceilingHeight;
+  lines.push(ceil != null
+    ? msg(lang, `Ceiling height: ${ceil}"`, `层高：${ceil}"`)
+    : msg(lang, "Ceiling height: not set", "层高：未定"));
+  return lines;
 }
 
 /**
@@ -98,38 +140,73 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   const shared = prefs?.shared ?? {};
 
   let intake = missingFields(req);
-  if (plan && isLayoutReady(plan)) {
+  // FR-17：解读可用后不再把尺寸/形状当 intake 缺口
+  if (geometrySuppressesIntake(plan) || (plan && isLayoutReady(plan))) {
     intake = intake.filter((f) => f !== "kitchen size" && f !== "layout");
   }
 
   const items: ReadinessItem[] = [];
 
-  // —— 几何 ——
-  if (!plan || !isLayoutReady(plan)) {
-    items.push({
-      id: "walls_ceiling",
-      category: "geometry",
-      critical: true,
-      status: "missing",
-      brief: msg(lang, "Wall lengths / ceiling height not complete yet.", "墙段长度或层高尚未补齐。"),
-      askHint: msg(lang,
-        "Upload a floor plan (+) or enter each wall length and ceiling height in chat.",
-        "请上传户型图（+）或在对话里补齐各段墙长与层高。"),
-    });
-  } else {
-    const walls = plan.parsedGeometry.wallRuns
-      .map((r) => `${r.label} ${r.length}"`)
-      .join(lang === "zh" ? "；" : "; ");
-    const ceil = plan.parsedGeometry.ceilingHeight;
-    items.push({
-      id: "walls_ceiling",
-      category: "geometry",
-      critical: true,
-      status: "ok",
-      brief: msg(lang,
-        `Walls: ${walls}. Ceiling: ${ceil}".`,
-        `墙段：${walls}。层高：${ceil}"。`),
-    });
+  // —— 几何（已有墙长/层高要逐条写出，禁止只说「未齐」）——
+  {
+    const wallsReady = Boolean(
+      plan
+      && plan.parsedGeometry.wallRuns.length > 0
+      && plan.parsedGeometry.wallRuns.every((r) => r.length > 0)
+      && plan.unresolvedItems.every((u) => u.resolved),
+    );
+    const ceilReady = plan?.parsedGeometry.ceilingHeight != null;
+    if (!plan || (!wallsReady && !(plan.parsedGeometry.wallRuns.some((r) => r.length > 0)))) {
+      items.push({
+        id: "walls_ceiling",
+        category: "geometry",
+        critical: true,
+        status: "missing",
+        brief: msg(lang, "Wall lengths / ceiling height not complete yet.", "墙段长度或层高尚未补齐。"),
+        askHint: msg(lang,
+          "Upload a floor plan (+) or enter each wall length and ceiling height in chat.",
+          "请上传户型图（+）或在对话里补齐各段墙长与层高。"),
+      });
+    } else if (!wallsReady || !ceilReady) {
+      const knownRuns = plan!.parsedGeometry.wallRuns.filter((r) => r.length > 0);
+      const known = geometryLines(plan!, lang).join("\n");
+      const isL = /l\s*-?\s*shape|l\s*型/i.test(req);
+      const isU = /u\s*-?\s*shape|u\s*型/i.test(req);
+      let askHint = !wallsReady
+        ? msg(lang, "Enter each wall length in inches (e.g. North 84\").", "请按墙报英寸长度（如 North 84\"）。")
+        : msg(lang, "What is the ceiling height in inches?", "层高多少英寸？");
+      if (!wallsReady && knownRuns.length === 1 && isL) {
+        const w = knownRuns[0]!;
+        askHint = msg(lang,
+          `Got "${w.label}" at ${w.length}" (~${(w.length / 12).toFixed(0)} ft). What is the other L-leg length? (e.g. short leg 96" or 8 ft)`,
+          `已记「${w.label}」${w.length}"（约 ${(w.length / 12).toFixed(0)} 尺）。L 型另一段多长？（如 short leg 96" 或 8 ft）`);
+      } else if (!wallsReady && knownRuns.length >= 1 && knownRuns.length < 3 && isU) {
+        askHint = msg(lang,
+          `Got ${knownRuns.length} run(s). Please give the remaining U-leg length(s) in inches or ft.`,
+          `已有 ${knownRuns.length} 段墙。请补齐 U 型其余段长度（英寸或英尺）。`);
+      } else if (!wallsReady && knownRuns.length === 1 && !isL && !isU) {
+        const w = knownRuns[0]!;
+        askHint = msg(lang,
+          `Got one run "${w.label}" at ${w.length}". Is it I-shape (one wall) or L/U? If L/U, give the other leg length; also need ceiling height.`,
+          `已有一段「${w.label}」${w.length}"。是一字还是 L/U？若是 L/U 请报另一段长度；并请给层高。`);
+      }
+      items.push({
+        id: "walls_ceiling",
+        category: "geometry",
+        critical: true,
+        status: "missing",
+        brief: known + (lang === "zh" ? "\n（尺寸未齐，还不能出图）" : "\n(Sizes incomplete — cannot draw yet)"),
+        askHint,
+      });
+    } else {
+      items.push({
+        id: "walls_ceiling",
+        category: "geometry",
+        critical: true,
+        status: "ok",
+        brief: geometryLines(plan!, lang).join("\n"),
+      });
+    }
   }
 
   // —— 上下水 ——
@@ -141,8 +218,8 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
       critical: true,
       status: "ok",
       brief: msg(lang,
-        `Plumbing: ${describeFeatures(plan, "plumbing", lang)}.`,
-        `上下水：${describeFeatures(plan, "plumbing", lang)}。`),
+        `Plumbing:\n${describeFeatures(plan, "plumbing", lang)}`,
+        `上下水：\n${describeFeatures(plan, "plumbing", lang)}`),
     });
   } else if (DEFER_PLUMBING.test(req)) {
     items.push({
@@ -153,6 +230,20 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
       brief: msg(lang,
         "Plumbing: deferred (you said you'll decide later / none for now).",
         "上下水：已推迟（你说后定或暂无）。"),
+    });
+  } else if (chatConfirmedPlumbing(req)) {
+    // 对话已确认墙位但尚未写入 feature（无户型 / 解析未命中墙 id）时，
+    // 仍按「已确认」展示，避免 Design Basis 与聊天脱节。
+    const snippet = req.split(/\n/).map((s) => s.trim()).find((s) =>
+      /plumbing|sink|下水|水槽/i.test(s)) ?? req.slice(0, 80);
+    items.push({
+      id: "plumbing",
+      category: "site",
+      critical: true,
+      status: "ok",
+      brief: msg(lang,
+        `Plumbing: you confirmed — ${snippet.slice(0, 100)}.`,
+        `上下水：对话已确认——${snippet.slice(0, 100)}。`),
     });
   } else {
     items.push({
@@ -176,8 +267,8 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
       critical: false,
       status: "ok",
       brief: msg(lang,
-        `Windows: ${describeFeatures(plan, "window", lang)}.`,
-        `窗：${describeFeatures(plan, "window", lang)}。`),
+        `Windows:\n${describeFeatures(plan, "window", lang)}`,
+        `窗：\n${describeFeatures(plan, "window", lang)}`),
     });
   } else if (DEFER_WINDOWS.test(req)) {
     items.push({
@@ -200,10 +291,25 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
     });
   }
 
-  // —— 家电种类 ——
+  // —— 门洞（有则明确 offset/width）——
+  const hasDoors = plan ? featureKind(plan, "door").length > 0 : false;
+  if (hasDoors && plan) {
+    items.push({
+      id: "doors",
+      category: "site",
+      critical: false,
+      status: "ok",
+      brief: msg(lang,
+        `Doors:\n${describeFeatures(plan, "door", lang)}`,
+        `门：\n${describeFeatures(plan, "door", lang)}`),
+    });
+  }
+
+  // —— 家电种类（不允许「后定」冒充就绪；尺寸未明不得进设计）——
   const appliances = plan?.appliances ?? [];
   if (appliances.length > 0) {
-    const list = appliances.map((a) => a.kind).join(lang === "zh" ? "、" : ", ");
+    const list = appliances.map((a) =>
+      applianceLabel(a.kind, lang === "zh" ? "zh" : "en")).join(lang === "zh" ? "、" : ", ");
     items.push({
       id: "appliances_kinds",
       category: "appliances",
@@ -211,77 +317,124 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
       status: "ok",
       brief: msg(lang, `Appliances: ${list}.`, `家电：${list}。`),
     });
-  } else if (DEFER_APPLIANCES.test(req)) {
-    items.push({
-      id: "appliances_kinds",
-      category: "appliances",
-      critical: true,
-      status: "deferred",
-      brief: msg(lang, "Appliances: deferred for now.", "家电：暂缓。"),
-    });
   } else {
+    const triedDefer = DEFER_APPLIANCES.test(req);
     items.push({
       id: "appliances_kinds",
       category: "appliances",
       critical: true,
       status: "missing",
-      brief: msg(lang, "Which appliances will be in this kitchen?", "这间厨房会有哪些家电？"),
+      brief: triedDefer
+        ? msg(lang,
+          "Appliances: still needed — sizes cannot be deferred before design.",
+          "家电：仍需确认——出图前尺寸不可后定。")
+        : msg(lang, "Which appliances will be in this kitchen?", "这间厨房会有哪些家电？"),
       askHint: msg(lang,
-        "List appliances (fridge, range, dishwasher…) or say \"appliances later\".",
-        "说说有哪些家电（冰箱、灶台、洗碗机…），或说「家电后定」。"),
+        "List each appliance with width in chat — e.g. fridge 33\", stove 30\", dishwasher 24\".",
+        "请在对话里列出每台家电及宽度，例如：冰箱 33\"、灶具 30\"、洗碗机 24\"。"),
     });
   }
 
-  // —— 家电尺寸 ——
+  // —— 家电尺寸（关键：推定未确认 / 未采集 → 不能 readyToAskDesign）——
   if (appliances.length === 0) {
     items.push({
       id: "appliances_sizes",
       category: "appliances",
-      critical: false,
-      status: appliances.length === 0 && DEFER_APPLIANCES.test(req) ? "deferred" : "missing",
-      brief: msg(lang, "Appliance sizes: n/a until kinds are known.", "家电尺寸：种类未定时暂无。"),
+      critical: true,
+      status: "missing",
+      brief: msg(lang,
+        "Appliance sizes: required before design (cannot defer).",
+        "家电尺寸：出图前必须明确（不可后定）。"),
+      askHint: msg(lang,
+        "Give measured widths with each appliance (e.g. fridge 36\").",
+        "请随家电一并给出实测宽度（如冰箱 36\"）。"),
     });
   } else {
     const assumed = assumedOnes(appliances);
+    const assumedAccepted = isConfirmAssumedAppliances(req);
     const lines = appliances.map((a) => {
-      const w = a.width;
+      const name = applianceLabel(a.kind, lang === "zh" ? "zh" : "en");
       const tag = a.provenance === "assumed"
         ? msg(lang, "assumed", "推定")
-        : msg(lang, "you confirmed", "已确认");
-      return `${a.kind} ${w}" (${tag})`;
+        : msg(lang, "confirmed", "已确认");
+      return lang === "zh"
+        ? `${name}：宽 ${a.width}"（${tag}）`
+        : `${name}: width ${a.width}" (${tag})`;
     });
     items.push({
       id: "appliances_sizes",
       category: "appliances",
-      critical: false,
-      status: assumed.length > 0 ? "needs_confirm" : "ok",
-      brief: lines.join(lang === "zh" ? "；" : "; "),
-      ...(assumed.length > 0
+      critical: true,
+      // 接受推定后仍标 assumed（不假装实测），但不再阻断出图
+      status: assumed.length === 0
+        ? "ok"
+        : assumedAccepted
+          ? "assumed"
+          : "needs_confirm",
+      brief: lines.join("\n"),
+      ...(assumed.length > 0 && !assumedAccepted
         ? {
             askHint: msg(lang,
-              "Some appliance widths are assumed — please confirm or give measured widths.",
-              "部分家电宽度是推定值——请确认或告知实测宽度。"),
+              "Reply with measured widths (e.g. fridge 36\"), or explicitly accept assumed numbers (\"assumed widths are fine\").",
+              "请回复实测宽度（如冰箱 36\"），或明确接受推定数（「推定可以」）。"),
           }
         : {}),
     });
   }
 
+  // —— 家电能否装进现有墙长（尽早报，禁止「收齐再拒绝」）——
+  {
+    const sizesOk = appliances.length > 0
+      && (assumedOnes(appliances).length === 0 || isConfirmAssumedAppliances(req));
+    const wallsWithLen = plan?.parsedGeometry.wallRuns.filter((r) => r.length > 0) ?? [];
+    if (sizesOk && wallsWithLen.length > 0 && plan) {
+      const fit = planAppliances(plan.parsedGeometry, appliances, lang);
+      if (fit.warnings.length > 0) {
+        const detail = fit.warnings.map((w) => w.message).join("\n");
+        items.push({
+          id: "appliances_fit",
+          category: "appliances",
+          critical: true,
+          status: "missing",
+          brief: detail,
+          askHint: msg(lang,
+            "These appliances need more wall length than you have. Shrink appliance widths, drop an appliance, or give a longer wall — then we can design.",
+            "这些家电需要的墙长超过了现有墙段。请改小家电宽度、减少台数，或报更长的墙——否则无法出图。"),
+        });
+      } else {
+        items.push({
+          id: "appliances_fit",
+          category: "appliances",
+          critical: true,
+          status: "ok",
+          brief: msg(lang,
+            "Appliance widths fit the current wall runs.",
+            "家电宽度与现有墙长匹配。"),
+        });
+      }
+    }
+  }
+
   // —— 意图：风格 / 预算 / 省份 ——
+  // FR-15.2：禁止「已记在需求里」——必须写出系统理解到的具体描述。
+  const doorStyleName = doorStyleNameFromPrefs(prefs);
   for (const field of ["style", "budget", "province"] as const) {
     const missing = intake.includes(field);
-    const fromPref = field === "budget" && shared.budgetBand !== undefined;
+    const fromPref = (field === "budget" && shared.budgetBand !== undefined)
+      || (field === "style" && Boolean(doorStyleName));
     const ok = !missing || fromPref;
+    const understood = ok
+      ? (field === "style" && doorStyleName && missing
+        ? msg(lang, `Style: ${doorStyleName}.`, `风格：${doorStyleName}。`)
+        : describeIntentField(field, req, shared.budgetBand, lang))
+      : "";
     items.push({
       id: field,
       category: "intent",
       critical: true,
       status: ok ? "ok" : "missing",
       brief: ok
-        ? (field === "budget" && shared.budgetBand
-          ? msg(lang, `Budget band: ${shared.budgetBand}.`, `预算档：${shared.budgetBand}。`)
-          : msg(lang,
-            `${fieldLabel(field, lang)}: noted in your requirements.`,
-            `${fieldLabel(field, lang)}：已记在需求里。`))
+        ? understood
         : msg(lang,
           `${fieldLabel(field, lang)}: not yet.`,
           `${fieldLabel(field, lang)}：尚未确认。`),
@@ -318,14 +471,119 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   const openItems = items.filter((i) => i.status === "missing" || i.status === "needs_confirm");
   const criticalBlocking = items.filter((i) =>
     i.critical && (i.status === "missing" || i.status === "needs_confirm"));
-  // deferred critical counts as satisfied for asking design (customer chose to defer)
+  // deferred / assumed（已接受推定）的关键项不阻断询问出图
   const readyToAskDesign = criticalBlocking.length === 0
     && items.some((i) => i.id === "walls_ceiling" && i.status === "ok");
 
   const sections = buildSections(items, lang);
   const confirmationText = buildConfirmationText(items, readyToAskDesign, lang);
+  const confirmedFacts = buildConfirmedFacts(items, plan, lang);
 
-  return { items, readyToAskDesign, openItems, sections, confirmationText };
+  return { items, readyToAskDesign, openItems, sections, confirmationText, confirmedFacts };
+}
+
+/** 把检查项拆成「标签 → 明确值」行，供已确认 Tab 逐条列出。 */
+function buildConfirmedFacts(
+  items: ReadinessItem[],
+  plan: FloorPlan | undefined,
+  lang: UiLanguage,
+): ConfirmedFact[] {
+  const facts: ConfirmedFact[] = [];
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+
+  if (plan) {
+    for (const r of plan.parsedGeometry.wallRuns) {
+      const kind = isIsland(r)
+        ? msg(lang, "Island", "岛台")
+        : msg(lang, "Wall", "墙");
+      const depth = r.depth != null
+        ? msg(lang, `, depth ${r.depth}"`, `，进深 ${r.depth}"`)
+        : "";
+      facts.push({
+        key: `wall:${r.id}`,
+        label: msg(lang, `${kind} ${r.label}`, `${kind} ${r.label}`),
+        value: r.length > 0
+          ? msg(lang, `${r.length}"${depth}`, `${r.length}"${depth}`)
+          : msg(lang, "not set", "未定"),
+        status: r.length > 0 ? "ok" : "missing",
+      });
+    }
+    const ceil = plan.parsedGeometry.ceilingHeight;
+    facts.push({
+      key: "ceiling",
+      label: msg(lang, "Ceiling height", "层高"),
+      value: ceil != null ? `${ceil}"` : msg(lang, "not set", "未定"),
+      status: ceil != null ? "ok" : "missing",
+    });
+    for (const kind of ["plumbing", "window", "door"] as const) {
+      for (const { run } of featureKind(plan, kind)) {
+        for (const f of run.features.filter((x) => x.kind === kind)) {
+          const kindLabel = kind === "plumbing"
+            ? msg(lang, "Plumbing", "上下水")
+            : kind === "window"
+              ? msg(lang, "Window", "窗")
+              : msg(lang, "Door", "门");
+          facts.push({
+            key: `${kind}:${run.id}:${f.offset}`,
+            label: msg(lang, `${kindLabel} on ${run.label}`, `${run.label} · ${kindLabel}`),
+            value: msg(lang,
+              `offset ${f.offset}", width ${f.width}"`,
+              `距起点 ${f.offset}"，宽 ${f.width}"`),
+            status: "ok",
+          });
+        }
+      }
+    }
+    for (const a of plan.appliances ?? []) {
+      const name = applianceLabel(a.kind, lang === "zh" ? "zh" : "en");
+      const tag = a.provenance === "assumed"
+        ? msg(lang, "assumed", "推定")
+        : msg(lang, "confirmed", "已确认");
+      facts.push({
+        key: `appliance:${a.kind}`,
+        label: name,
+        value: msg(lang, `width ${a.width}" (${tag})`, `宽 ${a.width}"（${tag}）`),
+        status: a.provenance === "assumed" ? "assumed" : "ok",
+      });
+    }
+  }
+
+  for (const id of ["style", "budget", "province", "seller"] as const) {
+    const it = byId[id];
+    if (!it || it.status === "missing") continue;
+    const label = id === "style"
+      ? msg(lang, "Style", "风格")
+      : id === "budget"
+        ? msg(lang, "Budget", "预算")
+        : id === "province"
+          ? msg(lang, "Province", "省份")
+          : msg(lang, "Seller", "厂商");
+    // brief 形如 "Budget: economy…" —— 去掉前缀留值
+    const raw = it.brief.replace(/^(Style|Budget|Province|Seller|风格|预算|省份|厂商)\s*[：:]\s*/i, "").replace(/\.$/, "");
+    facts.push({
+      key: id,
+      label,
+      value: raw || it.brief,
+      status: it.status,
+    });
+  }
+
+  // 对话确认上下水但尚未写入 feature 时，仍列入事实
+  const plumbingItem = byId.plumbing;
+  if (
+    plumbingItem
+    && (plumbingItem.status === "ok" || plumbingItem.status === "deferred")
+    && !facts.some((f) => f.key.startsWith("plumbing:"))
+  ) {
+    facts.push({
+      key: "plumbing:chat",
+      label: msg(lang, "Plumbing", "上下水"),
+      value: plumbingItem.brief.replace(/^(Plumbing|上下水)\s*[：:]\s*/i, ""),
+      status: plumbingItem.status,
+    });
+  }
+
+  return facts;
 }
 
 function statusToSection(
@@ -334,7 +592,8 @@ function statusToSection(
   switch (status) {
     case "ok": return "locked";
     case "deferred": return "provisional";
-    case "needs_confirm": return "clarify";
+    case "needs_confirm":
+    case "assumed": return "clarify";
     case "missing": return "untouched";
   }
 }
@@ -344,8 +603,8 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
   const pick = (...ids: string[]) => ids.map((id) => byId[id]).filter(Boolean) as ReadinessItem[];
 
   const space = pick("walls_ceiling");
-  const site = pick("plumbing", "windows");
-  const appl = pick("appliances_kinds", "appliances_sizes");
+  const site = pick("plumbing", "windows", "doors");
+  const appl = pick("appliances_kinds", "appliances_sizes", "appliances_fit");
   const intent = pick("style", "budget", "province");
   const seller = pick("seller");
 
@@ -355,13 +614,15 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
     titleZh: string,
     group: ReadinessItem[],
   ): DesignBriefSection => {
-    const worst = group.some((g) => g.status === "missing")
+    const worst: CheckStatus = group.some((g) => g.status === "missing")
       ? "missing"
       : group.some((g) => g.status === "needs_confirm")
         ? "needs_confirm"
-        : group.every((g) => g.status === "ok" || g.status === "deferred")
-          ? (group.some((g) => g.status === "deferred") ? "deferred" : "ok")
-          : "missing";
+        : group.some((g) => g.status === "assumed")
+          ? "assumed"
+          : group.some((g) => g.status === "deferred")
+            ? "deferred"
+            : "ok";
     const untouched = group.every((g) => g.status === "missing");
     const body = untouched
       ? msg(lang, "Not discussed yet.", "还没聊。")
@@ -370,7 +631,7 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
       id,
       title: msg(lang, titleEn, titleZh),
       body,
-      status: statusToSection(worst as CheckStatus),
+      status: statusToSection(worst),
     };
   };
 
@@ -399,7 +660,9 @@ function buildConfirmationText(
   }
 
   const facts = items
-    .filter((i) => i.status === "ok" || i.status === "deferred" || i.status === "needs_confirm")
+    .filter((i) =>
+      i.status === "ok" || i.status === "deferred"
+      || i.status === "needs_confirm" || i.status === "assumed")
     .map((i) => `· ${i.brief}`);
   if (lang === "zh") {
     return (
@@ -418,4 +681,151 @@ function buildConfirmationText(
 /** 关键缺口的英文稳定键，供 quick-replies / 编排使用。 */
 export function readinessOpenFields(readiness: DesignReadiness): string[] {
   return readiness.openItems.map((i) => i.id);
+}
+
+/**
+ * 从需求原文抽出客户可见的风格/预算/省份描述。
+ * 匹配标准选项时用标准术语；否则用摘录，绝不写「已记在需求里」。
+ */
+export function describeIntentField(
+  field: "style" | "budget" | "province",
+  requirements: string,
+  budgetBand: string | undefined,
+  lang: UiLanguage,
+): string {
+  const text = requirements;
+  if (field === "budget") {
+    if (budgetBand) {
+      const label = BUDGET_BAND_LABEL[budgetBand]?.[lang]
+        ?? budgetBand;
+      return msg(lang, `Budget: ${label}.`, `预算：${label}。`);
+    }
+    const m = text.match(
+      /预算[^。\n]{0,40}|budget[^.\n]{0,40}|CAD\s*\$?\s*[\d,.–-]+\s*k?/i,
+    );
+    const phrase = (m?.[0] ?? "").trim() || msg(lang, "stated in chat", "已在对话中说明");
+    return msg(lang, `Budget: ${phrase}.`, `预算：${phrase}。`);
+  }
+
+  if (field === "province") {
+    const hit = matchProvince(text);
+    if (hit) {
+      return msg(lang,
+        `Province: ${hit.en} (${hit.code}).`,
+        `省份：${hit.zh}（${hit.code}）。`);
+    }
+    return msg(lang, "Province: stated in chat.", "省份：已在对话中说明。");
+  }
+
+  // style
+  const style = matchStyle(text, lang);
+  return msg(lang, `Style: ${style}.`, `风格：${style}。`);
+}
+
+const BUDGET_BAND_LABEL: Record<string, { en: string; zh: string }> = {
+  economy: { en: "economy (under ~CAD $10k)", zh: "经济型（约 1 万加币以内）" },
+  standard: { en: "standard (CAD $10–20k)", zh: "标准档（约 1–2 万加币）" },
+  premium: { en: "premium (over CAD $20k)", zh: "高端（约 2 万加币以上）" },
+  unsure: { en: "not decided yet", zh: "还没想好" },
+};
+
+const STYLE_TERMS: { re: RegExp; en: string; zh: string }[] = [
+  { re: /现代简约|极简|minimal/i, en: "Modern / minimal", zh: "现代简约" },
+  { re: /灰色.{0,8}(纹理|平板)|灰.{0,6}平板|grey?\s*(textured?\s*)?(slab|flat)/i, en: "Grey textured flat-panel", zh: "灰色纹理平板门" },
+  { re: /哑光\s*白|matte\s*white|white\s*laminate/i, en: "Matte white laminate", zh: "哑光白层压板" },
+  { re: /平板\s*门|flat\s*panel|\bslab\b|laminate|薄层压|门板/i, en: "Flat-panel / laminate", zh: "平板门 / 层压" },
+  { re: /\bmodern\b|现代/i, en: "Modern", zh: "现代" },
+  { re: /farmhouse|美式乡村|田园/i, en: "Farmhouse", zh: "美式乡村" },
+  { re: /nordic|北欧|scandi/i, en: "Nordic", zh: "北欧" },
+  { re: /transitional|轻奢/i, en: "Transitional", zh: "轻奢 / 过渡" },
+  { re: /traditional|传统|欧式/i, en: "Traditional", zh: "传统" },
+  { re: /shaker/i, en: "Shaker", zh: "Shaker" },
+  { re: /工业风|industrial/i, en: "Industrial", zh: "工业风" },
+  { re: /日式|japandi/i, en: "Japanese / Japandi", zh: "日式" },
+];
+
+function matchStyle(text: string, lang: UiLanguage): string {
+  for (const t of STYLE_TERMS) {
+    if (t.re.test(text)) return lang === "zh" ? t.zh : t.en;
+  }
+  // 摘一句含「风格/style/门板」的片段，避免模糊占位
+  const m = text.match(/(?:风格|style|门板|door\s*style)[^。.\n]{0,40}/i);
+  if (m) return m[0]!.trim();
+  const line = text.split(/\n/).map((s) => s.trim()).find((s) =>
+    /门|door|灰|白|gray|grey|matte|laminate|平板|slab/i.test(s));
+  if (line) return line.slice(0, 64);
+  const first = text.split(/\n/).map((s) => s.trim()).find((s) => s.length > 0);
+  return (first ?? msg(lang, "as described", "如所述")).slice(0, 48);
+}
+
+/**
+ * 省份匹配。
+ *
+ * 绝不能用裸的 `\bon\b`：英文里 “sink on left wall / based on …” 会把整段需求
+ * 误判成 Ontario，覆盖客户已说的「BC省」。两字母省码只认大写或「XX省」。
+ */
+const PROVINCES: {
+  code: string;
+  en: string;
+  zh: string;
+  /** 全名 / 城市 / 「XX省」——可大小写不敏感。 */
+  nameRe: RegExp;
+  /** 两字母省码：仅匹配大写（避免 on/ab 等英语词）。 */
+  codeRe: RegExp;
+}[] = [
+  {
+    code: "BC", en: "British Columbia", zh: "不列颠哥伦比亚省",
+    nameRe: /british\s*columbia|不列颠|温哥华|bc\s*省/i,
+    codeRe: /(?:^|[^A-Za-z])BC(?:[^A-Za-z]|$)/,
+  },
+  {
+    code: "AB", en: "Alberta", zh: "阿尔伯塔省",
+    nameRe: /alberta|阿尔伯塔|卡尔加里|ab\s*省/i,
+    codeRe: /(?:^|[^A-Za-z])AB(?:[^A-Za-z]|$)/,
+  },
+  {
+    code: "QC", en: "Quebec", zh: "魁北克省",
+    nameRe: /quebec|québec|魁北克|蒙特利尔|qc\s*省/i,
+    codeRe: /(?:^|[^A-Za-z])QC(?:[^A-Za-z]|$)/,
+  },
+  {
+    code: "ON", en: "Ontario", zh: "安大略省",
+    nameRe: /ontario|安大略|多伦多|渥太华|on\s*省/i,
+    codeRe: /(?:^|[^A-Za-z])ON(?:[^A-Za-z]|$)/,
+  },
+];
+
+/** @internal 导出供单测断言省份解析。 */
+export function matchProvince(text: string): { code: string; en: string; zh: string } | undefined {
+  // 全名优先；多个命中时取最后一次出现（后说的省份覆盖前面的）
+  let best: { code: string; en: string; zh: string; index: number } | undefined;
+  for (const p of PROVINCES) {
+    const nameHit = p.nameRe.exec(text);
+    if (nameHit && nameHit.index !== undefined) {
+      if (!best || nameHit.index >= best.index) {
+        best = { code: p.code, en: p.en, zh: p.zh, index: nameHit.index };
+      }
+    }
+    const codeHit = p.codeRe.exec(text);
+    if (codeHit && codeHit.index !== undefined) {
+      // 省码权重略低：同一位置全名赢；更靠后的省码仍可覆盖
+      const idx = codeHit.index;
+      if (!best || idx > best.index) {
+        best = { code: p.code, en: p.en, zh: p.zh, index: idx };
+      }
+    }
+  }
+  return best ? { code: best.code, en: best.en, zh: best.zh } : undefined;
+}
+
+function doorStyleNameFromPrefs(
+  prefs: Conversation["preferences"],
+): string | undefined {
+  const by = prefs?.byCompany;
+  if (!by) return undefined;
+  for (const c of Object.values(by)) {
+    // doorStyleId 本身常是可读 slug；若需求文案里已有同名则 matchStyle 会吃到
+    if (c?.doorStyleId) return c.doorStyleId.replace(/[_-]+/g, " ");
+  }
+  return undefined;
 }

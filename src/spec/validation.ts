@@ -9,9 +9,12 @@
  */
 import { priceEntryFor } from "./finish.js";
 import type {
-  AccessoryOption, BoxMaterialOption, DoorStyle, HardwareOption, ModuleSelection, ModuleSpec,
-  PriceMatrixEntry, Province, TaxRule,
+  AccessoryOption, BoxMaterialOption, CompanyCodingRules, DoorStyle, HardwareOption,
+  ModuleSelection, ModuleSpec, PriceMatrixEntry, Province, TaxRule,
 } from "../domain/types.js";
+import {
+  priceGroupLooksLikeBoxDoorSuffix, resolveModuleSellUnit,
+} from "./sku-semantics.js";
 
 /** 出现在模型输出里就要被丢弃的字段名（不区分大小写）。 */
 const PRICE_FIELD_PATTERN =
@@ -269,4 +272,69 @@ export function validateSelections(
   }
 
   return { ok: issues.length === 0, issues };
+}
+
+// ── FR-16 规格语义校验（导入/发布门槛）────────────────────────────────────
+
+export type SpecSemanticsCode =
+  | "PRICE_GROUP_MASQUERADES_BOX_DOOR"
+  | "SELL_UNIT_CONTRADICTS_TYPE"
+  | "SELL_UNIT_INFERRED";
+
+export interface SpecSemanticsIssue {
+  code: SpecSemanticsCode;
+  message: string;
+  /** inferred 为提示；其余为阻断。 */
+  severity: "blocking" | "advisory";
+  ref?: string;
+}
+
+/**
+ * 发布前的 FR-16 语义检查：
+ * - PriceGroup 不得用 BOX/DOOR 后缀冒充售卖单元
+ * - trim 类型不得声明为 combo/box/door（与 trim BOM 自相矛盾）
+ * - 未声明 sellUnit 的推断结果标 advisory（待确认）
+ */
+export function validateSpecSemantics(input: {
+  modules: readonly ModuleSpec[];
+  priceGroups: readonly { code: string; id?: string }[];
+  codingRules?: CompanyCodingRules;
+}): SpecSemanticsIssue[] {
+  const issues: SpecSemanticsIssue[] = [];
+
+  for (const pg of input.priceGroups) {
+    if (priceGroupLooksLikeBoxDoorSuffix(pg.code)) {
+      issues.push({
+        code: "PRICE_GROUP_MASQUERADES_BOX_DOOR",
+        severity: "blocking",
+        ref: pg.code,
+        message: `PriceGroup "${pg.code}" looks like a BOX/DOOR sell-unit suffix — ` +
+          `use real module rows (e.g. B12-PLY-BOX) instead of PriceGroup masquerading`,
+      });
+    }
+  }
+
+  for (const mod of input.modules) {
+    const resolved = resolveModuleSellUnit(mod, input.codingRules);
+    const trimType = ["filler", "panel", "toeKick", "crown", "leg"].includes(mod.type);
+    if (trimType && mod.sellUnit && mod.sellUnit !== "standalone") {
+      issues.push({
+        code: "SELL_UNIT_CONTRADICTS_TYPE",
+        severity: "blocking",
+        ref: mod.code,
+        message: `Module ${mod.code} is type ${mod.type} but declares sellUnit=${mod.sellUnit}; ` +
+          `trim types must be standalone`,
+      });
+    }
+    if (!mod.sellUnit && resolved.inferred) {
+      issues.push({
+        code: "SELL_UNIT_INFERRED",
+        severity: "advisory",
+        ref: mod.code,
+        message: `Module ${mod.code}: sellUnit inferred as ${resolved.sellUnit} (${resolved.reason})`,
+      });
+    }
+  }
+
+  return issues;
 }

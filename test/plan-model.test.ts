@@ -61,8 +61,15 @@ test("相接的墙段串成一个真正的平面，不是三条各自独立的�
   const plan = buildKitchenPlan(uShaped);
   assert.equal(plan.connected, true);
   assert.equal(plan.note, undefined, "拼得起来就不该出「示意排列」的提示");
-  // 每转一次弯走向要变——三段同向说明根本没转
-  assert.deepEqual(plan.runs.map((r) => r.heading), [0, 90, 180]);
+  // 西→北→东：罗盘标签定走向（室内在右），不是一律从 heading 0 盲转
+  assert.deepEqual(
+    plan.runs.map((r) => ({ label: r.run.label, heading: r.heading })),
+    [
+      { label: "西墙", heading: 270 },
+      { label: "北墙", heading: 0 },
+      { label: "东墙", heading: 90 },
+    ],
+  );
 });
 
 test("拼不上的墙段如实标注为示意排列，不假装知道方位", () => {
@@ -314,9 +321,28 @@ test("岛台加进来不接任何墙", async () => {
 
 test("段内坐标换到世界坐标：室内在走向的右手侧", () => {
   const plan = buildKitchenPlan(uShaped);
-  const west = plan.runs[0]!; // heading 0，向右走
-  // 沿走向 10"、往室内 24"
-  assert.deepEqual(toPlane(west, 10, 24), { x: 10, y: 24 });
-  const north = plan.runs[1]!; // heading 90，向下走
-  assert.deepEqual(toPlane(north, 10, 24), { x: 132 - 24, y: 10 });
+  const west = plan.runs[0]!; // 西墙 heading 270，向上走
+  // 沿走向 10"、往室内 24"（右手 = +x）
+  assert.deepEqual(toPlane(west, 10, 24), { x: 24, y: -10 });
+  const north = plan.runs[1]!; // 北墙 heading 0，向右走；起点在西墙尽头
+  assert.deepEqual(toPlane(north, 10, 24), { x: 10, y: -132 + 24 });
+});
+
+test("罗盘标签纠正录入顺序：先写东墙再写北墙，平面仍按北→东顺时针", () => {
+  const scrambled: ParsedGeometry = {
+    wallRuns: [
+      wall("e", "东墙", 120, { endsAtCorner: true }),
+      wall("n", "北墙", 144, { startsAtCorner: true }),
+    ],
+    confidence: 1,
+  };
+  const plan = buildKitchenPlan(scrambled);
+  assert.equal(plan.connected, true);
+  assert.deepEqual(
+    plan.runs.map((r) => ({ label: r.run.label, heading: r.heading })),
+    [
+      { label: "北墙", heading: 0 },
+      { label: "东墙", heading: 90 },
+    ],
+  );
 });

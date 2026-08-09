@@ -11,8 +11,9 @@ import path from "node:path";
 import { JsonCollection } from "./json-store.js";
 import type {
   CabinetCompany, CompanyMentionSignal, CompanyProspect, Conversation,
-  CustomerAccount, DesignLayout, DesignRevision, EmailSubscription, EstimateDraft,
-  LeadBillingEvent, ProductSpecVersion, Quote, QuoteAuditEvent,
+  CritiqueReview, CustomerAccount, DeliveryAuditRecord, DesignLayout, DesignRevision,
+  EmailSubscription, EstimateDraft, LeadBillingEvent, ProductSpecVersion, Quote,
+  QuoteAuditEvent, SessionRun,
 } from "../domain/types.js";
 import type { SpecBundle } from "../spec/bundle.js";
 import type { FloorPlan } from "../floorplan/types.js";
@@ -20,6 +21,9 @@ import type { StoredLayout } from "../layout/store.js";
 import type { TradeVerification } from "../trade/verification.js";
 import type { DesignSession } from "../design/stages.js";
 import type { OnboardingSession } from "../spec/onboarding.js";
+import type { PlatformKnowledgeCard, TrainerConversation } from "../knowledge/types.js";
+import type { CompanyLearningItem } from "../knowledge/l1-types.js";
+import type { TestUserRun } from "../testing/types.js";
 
 export interface Repositories {
   companies: JsonCollection<CabinetCompany>;
@@ -46,6 +50,20 @@ export interface Repositories {
   estimates: JsonCollection<EstimateDraft>;
   prospects: JsonCollection<CompanyProspect>;
   subscriptions: JsonCollection<EmailSubscription>;
+  /** 可回放运行索引（FR-21）。 */
+  sessionRuns: JsonCollection<SessionRun>;
+  /** 运营侧 DesignCritic 评审（FR-21）。 */
+  critiqueReviews: JsonCollection<CritiqueReview>;
+  /** FR-14 交付审核旁路落盘，供 Critic 引用。 */
+  deliveryAudits: JsonCollection<DeliveryAuditRecord>;
+  /** FR-22：平台可训练知识卡。 */
+  knowledgeCards: JsonCollection<PlatformKnowledgeCard>;
+  /** FR-22：运营训练会话。 */
+  trainerConversations: JsonCollection<TrainerConversation>;
+  /** FR-22.2：厂商 L1 学习队列（按 companyId 隔离）。 */
+  l1LearningQueue: JsonCollection<CompanyLearningItem>;
+  /** 测试用户 Agent 套件（可切割 src/testing）。 */
+  testUserRuns: JsonCollection<TestUserRun>;
 }
 
 export function openRepositories(dataDir = process.env.DATA_DIR ?? path.join(process.cwd(), "data")): Repositories {
@@ -83,5 +101,12 @@ export function openRepositories(dataDir = process.env.DATA_DIR ?? path.join(pro
       .addUniqueKey("email", (p) => p.email.toLowerCase()),
     subscriptions: new JsonCollection<EmailSubscription>(f("subscriptions"))
       .addUniqueKey("email", (s) => s.email.toLowerCase()),
+    sessionRuns: new JsonCollection<SessionRun>(f("session-runs")),
+    critiqueReviews: new JsonCollection<CritiqueReview>(f("critique-reviews")),
+    deliveryAudits: new JsonCollection<DeliveryAuditRecord>(f("delivery-audits")),
+    knowledgeCards: new JsonCollection<PlatformKnowledgeCard>(f("knowledge-cards")),
+    trainerConversations: new JsonCollection<TrainerConversation>(f("trainer-conversations")),
+    l1LearningQueue: new JsonCollection<CompanyLearningItem>(f("l1-learning-queue")),
+    testUserRuns: new JsonCollection<TestUserRun>(f("test-user-runs")),
   };
 }

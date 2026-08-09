@@ -1,4 +1,34 @@
-# 加拿大橱柜报价平台 —— 需求说明书（v1.1）
+# 加拿大橱柜报价平台 —— 需求说明书（v1.3）
+
+> **v1.3 变更摘要**（户型上传会话、无默认厂商、墙对齐/Q#、用户 LLM 模拟）：
+> 1. 新增 **FR-17 户型图上传后的会话行为**：回显原图 + 解读；拿不准项请客户确认；
+>    同步更新右栏「已确认」。解读可用后**不再**追问墙尺寸 / 「一字型·L型」等，除非图没读懂。
+>    已答过的问题在会话中显示**已得到的反馈**，禁止重复甩同一组 quick replies。
+> 2. 新增 **FR-18 无默认厂商**：客户未主动 `@` / 选择时，用**通用规格**演算；前端 boot、
+>    server、模拟均**不得**自动 `selectCompany` 第一家。
+> 3. 新增 **FR-19 墙名对齐与现场 Q#**：用简图对齐「南墙/北墙/A墙」等标签；窗、上下水、门、
+>    层高等在图上标 **Q#**，客户按题号在会话中回答。
+> 4. 修订 **§3.7 / FR-15.2**：「已确认」逐步写清事实（禁止「风格：已记在需求里」）；
+>    「输出物」为可点击预览的设计图/文档/报价列表。
+> 5. 明确 **收齐后继续会话**：答完当前问 → 齐则问是否给初步设计；未齐则继续追问。
+> 6. 新增 **FR-20 测试用用户 LLM**：模拟中由 user agent 扮演客户（只知其私有事实，
+>    不知系统检查表）；与系统 LLM 信息隔离。见 [SCENARIOS.md](./SCENARIOS.md)。
+> 7. 新增 **FR-21 DesignCritic + 全会话持久化**：运营侧自动挑刺（客户不可见）；
+>    生产 / simulate / 集成测试会话可寻址落盘。见 [DESIGN_CRITIC_AGENT.md](./DESIGN_CRITIC_AGENT.md)。
+> 8. 新增 **FR-22 平台知识训练与按 sink 沉淀**：运营通过训练会话写入 L0 知识卡；
+>    按 `settleTarget` 沉淀到 handbook / config overlay / review.rule（SR+audit）。
+>    见 [SYSTEM_TRAINER_AGENT.md](./SYSTEM_TRAINER_AGENT.md)。
+>    **FR-22.2**：厂商 L1 学习队列（按 companyId）+ 回归看板；禁写 L0 / 禁自动改 published 价目。
+> 9. 新增 **FR-23 厂商协作子线程**：客户确认后在项目下开永久分支；厂商不见主轨；
+>    已确认分共享/厂专用，共享可 promote。见 [COMPANY_ENGAGEMENT.md](./COMPANY_ENGAGEMENT.md)。
+>
+> **v1.2 变更摘要**（知识与编码分层）：
+> 1. 新增 **FR-16** 与设计文档 [KNOWLEDGE_LAYERS.md](./KNOWLEDGE_LAYERS.md)：
+>    **系统层**只保留售卖单元语义（`-BOX` / `-DOOR` / 组合件）与独立件规则；
+>    **厂商层**隔离规格、柜型前缀规则（如 B12 vs DB12）、公司手册与会话偏好。
+> 2. 修订 **FR-6.1**：在「柜体价含门」主流路径之外，明确真实 BOX/DOOR SKU 与
+>    filler 等 standalone 的分行方式；禁止用 PriceGroup 冒充后缀。
+> 3. 扩展 **FR-2.2**：厂商可发布 `CodingRules`；能力标签仍是跨厂唯一对齐手段。
 
 > **v1.1 变更摘要**（AI 原生界面与出图前核对）：
 > 1. 新增 **§3.7 客户界面三栏职责**与 **FR-15 设计就绪检查表 / 设计 brief**：
@@ -136,6 +166,8 @@
 | **橱柜公司（Company）** | 现实中的橱柜厂商/经销商，即平台的供给侧租户，最终报价邮件的接收方 |
 | **公司运营/店长** | 使用"公司入驻规格录入会话"整理自家产品规格的人 |
 | **平台运营/管理员** | 平台自己的员工：维护公司发现库、社媒投放、招商外联、处理计费争议（见 FR-12、第 8 节） |
+| **设计专家 Critic（DesignCritic）** | 运营侧自动评审：只读全部系统会话与设计产出，对过程与产出物挑刺；建议写入运营评审框，**不进客户会话**（见 FR-21） |
+| **系统训练 Agent（Platform Trainer）** | 运营人工教 L0 知识卡；与 DesignCritic **分轨**，禁止自动从客户会话写 L0（见 FR-22） |
 
 ---
 
@@ -378,8 +410,8 @@ v0.3 把价格建成"每个型号一个零售价 + 一个可选贸易价"两个�
 |---|---|---|
 | **左：会话历史** | 多段会话列表；标题按栏宽截断 | 不是项目看板 |
 | **中：主会话** | **唯一干活的地方**：自然语言协商、上传（`+`）、`@` 厂商、`/` 加速选型、需确认时的轻量卡片 | 不是顶部硬按钮工具条；偏好/预算默认在对话里柔性收集 |
-| **右 Tab1：设计 brief** | **双方当前共识的可读叙事**（空间、水电窗、家电、风格预算、已选履约项） | **不是**字段 × 待定的 CRM 表；若看起来能被一排 Input 替换，就不合格 |
-| **右 Tab2：输出物** | 步骤进度、下载、图纸/报价预览 | 不是再收集一轮表单 |
+| **右 Tab1：已确认（设计 brief）** | **逐步明确的共识叙事**：户型、尺寸、位置、形状、偏好、风格、预算、家电、省份/税、厂商等 | **不是**字段 × 待定的 CRM 表；禁止「风格：已记在需求里」这类模糊句——要用系统自己的理解描述（标准选项则用标准术语） |
+| **右 Tab2：输出物** | 会话中已生成的设计图、文档、报价等**列表**，可点击预览/下载 | 不是再收集一轮表单；不是把「已确认」再抄一遍 |
 
 原则：
 
@@ -388,23 +420,25 @@ v0.3 把价格建成"每个型号一个零售价 + 一个可选贸易价"两个�
 2. Tab1 每块叙事带轻量状态：`已锁定` / `暂定` / `未谈及` / `待澄清`，并尽量可溯源到会话。
 3. 系统**另有一份内部检查表**（客户默认不直接填这张表，见 FR-15）——用来决定还缺什么、
    能不能进入「要不要出设计」这一问。
+4. **答完继续**：客户答完当前问题后，系统基于状态推进——信息收齐 → 问是否给初步设计；
+   未齐 → 继续追问补齐（见 FR-17.3）。
 
 输入加速器（可选，非默认路径）：
 
-- `+`：上传户型图/图纸 → 解析后在会话里核对补齐；
-- `@`：确定性点名厂商（与 FR-1 路由一致）；
+- `+`：上传户型图/图纸 → **会话内回显原图 + 解读** → 拿不准处确认（FR-17）；
+- `@`：客户**主动**点名厂商（与 FR-1 / FR-18 一致）；**禁止** boot 时默认选第一家；
 - `/`：从当前厂商规格库选花色、柜体材质等（过滤补全）；**不是**把整份问卷搬进斜杠菜单。
 
-### 3.8 语言策略（v1.1 新增）
+### 3.8 语言策略（v1.1；v1.2.1 修订）
 
 | 规则 | 说明 |
 |---|---|
 | **默认英文** | 新会话、未声明偏好时，客户可见文案为英文 |
-| **显式才切中文** | 仅当客户明确要求（或写入 `preferences.shared.language = "zh"`） |
-| **图纸标注一律英文** | 正视图/俯视图/侧视图上的标签、尺寸说明不受 UI 语言影响 |
+| **跟随客户话术** | 客户整段用中文交流 → 对话/说明切中文；明确要求英文则切回。夹几个中文词的英文句不切 |
+| **图纸标注一律英文** | 正视图/俯视图/侧视图上的标签、尺寸、柜号 `#N` 不受 UI 语言影响 |
 | **同一事实一份措辞** | RTA 说明等关键边界文案中英文成对维护，不交给模型即兴发挥 |
 
-实现见 `src/i18n/language.ts`。
+实现见 `src/i18n/language.ts`（`inferLanguageFromText` / `detectLanguageSwitch`）。
 
 ### 3.6 版本化与可追溯（v0.4 新增）
 
@@ -641,6 +675,11 @@ v0.3 在第 7 节写了"报价单发送前的每一版设计/报价都应可追�
 
 一句话：**编码不映射，能力才映射。**
 
+厂商还必须提供（或导入时整理出）**本公司 CodingRules**（柜型前缀含义、是否使用
+`-BOX`/`-DOOR` 拆分、材质/花色 token 表）。这些规则**只在本公司规格版本内有效**，
+不得写入总控 Agent。系统层只保留售卖单元后缀语义与独立件规则——见 **FR-16**、
+[KNOWLEDGE_LAYERS.md](./KNOWLEDGE_LAYERS.md)、[product-codes.md](./product-codes.md)。
+
 详见 [CATALOG_MODEL.md](./CATALOG_MODEL.md)。
 
 ### FR-3　户型图上传与解析
@@ -817,8 +856,16 @@ collecting ──(户型齐)──> readyToDraw ──(客户点头)──> plan
 落位靠围合区而不是墙线。
 
 过道净空按 NKBA：低于 36" **阻断**（人过不去），低于 42" 提示（弯腰开柜门会顶到
-对面）。量的是**台面外沿之间**的距离，不是柜体箱体之间——两边各伸 1-1/2"，
+对面）；超过约 60" 提示「岛台太远」（可加大岛台或拉近）。量的是**台面外沿之间**的距离，不是柜体箱体之间——两边各伸 1-1/2"，
 按箱体量会算出一条实际上并不存在的合格过道。
+
+灶具（range/cooktop）**不得坐在内墙角**：内墙角须用转角柜（盲角/钻石/转角拉篮等）；
+灶具落位须留出两侧落台区，并与转角 keep-out 错开。
+
+水槽柜应对准窗中心（有窗时）；吊柜层不得遮挡窗洞。
+
+每个柜体有稳定编号 `#N`（图纸英文标注），客户可说「把 #12 和 #13 改成一样宽」
+「把 #18 改成双抽」；修订经 `layoutHints` 落到排布。
 
 #### FR-4.4　塑料地脚方案（v0.5 新增）
 
@@ -938,27 +985,34 @@ RENDERING.md 第 4 节），但**绘图约定不一致**——而客户看的是
 - 客户向多家公司询价时，提供价格层面的横向对比表（不做视图/图形对比）。对比表必须注明各家
   报价的**含税口径**是否一致，避免拿含税价和未税价直接比。
 
-#### FR-6.1　报价清单：逐行列出，分组分类（v0.5 新增）
+#### FR-6.1　报价清单：逐行列出，分组分类（v0.5；v1.2 修订）
 
 一个总价没法让客户判断贵在哪，也没法跟另一家比。随图纸给出的报价清单必须逐行包含
 **产品代码、产品名称、数量、单价、总价**（实现见 `src/quote/line-items.ts`）。
 
 **分组规则：**
 
-1. **每个柜体与它的门板放在一起。** RTA 的柜体 SKU **本身就含门板**——价格由
-   「型号 × 门板价格组」决定，门不是单独一行商品。所以柜体行带价格，门板作为
-   **从属明细**挂在它下面，写清是哪款门、几扇门/几个抽屉面，并标明「已含在柜体价内」。
+1. **柜体与门的关系取决于售卖单元（FR-16 / `SellUnit`），不能一律假设「码即含门」：**
 
-   > 为什么不编一个门板单价：我们没有拆分依据。编出来的拆分会被客户拿去跟别家比，
-   > 而那个数字是假的。分类汇总里门板一类金额为 0，但**不能显示成 $0**——那会让
-   > 客户以为门是送的，必须用文字说明它含在柜体价内。
+   | 目录里的卖法 | 清单怎么写 |
+   |---|---|
+   | **`combo`**（含主流「逻辑型号 × 门板价格组」） | 柜体行带价格；门板作为**从属明细**挂在下面，写清款式与扇数，标明「已含在柜体价内」。**不编假的门板单价。** |
+   | **`box`**（码明确 `-BOX` 或规格声明仅柜体） | **单独一行**柜体价；不挂「含门」从属明细。 |
+   | **`door`**（码明确 `-DOOR` 或规格声明仅门） | **单独一行**门板价。 |
+   | **`standalone`**（filler / 踢脚 / 收口等） | **不得**出现在某柜体的门板从属明细里；见下条。 |
 
-2. **填缝条、踢脚/地脚、收口板单独成区。** 它们不属于任何一个柜体，服务于整套。
+   > 为什么 combo 路径仍不编门板单价：主流 RTA 矩阵是「型号 × 门板组」一格一个价，
+   > 没有稳定的拆分依据。编出来的拆分会被客户拿去跟别家比，而那个数字是假的。
+   > 分类汇总里门板一类金额为 0 时**不能显示成 $0**——必须用文字说明含在柜体价内。
+
+   **禁止**把 `-BOX` / `-DOOR` 伪装成 `PriceGroup`（把「卖什么」和「什么颜色」揉成一轴）。
+
+2. **填缝条、踢脚/地脚、收口板单独成区。** 它们是 standalone，不属于任何一个柜体，服务于整套。
 3. **分类汇总**：柜体、门板、五金、功能配件、填缝与收口件，各自件数与金额。
 4. **逐行合计必须与报价单小计对得上**，差额非 0 时在清单上明确报出——那说明有行漏了。
 
-门板数量取自渲染那套已经定好的脸型文法（`matchFaceTemplate`），不另起一套规则：
-否则会出现报价单写 2 扇门、图纸画 1 扇。
+门板数量（combo 从属明细）取自渲染那套已经定好的脸型文法（`matchFaceTemplate`），
+不另起一套规则：否则会出现报价单写 2 扇门、图纸画 1 扇。
 
 #### FR-6.2　报价必须覆盖完整物料（v0.5 新增）
 
@@ -1132,12 +1186,21 @@ RENDERING.md 第 4 节），但**绘图约定不一致**——而客户看的是
 报价这一步查得最严，因为它是客户**据以做决定**的东西：拿去跟别家比、拿去下单。
 不通过时返回 409 并附上完整的审核结论。
 
+#### 出图前叙事与半成品隔离（v1.3）
+
+全局俯视图 / 四视图在 `audit.ok === false` 时：
+
+1. **不**把 SVG 半成品当作「可预览交付」返回（`deliverableReady: false`，`planViews`/`views` 置空）。
+2. 客户侧叙事：`发现…（SR-*）正在调整…`（`src/delivery/adjusting.ts`）；有限次**按阻断 SR 定向**重试（`src/layout/audit-repair.ts`：过道缩岛台、灶台启发式、转角/落台换装箱倾向等），仍失败再决定。
+3. 硬闸门仍以本 FR 的 `auditDeliverable` 为准；运营侧 DesignCritic（FR-21）是专家意见，不替代闸门。
+4. 阻断信号可触发 FR-22 **draft** 候选卡（不自动 publish）。
+
 ### FR-9　多租户架构与账号体系
 
 - 供给侧：每个 `CabinetCompany` 一个租户，数据严格按 `companyId` 隔离，应用层 + 数据访问层
   双重强制（见 3.4）。
 - 需求侧：`CustomerAccount` 分 `consumer`（默认免费）/ `trade`（付费专业账号）；同一账号可拥有
-  多个 `Conversation`。
+  多个 `Conversation`。访问控制上二者为**不同身份域**（见 [ACCESS_CONTROL.md](./ACCESS_CONTROL.md)）。
 - 每家公司的 Agent 是同一套引擎按 `companyId` 参数化调用，不是独立部署实例。
 
 ### FR-10　冷启动通用层
@@ -1171,9 +1234,11 @@ RENDERING.md 第 4 节），但**绘图约定不一致**——而客户看的是
 - `trade` 账号支持在一个账号下管理多个 `Conversation`（多项目并行）。
 - 贸易价通过 3.5 的 `DiscountRule`（`audience: trade`）或 `PriceMatrixEntry.tradePrice` 表达；
   `PricingEngine` 按 `CustomerAccount.accountType` 自动选用，并把所用规则记入报价快照。
-- `trade` 账号的对话交互更"直给"（一轮问全、不解释术语、不反复确认），**差异只在问法上，
-  不在能力上**——报价、校验、发送闸门一律与消费者相同。选择题（FR-1.1）每轮出几道也按这个
-  参数走。
+- `trade` 账号的对话交互更"直给"（一轮问全、不解释术语、不反复确认），**报价 / 校验 /
+  发送闸门与消费者同构**（不因贸易身份绕过闸门）。选择题（FR-1.1）每轮出几道也按交互参数走。
+- **访问控制身份域与 consumer 分开定义**（`Principal.kind`、Capability 矩阵、多项目 /
+  贸易价能力声明）——见 [ACCESS_CONTROL.md](./ACCESS_CONTROL.md)；不得再写「trade 与 consumer
+  ACL 相同」。闸门同构 ≠ ACL 合并。
 - `trade` 账号本身可付费订阅，与公司侧的线索费/个性化订阅是两条独立收入线，互不影响、可叠加
   （即：一条由 trade 账号发起的线索，仍然会对应生成公司侧的 `LeadBillingEvent`）。
 
@@ -1259,30 +1324,40 @@ v0.3 的合规只覆盖了 CASL（发信环节）。但平台收集的户型图�
 | `walls_ceiling` | 几何 | 墙段长度齐、层高齐 | 猜墙长 |
 | `plumbing` | 现场 | 至少一段墙有上下水特征，**或**客户明文说「暂无上下水 / 后装」 | 默认塞一个水槽位 |
 | `windows` | 现场 | 已标注窗，**或**客户明文说「这几面墙没有窗」 | 每面墙都发明一扇窗 |
-| `appliances_kinds` | 家电 | 已采集种类（含「只有…」），或客户说「家电后定」且接受暂缓 | 假定一定有 36" 冰箱却不说 |
-| `appliances_sizes` | 家电 | 每种已选家电有客户给出的宽度，或客户明确接受推定并知道会标注 | 静默用推定当已量尺寸 |
+| `appliances_kinds` | 家电 | 已采集种类（含「只有…」）；**不允许**「家电后定」冒充齐备 | 假定一定有 36" 冰箱却不说 |
+| `appliances_sizes` | 家电 | 每种已选家电有客户给出的宽度，或客户**明确接受**推定数值（如「推定可以」） | 静默用推定当已量尺寸；尺寸后定 |
 | `style` | 意图 | 需求摘要或偏好里可识别风格 | — |
 | `budget` | 意图 | 需求摘要或 `budgetBand` | — |
 | `province` | 意图 | 需求摘要可识别省份（税） | 猜省 |
 | `seller` | 履约 | 已选定或 @ 过一家有 published 规格的公司 | — |
 
-每项状态：`ok` | `missing` | `needs_confirm`（有信息但含推定/低置信，出图前必须白话确认）| `deferred`（客户明文推迟）。
+每项状态：`ok` | `missing` | `needs_confirm`（有信息但含推定/低置信，出图前必须白话确认）| `deferred`（客户明文推迟；**家电尺寸不得 deferred**）。
 
 **关键项**（缺了不能进 `readyToDraw`）：`walls_ceiling`、`plumbing`、`appliances_kinds`、
-`style`、`budget`、`province`。  
-`windows` / `appliances_sizes` / `seller`：缺则继续问；`appliances_sizes` 若为推定则状态
-`needs_confirm`，进入出图问句前必须写进复述。
+`appliances_sizes`、`style`、`budget`、`province`。  
+`windows` / `seller`：缺则继续问。`appliances_sizes` 若为推定则状态 `needs_confirm`，
+**未确认前不得**进入出图问句。
 
-### FR-15.2　设计 brief（Tab1）
+### FR-15.2　设计 brief（Tab1「已确认」）
 
 Tab1 按主题输出**短叙事**，例如：
 
 > **Space** — North wall 144", west wall 96"; ceiling 96". From the floor plan.  
 > **Wet wall** — Plumbing on the north wall, about 60" from the left corner (you said).  
 > **Appliances** — Fridge ~36" (assumed — please confirm); range 30" (you measured).  
+> **Style** — Modern (you said).  
+> **Budget** — CAD $10–20k band.  
 > **Still open** — Window locations on the west wall.
 
 未谈及的主题用一句「还没聊」带过，**不要**铺满「待定」单元格。
+
+**禁止模糊句**：不得写「风格：已记在需求里」「预算：已记录」——必须写出系统理解到的
+具体描述；若匹配标准选项（如 Modern / 现代简约），显示标准术语。
+
+### FR-15.2b　输出物（Tab2）
+
+Tab2 列出本会话已产出的：**户型解读图、墙对齐/Q# 图、全局俯视图、四视图、报价单/PDF** 等。
+每项可点击预览。进度条可保留，但不得把收集表单塞进输出物栏。
 
 ### FR-15.3　出图前文字确认
 
@@ -1298,6 +1373,244 @@ Tab1 按主题输出**短叙事**，例如：
 - 检查表**不取代**选择题：门板差价、预算档位等仍可用选择题（算得出价格影响时）。
 - 家电/水电/窗**优先自然语言**描述；选择题是加速器。答「不确定」合法，但必须进
   `needs_confirm` / 推定标注，不能变成静默正确。
+
+---
+
+## 5.z FR-17　户型图上传后的会话行为（v1.3 新增）
+
+### FR-17.1　回显与解读
+
+客户上传户型图后，主会话必须：
+
+1. **回显**原图（或清晰缩略图）；
+2. 给出**解读结果**（读到几段墙、标签、大致尺寸、层高置信度等）；
+3. 拿不准的项逐条请客户确认（沿用 unresolved / pendingQuestions）；
+4. **同步更新**右栏「已确认」中的空间/几何叙事。
+
+### FR-17.2　解读可用后禁止的追问
+
+当户型解读**可用**（已抽出至少一段有效墙长，或客户已确认墙段）时，会话中**不得再**：
+
+- 提示「加一段墙」作为默认主路径（除非图完全没读懂、零墙段）；
+- 用 quick replies 问墙尺寸（「一面墙 8 尺」等）；
+- 问厨房形状「一字型 / L 型 / U 型」——形状应从墙段拓扑得出。
+
+**例外**：图未读懂（无墙段 / 视觉失败）时，允许手动补墙与尺寸；此时可保留尺寸类快捷回答。
+
+### FR-17.3　已答不重问 + 收齐后继续
+
+- 客户已回答的字段：会话中显示**已得到的反馈**（复述理解），**不得**再展示同一问题的
+  快捷按钮组。
+- 客户答完当前问之后：若 FR-15 关键项已齐 → 问是否给初步设计；若未齐 → 继续追问下一项。
+
+### 验收（FR-17）
+
+| # | 标准 |
+|---|---|
+| 1 | 上传后会话可见原图回显 + 解读文案 |
+| 2 | 解读可用后，消息接口 `quickReplies` 不含 `kitchen size` / `layout` |
+| 3 | 前端不残留上传前的尺寸/形状 chip |
+| 4 | 右栏「已确认」在上传/确认后更新空间叙事 |
+| 5 | 答完末项缺口后，下一轮出现出图确认或继续追问（不得静默停住） |
+
+---
+
+## 5.z2 FR-18　无默认厂商（v1.3 新增）
+
+1. 客户未主动选择 / `@` 厂商时，设计与估价走**通用规格**（GenericCatalog / EstimateDraft 路径）。
+2. **禁止**默认厂商：
+   - 前端 `boot` 不得 `selectCompany(companies[0])`；
+   - 消息接口不得因「列表第一家」填入 `questionCompanyId` 并据此绑定偏好题；
+   - 模拟脚本不得在客户未点名时假装已选试点公司（显式 `@` 或场景声明的选型步骤除外）。
+3. 右栏「已确认」在未选厂商时写明「尚未选定厂商」，不得显示某家公司名。
+
+### 验收（FR-18）
+
+| # | 标准 |
+|---|---|
+| 1 | 新会话 boot 后 `selectedCompanyId` / confirmed.companyId 为空 |
+| 2 | 未 `@` 时消息响应不把第一家 active 公司当作已选 seller |
+| 3 | 未选厂商时仍可用通用路径收集需求并进入出图确认（seller 非关键项） |
+
+---
+
+## 5.z3 FR-19　墙名对齐与现场特征 Q#（v1.3 新增）
+
+### 评估结论
+
+客户口语里的「南墙 / 北墙」与系统标签「A / Wall 1 / North」**不一定一致**。
+仅靠文字复述不足以对齐——必须在**简图上标墙标签**，让客户指认。
+
+### 行为
+
+1. 户型解读可用后，生成**墙对齐简图**（连通平面轮廓 + 每段墙标签）。
+2. 现场待确认项（窗位置/尺寸、上下水、门、层高等）在图上标 **Q1、Q2…**，
+   会话中按题号提问；客户可答「Q2 大约 36 寸」或自然语言。
+3. 图纸标注语言仍遵守 §3.8（图上标签英文）；会话题干跟随 UI 语言。
+
+实现：`src/render/site-diagram.ts` + `src/design/site-questions.ts`。
+
+### 验收（FR-19）
+
+| # | 标准 |
+|---|---|
+| 1 | 户型就绪/半就绪时 API 返回 `siteDiagram.svg`（含墙标签） |
+| 2 | 开放现场项以 `Q#` 出现在图与 `siteQuestions` 列表 |
+| 3 | 单元测试覆盖：至少两段墙时标签均出现在 SVG 文本中 |
+
+---
+
+## 5.z4 FR-20　测试：用户端 LLM（v1.3 新增）
+
+端到端模拟中，客户不得「主动知道该说什么」（剧本式自报全量字段不真实）。
+
+1. 场景携带**私有意图**（个人信息、厨房事实、预算、风格等）——仅注入 **user agent**。
+2. **系统 LLM** 与 **用户 LLM** 信息隔离：用户 agent 知道自己的事实，**不知道**
+   FR-15 检查表或系统下一问想要什么；系统必须通过提问引导。
+3. 测试 harness（`run-case.ts`）**不得**把蓝图几何经 `/resolve` 直写 FloorPlan；
+   上传仅建空壳时，尺寸须由系统追问、用户 agent 聊天作答后落库。
+4. `scripts/scenarios.mts` / `scripts/simulate.mts` / `scripts/user-agent.mts` 支持此模式；
+   无 LLM key 时回退到「只看见助手上一问 + 私有事实」的确定性答法，并在报告中标注。
+
+详见 [SCENARIOS.md](./SCENARIOS.md)「用户 LLM 模拟」一节。
+
+### 验收（FR-20）
+
+| # | 标准 |
+|---|---|
+| 1 | 场景含 `customerFacts`（或等价）且不把完整答案写进系统 prompt |
+| 2 | 模拟时间线可见多轮「助手问 → 用户 agent 答」 |
+| 3 | 报告标注 `userAgent: llm | deterministic` |
+
+---
+
+## 5.z4b FR-21　DesignCritic 与全会话持久化（v1.3 新增）
+
+> 设计说明：[DESIGN_CRITIC_AGENT.md](./DESIGN_CRITIC_AGENT.md)。
+
+### FR-21.1　运营侧自动评审
+
+1. 里程碑（俯视图 / 四视图 / 报价 / 阶段推进 / 会话结束 / 手动）后自动跑 DesignCritic。
+2. 产出写入 `CritiqueReview`（含 findings + 运营侧 `critic`/`operator` 消息）。
+3. **不得**写入客户 `Conversation.messages`，不得注入客户侧 prompt。
+4. 鉴权：`X-Admin-Token`；UI：`/admin`。
+5. 与 FR-14：硬闸门仍以 `auditDeliverable` 为准；Critic 为专家意见。
+6. 与 FR-22：可人工 `promoted_to_trainer`；**禁止**自动写 L0。
+
+### FR-21.2　系统会话持久化
+
+1. 凡创建客户会话的路径须带 `origin`（`production` | `simulate` | `test`）与 `runId`。
+2. simulate 落盘 `sim-out/<runId>/data/`（禁止评测完蒸发）。
+3. 集成/行为测试落盘 `.tmp/test-sessions/<runId>/`（可 `KEEP_TEST_SESSIONS=1` 全留）。
+4. `session-runs.json` 索引供运营跨会话发现。
+
+### 验收（FR-21）
+
+| # | 标准 |
+|---|---|
+| 1 | 无 LLM 时仍产出确定性 findings，且客户 messages 长度不变 |
+| 2 | Admin 可列出跨账号会话并打开评审框 |
+| 3 | simulate 目录含完整 `data/` 与 `run.json` |
+| 4 | FR-17/18 行为测试使用可寻址 `dataDir` 而非 OS 临时目录蒸发 |
+
+---
+
+## 5.z5 FR-22　平台知识训练与按 sink 沉淀（v1.3 新增）
+
+> 设计说明：[SYSTEM_TRAINER_AGENT.md](./SYSTEM_TRAINER_AGENT.md)；分层：[KNOWLEDGE_LAYERS.md](./KNOWLEDGE_LAYERS.md)。
+
+平台运营（`X-Admin-Token`）可与**系统训练 Agent**会话，把通用常识、设计默认、对话策略、
+交付评审意图写成 **PlatformKnowledgeCard**，再按 `settleTarget` 沉淀：
+
+| settleTarget | 生效方式 |
+|--------------|----------|
+| `handbook` | 注入总控 / 解释 prompt（不进断言） |
+| `config.appliance` / `config.layoutHeuristic` / `config.dialogue` | 合并进平台 overlay，代码白名单字段读取 |
+| `review.rule` | 产出 promote 清单；须登记 `SanityRuleId`、实现检查、并在 `auditDeliverable` 接线后标 `settled_in_code`；此前 **不改变** audit 行为 |
+| `reject` | 含厂商编码/价或削弱硬约束 → 拒绝 |
+
+### 硬约束
+
+1. 禁止写入 L1（公司 SKU、价、前缀、CompanyHandbook）。
+2. 禁止 overlay 放宽人体工程净空、几何、sellUnit 解析序、价格矩阵校验、阶段闸门。
+3. 未 `published` 的卡不得影响客户路径。
+
+### FR-22.1　学习闭环雏形（P1）
+
+1. 会话 / audit 阻断可**自动提议** draft 候选卡（`proposeDraftsFromAudit`），**禁止**自动 publish。
+2. handbook 注入按 scope 过滤并截断（Top-K / 字符上限，见 `handbook.ts`）。
+3. 可选指标：`knowledge-metrics.jsonl`（`audit_blocking` / `draft_proposed` 等）。
+
+### FR-22.2　厂商 L1 学习队列与回归看板（P2）
+
+> 设计：[SYSTEM_TRAINER_AGENT.md](./SYSTEM_TRAINER_AGENT.md) §12–13；分层：[KNOWLEDGE_LAYERS.md](./KNOWLEDGE_LAYERS.md) §4.5。
+
+与 FR-22 / FR-22.1 **分轨**：本条只写 **L1（按 companyId）**，禁止写入平台 L0 知识卡。
+
+1. **信号 → draft 建议**（`src/knowledge/l1-learn.ts`）：本公司会话纠错、导入待确认、
+   能力标签待确认、报价矩阵洞、assembled 不可用等；队列实体 `CompanyLearningItem`，
+   仓储 `l1-learning-queue.json`。
+2. **隔离**：列表 / 确认 / 应用必须带 `companyId`；禁止跨厂污染；**禁止**写入
+   `PlatformKnowledgeCard` / trainer L0。
+3. **人工确认后**可落入该公司 `ProductSpecVersion` **draft** 的 `handbook` /
+   `codingRules` / 候选说明（`specDraftNote`）；**禁止**自动改 published 价目或写入矩阵价格数字。
+4. **API**：Admin `/api/admin/l1-learn*`；公司侧 `/api/company/:companyId/l1-learn*`
+  （`X-Company-Token` 或 admin 代操）。UI：`/admin/l1-learn`。
+5. **回归看板**：`GET /api/admin/regression-dashboard` + `/admin/regression`——
+   汇总 `knowledge-metrics.jsonl`、知识卡状态、L1 队列、SessionRun、最近 `sim-out/` 摘要。
+
+### 验收（FR-22）
+
+| # | 标准 |
+|---|---|
+| 1 | 训练「北美 stove 一体 + 标准宽度 + 通常不要灶台柜」→ draft 含 structured 与正确 settleTarget |
+| 2 | 未 publish 时客户总控 / 排布默认无变化 |
+| 3 | publish `config.*` 后 overlay 生效；客户声明 cooktop 时仍可排灶下柜 |
+| 4 | 厂商前缀/价或「取消灶台落台」→ reject |
+| 5 | `review.rule` 在 `settled_in_code` 前 audit 结论不变 |
+| 6 | deprecate 后不再注入 handbook / 不再进入 overlay |
+| 7 | audit 阻断可产生 draft 候选；客户路径在 publish 前不变 |
+| 8 | L1 队列按 companyId 隔离；确认不写 L0；apply 只改本公司 draft，不改 published 价目（FR-22.2） |
+| 9 | 回归看板可读 metrics / L1 状态 / sim-out 摘要（FR-22.2） |
+
+---
+
+## 5.y FR-16　知识与编码分层（v1.2 新增）
+
+> 设计说明：[KNOWLEDGE_LAYERS.md](./KNOWLEDGE_LAYERS.md)；后缀细则：[product-codes.md](./product-codes.md)。
+
+### FR-16.1　系统层（全平台一致）
+
+平台必须内建、且**不按厂商覆盖掉语义**的知识：
+
+1. **售卖单元** `SellUnit`：`box` | `door` | `combo` | `standalone`。
+2. **后缀约定**：码中明确 `-BOX` → 柜体；明确 `-DOOR`/`-door` → 门板；  
+   无拆分后缀且同时具备柜体材质标识与门板花色标识 → **组合件**。
+3. **独立件**：`ModuleType` 为 filler / panel / toeKick / crown / leg（或规格声明
+   `standalone`）→ 不走 BOX/DOOR/组合件拆分；报价单独成区（与 FR-6.1/6.2 一致）。
+4. 能力标签枚举、脸型文法、绘图内核、语言策略、FR-15 检查表等仍属系统层。
+
+规格可声明 `sellUnit` **覆盖**启发式；不得用声明把 filler 标成 `combo` 却仍走 trim BOM
+（校验应拒绝这类自相矛盾）。
+
+### FR-16.2　厂商层（按 companyId / ProductSpecVersion 隔离）
+
+下列**必须**按厂商分开，禁止写入总控或跨厂复用为权威：
+
+1. **产品规格与价格矩阵**（已有）。
+2. **CodingRules**：柜型前缀含义（例：本厂 `B12` 与另厂 `DB12` 不可混用同一解释）。
+3. **可选 CompanyHandbook**：口语例外与安装说明；**不能**覆盖矩阵价格（FR-8）。
+4. **公司偏好与公司 Agent 上下文**：只注入本公司 published 规格 + 规则 + 手册。
+
+客户问「B12 是什么」时：已 @ 公司 → 只用该公司 CodingRules；未 @ → 总控只解释
+系统层后缀语义，并引导 @ 厂商查看具体柜型。
+
+### FR-16.3　与 FR-2.2 / FR-6 / FR-8 的关系
+
+- **不恢复「通用柜型号 ↔ 商家码」映射表**（FR-2.2 仍成立）。
+- 正式报价仍只来自该公司 published 矩阵（FR-8）；SellUnit 只决定**怎么分行展示/拆卖**，
+  不发明价格。
+- Oppein 等种子数据若曾用 PriceGroup 冒充 BOX/DOOR，实现阶段必须改为真实模块行。
 
 ---
 
@@ -1353,6 +1666,8 @@ ProductSpecVersion (属于某个 CabinetCompany)     # 改：版本化，发布�
   effectiveFrom, effectiveTo?
   publishedAt?, publishedBy?
   changeNote?
+  codingRules?                      # 新增 FR-16：本公司柜型前缀 / 后缀策略 / token 表
+  handbook?                         # 新增 FR-16：可选，仅注入本公司 Agent
   # 约束：同一 companyId 下 published 最多 1 个、draft 最多 1 个
 ```
 
@@ -1361,11 +1676,13 @@ ProductSpecVersion (属于某个 CabinetCompany)     # 改：版本化，发布�
 ```
 ModuleSpec
   id, specVersionId, companyId
-  code                              # "B12" / "W2430" / "SB36"
-  type: base|wall|tall|corner|sinkBase|filler|panel|toeKick|crown
+  code                              # 厂商自己的码（B12 / DB12 / NW-B12 / B12-PLY-BOX …）
+  type: base|wall|tall|corner|sinkBase|filler|panel|toeKick|crown|leg
+  sellUnit?: box|door|combo|standalone   # FR-16；缺省由系统启发式 + 待确认
   widthOptions[], heightOptions[], depthOptions[]    # 离散英寸值
   faceTemplateId                    # → 平台共享 FaceTemplate
   assemblyOptions: ("RTA"|"assembled")[]
+  # 注：柜型前缀含义见 ProductSpecVersion.codingRules，不在平台写死
 
 PriceGroup
   id, specVersionId, companyId

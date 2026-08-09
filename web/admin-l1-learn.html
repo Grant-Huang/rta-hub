@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>RTA-Hub · L1 vendor learn queue</title>
+<script src="/ui-i18n.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"IBM Plex Sans","Segoe UI",sans-serif;
+         background:#0e1116; color:#e7eaf0; min-height:100vh; }
+  header { padding:12px 16px; border-bottom:1px solid #2a3140; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .hint { font-size:11px; color:#8b94a3; flex:1; }
+  a { color:#9ec0ff; }
+  input, button, select { font: inherit; }
+  input, select { background:#171c24; border:1px solid #2a3140; color:inherit; border-radius:8px; padding:7px 10px; }
+  button { background:#2f6fed; border:none; color:#fff; padding:7px 12px; border-radius:8px; cursor:pointer; }
+  button.ghost { background:#262b33; }
+  button.warn { background:#8a4b2e; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
+  .err { color:#f0a0a0; font-size:12px; margin-bottom:10px; }
+  .summary { font-size:12px; color:#9aa4b2; margin-bottom:12px; }
+  .card { border:1px solid #2a3140; border-radius:10px; padding:12px; margin-bottom:10px; background:#151a22; }
+  .card .title { font-size:13px; font-weight:600; margin:0 0 4px; }
+  .meta { font-size:11px; color:#8b94a3; margin-bottom:6px; }
+  .body { font-size:12.5px; color:#c6cdd6; white-space:pre-wrap; margin-bottom:8px; }
+  .actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .tag { display:inline-block; font-size:10px; padding:2px 6px; border-radius:6px; background:#262b33; margin-right:4px; }
+  .tag.draft { background:#3a3420; color:#e6d48a; }
+  .tag.confirmed { background:#1e3566; color:#9ec0ff; }
+  .tag.applied { background:#1e4a32; color:#9ee0b0; }
+  .tag.dismissed { background:#3a2a2a; color:#d0a0a0; }
+</style>
+</head>
+<body>
+<header>
+  <h1 data-i18n="adminL1H1">L1 vendor learn queue</h1>
+  <span class="hint"><span data-i18n="adminL1Hint">FR-22.2 · Isolated by companyId · never writes L0 / never auto-edits published prices · </span>
+    <a href="/admin" data-i18n="adminNavReview">Review</a> ·
+    <a href="/admin/trainer" data-i18n="adminNavTrainer">Trainer</a> ·
+    <a href="/admin/regression" data-i18n="adminNavRegression">Regression</a></span>
+  <input id="token" type="password" placeholder="X-Admin-Token" style="width:160px" />
+  <button type="button" class="ghost" id="langBtn" data-i18n="langToggle" data-i18n-title="langToggleTitle">中文</button>
+</header>
+<main>
+  <div class="bar">
+    <input id="companyId" data-i18n-placeholder="adminL1CompanyPh" placeholder="companyId (e.g. co_pilot)" style="width:220px" />
+    <button type="button" id="btnLoad" class="ghost" data-i18n="refresh">Refresh</button>
+    <button type="button" id="btnScan" data-i18n="adminScanSignals">Scan signals</button>
+  </div>
+  <div class="err" id="err" hidden></div>
+  <div class="summary" id="summary"></div>
+  <div id="list"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const t = (...a) => window.RTA_UI.t(...a);
+function applyI18n() {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang());
+  document.title = t("adminL1Title");
+  window.RTA_UI.applyDataI18n();
+  $("langBtn").textContent = t("langToggle");
+}
+applyI18n();
+$("langBtn").onclick = () => {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang() === "zh" ? "en" : "zh");
+  applyI18n();
+  load().catch(() => {});
+};
+
+function token() {
+  const t = $("token").value.trim() || localStorage.getItem("rta-admin-token") || "";
+  if ($("token").value.trim()) localStorage.setItem("rta-admin-token", $("token").value.trim());
+  return t || localStorage.getItem("rta-admin-token") || "";
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    ...opts,
+    headers: {
+      "content-type": "application/json",
+      "x-admin-token": token(),
+      ...(opts.headers || {}),
+    },
+  });
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { message: text }; }
+  if (!r.ok) throw new Error(data.message || data.error || r.statusText);
+  return data;
+}
+
+function showErr(msg) {
+  const el = $("err");
+  if (!msg) { el.hidden = true; el.textContent = ""; return; }
+  el.hidden = false;
+  el.textContent = msg;
+}
+
+function companyId() {
+  return $("companyId").value.trim();
+}
+
+function render(items, summary) {
+  $("summary").textContent = summary ? t("adminL1Summary", summary) : "";
+  const root = $("list");
+  root.innerHTML = "";
+  if (!items.length) {
+    root.innerHTML = `<p class='meta'>${t("adminL1Empty")}</p>`;
+    return;
+  }
+  for (const it of items) {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML =
+      `<p class="title"></p><div class="meta"></div><div class="body"></div><div class="actions"></div>`;
+    el.querySelector(".title").textContent = it.title;
+    el.querySelector(".meta").innerHTML =
+      `<span class="tag ${it.status}">${it.status}</span>` +
+      `<span class="tag">${it.source}</span>` +
+      `<span class="tag">${it.settleTarget}</span>` +
+      `<span class="tag">${it.companyId}</span>`;
+    el.querySelector(".body").textContent = it.summary + (it.proposal?.note ? "\n— " + it.proposal.note : "");
+    const actions = el.querySelector(".actions");
+    const btn = (label, fn, cls) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      if (cls) b.className = cls;
+      b.onclick = fn;
+      actions.appendChild(b);
+    };
+    if (it.status === "draft") {
+      btn(t("adminConfirm"), () => act(it, "confirm"));
+      btn(t("adminApplyDraft"), () => act(it, "apply"));
+      btn(t("adminDismiss"), () => act(it, "dismiss"), "warn");
+    } else if (it.status === "confirmed") {
+      btn(t("adminApplyDraft"), () => act(it, "apply"));
+      btn(t("adminDismiss"), () => act(it, "dismiss"), "warn");
+    }
+    root.appendChild(el);
+  }
+}
+
+async function load() {
+  showErr("");
+  const q = companyId() ? ("?companyId=" + encodeURIComponent(companyId())) : "";
+  const res = await api("/api/admin/l1-learn" + q);
+  render(res.data.items, res.data.summary);
+}
+
+async function scan() {
+  showErr("");
+  const id = companyId();
+  if (!id) { showErr(t("adminNeedCompanyId")); return; }
+  await api("/api/admin/l1-learn/scan", { method: "POST", body: JSON.stringify({ companyId: id }) });
+  await load();
+}
+
+async function act(it, action) {
+  showErr("");
+  try {
+    await api(`/api/admin/l1-learn/${it.id}/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ companyId: it.companyId }),
+    });
+    await load();
+  } catch (e) {
+    showErr(e.message || String(e));
+  }
+}
+
+$("btnLoad").onclick = () => load().catch((e) => showErr(e.message));
+$("btnScan").onclick = () => scan().catch((e) => showErr(e.message));
+$("token").value = localStorage.getItem("rta-admin-token") || "";
+</script>
+</body>
+</html>

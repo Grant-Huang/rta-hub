@@ -40,6 +40,9 @@
 | `layoutRevision` | 主力 | 多约束修改，容易顾此失彼 |
 | `specTemplateParse` | 主力 | 错了整批型号的规格都是错的 |
 | `floorPlanExtract` | 视觉 | 输入是图 |
+| `designCritique` | 主力 | 运营侧 DesignCritic（FR-21）；无 key 确定性降级 |
+
+平台训练抽卡（FR-22）MVP 走确定性 `extractKnowledge`；有 LLM 时可挂轻量层，不进客户断言路径。
 
 分配依据是**「错了的代价」**，不是「看起来难不难」。
 
@@ -150,6 +153,23 @@ LLM_MODEL_REASONING=claude-opus-5
 # 视觉层：户型图抽取
 LLM_MODEL_VISION=claude-opus-5
 ```
+
+### 7.1 测试用户 / `pnpm simulate` 专用（不影响生产）
+
+模拟里的 **user agent** 与 **场景生成** 走独立端点，默认本机 Ollama；**不读**
+生产 `OPENAI_API_KEY` / `LLM_MODEL_CHAT`。simulate 上传户型图时，若配置了
+`LLM_MODEL_TEST_VISION`，视觉抽取也改用测试视觉（不改生产 `OPENAI_BASE_URL_VISION`）。
+
+```bash
+OPENAI_API_KEY_TEST=ollama
+OPENAI_BASE_URL_TEST=http://localhost:11434/v1
+OPENAI_BASE_URL_TEST_VISION=http://localhost:11434
+LLM_MODEL_TEST_CHAT=qwen2.5:14b-instruct
+LLM_MODEL_TEST_REASONING=qwen2.5:14b-instruct
+LLM_MODEL_TEST_VISION=qwen2.5vl:latest
+```
+
+装配入口：`createTestLlmClient()` / `createVisionExtractorFromTestEnv()`。
 
 启动时会打印实际生效的分层与回退情况：
 

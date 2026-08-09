@@ -4,8 +4,12 @@
 > 以及哪些地方还需要提升。方法是先跑一遍端到端模拟（`scripts/simulate.mts`，
 > 三套厨房走真实 HTTP 端点），再逐条比对 FR 与实现。
 >
-> 结论先说：**核心链路（定价、闸门、计费、渲染、解释）是对齐的且质量不错；
-> 供给侧（公司入驻、规格发布）几乎完全没有接线——文档写了完整流程，实现只有库函数。**
+> **历史结论（v0.5 当时）**：核心链路对齐；供给侧（入驻/发布）几乎没接线。
+>
+> **现状勘误（2026-08-08）**：§2.2 五项里，**FR-2 入驻端点、§3.6 发布、FR-3 视觉抽取
+> 已接线**（见 DEV_PLAN M7 / `ollama-vision.ts`）。仍未接线的是 **FR-1 结构化
+> mention token**（前端未发 token，服务端只用 `routeByText`）与 **`invoice` 出账**
+> （仅单测调用，无 HTTP）。下文 §2.2 / §3.5.2 保留当时记录，以本节勘误为准。
 
 ---
 
@@ -69,20 +73,21 @@ app.get("/api/company/:companyId/billing", (c) => {
 | FR-1.1 选择题 | `preferences/questions.ts` | 选项来自真实规格库，价格影响由代码算 |
 | FR-1.2 模型分层 | `agents/model-tiers.ts` | 三层 + 确定性升级判断 |
 
-### 2.2 文档写了、实现没接线
+### 2.2 文档写了、实现没接线（v0.5 当时；见文首勘误）
 
-这是最集中的问题。**库函数都在、测试也有，但没有任何 HTTP 端点**：
+当时最集中的问题是：**库函数都在、测试也有，但没有 HTTP 端点**。下表保留原记录；
+「现状」列是 2026-08-08 复查结果。
 
-| 需求 | 已实现的函数 | 缺什么 | 后果 |
+| 需求 | 已实现的函数 | 当时缺什么 | 现状（2026-08-08） |
 |---|---|---|---|
-| **FR-2 公司入驻规格录入** | `spec/import.ts` 的 `importSpecTemplates`、`blankTemplates`、入驻会话 | **零个端点** | 公司**无法通过产品流程入驻**。现在的两家试点公司是硬编码 seed。FR-2 是 MVP-1 的核心内容，「先跑通 1 家」跑通的其实是 seed，不是流程 |
-| **§3.6 规格发布** | `version.ts` 的 `publishDraft`、`currentDraft`、`nextVersionNo` | **零个端点** | 公司无法建草稿、改价、发布新版本。改一次价要改代码重新部署 |
-| **FR-1 结构化 mention token** | `routing/mention.ts` 的 `routeByToken` | 服务端只调 `parseMentions` + `routeByText` | 需求明确写「前端联想选择器选中后携带结构化 token」是**主路径**，文本匹配是**兜底**。现在兜底成了唯一路径 |
-| **FR-3 视觉抽取** | `VisionExtractor` **接口** | **零个实现类** | FR-3 的主路径（图像理解/OCR）完全没实现，只有降级的手动录入。`createAppContext` 的 `vision` 永远是 `undefined` |
-| **计费出账** | `billing/lead-events.ts` 的 `invoice` | 从未被调用 | 计费事件产生了，但永远不会进入 `invoiced` 状态。收不到钱 |
+| **FR-2 公司入驻规格录入** | `importSpecTemplates`、`blankTemplates`、入驻会话 | **零个端点** | ✅ 已接线：`/api/company/:id/spec/*`（M7） |
+| **§3.6 规格发布** | `publishDraft`、`currentDraft`、`nextVersionNo` | **零个端点** | ✅ 已接线：入驻会话 `.../publish` |
+| **FR-1 结构化 mention token** | `routeByToken` | 只用 `routeByText` | ❌ 仍缺：服务端仍只 `parseMentions` + `routeByText` |
+| **FR-3 视觉抽取** | `VisionExtractor` 接口 | **零个实现类** | ✅ 已有 `ollama-vision.ts`，按 env 注入；未配模型仍降级手动录入 |
+| **计费出账** | `invoice` | 从未被业务调用 | ❌ 仍缺：无出账 HTTP；仅 `test/quote-billing.test.ts` 调用 |
 
-`routeByToken`、`blankTemplates`、`currentDraft`、`invoice` —— 这几个函数在
-`src/` 里**被其他文件引用 0 次**，只有测试引用。测试通过给了"功能完成"的错觉。
+仍未接线、仍属 P0/P1 的只剩：**结构化 mention token** 与 **`invoice` 出账**（后者与
+LAUNCH_BLOCKERS G4 费率定案一起做）。
 
 ### 2.3 需求描述与实现方式不一致
 
@@ -161,14 +166,13 @@ app.get("/api/company/:companyId/billing", (c) => {
 退回按维度组合展开的确定性生成器，**并在输出里如实标注来源**——CI 不该依赖外部 API，
 但也不该让人误以为跑的是 LLM 生成的场景。
 
-### 3.5.2 2.2 节那五项仍未接线
+### 3.5.2 2.2 节五项（v0.6 当时未动；后续已部分接线）
 
-需要说清楚：本轮**没有**动 2.2 节列的五项（FR-2 入驻端点、§3.6 发布端点、
-FR-1 结构化 mention token、FR-3 视觉抽取、`invoice` 出账）。它们仍然是
-"库函数齐全、零个端点"的状态，P0/P1 优先级不变。
+v0.6 本轮**没有**动 §2.2 五项；当时仍是「库函数齐全、零个端点」。
 
-本轮修的是**已接线部分的正确性**（模拟能覆盖到的那一半）。2.2 节的五项属于
-"该接的地方没接"，只能靠拿需求逐条对端点清单发现——两种方法互补，见第 4 节。
+**后续（M7 + FR-3 视觉）**：FR-2 / §3.6 / FR-3 已接线。截至 2026-08-08，
+§2.2 里仍未接线的只剩 **FR-1 结构化 mention token** 与 **`invoice` 出账**。
+详见文首勘误。
 
 ---
 

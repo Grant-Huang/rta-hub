@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Account · RTA-Hub</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:#0f1216; color:#e6e8eb; min-height:100vh; }
+  header { padding:14px 20px; border-bottom:1px solid #262b33; display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  a.back { color:#7bc0d8; text-decoration:none; font-size:13px; }
+  a.back:hover { text-decoration:underline; }
+  main { max-width:640px; margin:0 auto; padding:24px 20px 48px; }
+  .card { background:#1c2129; border:1px solid #3a4250; border-radius:10px; padding:16px; margin-bottom:14px; }
+  .card h2 { margin:0 0 12px; font-size:13px; color:#9aa4b2; font-weight:600; }
+  .kv { display:grid; grid-template-columns:120px 1fr; gap:6px 12px; font-size:13px; margin:0; }
+  .kv dt { color:#8b94a3; margin:0; }
+  .kv dd { margin:0; word-break:break-word; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#262b33; color:#9aa4b2; }
+  .links { display:flex; flex-direction:column; gap:8px; }
+  .links a { display:block; padding:10px 12px; border-radius:8px; background:#262b33; color:#e6e8eb;
+             text-decoration:none; font-size:13px; border:1px solid #3a4250; }
+  .links a:hover { border-color:#4d7bd7; }
+  .links a .sub { display:block; font-size:11px; color:#8b94a3; margin-top:2px; }
+  select, button { background:#1c2129; border:1px solid #262b33; color:inherit;
+                   padding:8px 12px; border-radius:8px; font-size:13px; }
+  button { background:#2a5bd7; border:none; color:#fff; cursor:pointer; }
+  button.ghost { background:#262b33; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .hint { color:#6a7382; font-size:12px; margin:8px 0 0; }
+  .err { color:#d87b7b; font-size:12px; }
+  .q { display:flex; gap:8px; align-items:center; margin:6px 0; font-size:13px; flex-wrap:wrap; }
+  .q input { background:#151a22; border:1px solid #262b33; color:inherit; padding:6px 8px;
+             border-radius:8px; font-size:13px; width:200px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { text-align:left; padding:6px; border-bottom:1px solid #262b33; }
+  th { color:#9aa4b2; font-weight:500; }
+  .sdk-btn-label { display:inline-flex; align-items:center; gap:6px; }
+</style>
+<link rel="stylesheet" href="/vendor/apps-sdk-ui/assets/bridge.css" />
+<script type="module" src="/vendor/apps-sdk-ui/bridge.js"></script>
+<script src="/ui-i18n.js"></script>
+</head>
+<body>
+<header>
+  <a class="back sdk-btn-label" href="/">
+    <span data-sdk-icon="ChevronLeft" aria-hidden="true"></span>
+    <span data-i18n="backToChat">Chat</span>
+  </a>
+  <h1 id="pageTitle" class="sdk-btn-label">
+    <span data-sdk-icon="User" aria-hidden="true"></span>
+    <span data-i18n="meHeading">Account</span>
+  </h1>
+  <span style="flex:1"></span>
+  <button type="button" class="ghost" id="langBtn" data-i18n="langToggle" data-i18n-title="langToggleTitle">中文</button>
+  <span class="badge" id="acctBadge">—</span>
+</header>
+<main>
+  <div class="card" id="profileCard">
+    <h2 id="profileHeading" data-i18n="profileHeading">Profile</h2>
+    <p class="hint" id="loading" data-i18n="loading">Loading…</p>
+  </div>
+  <div class="card">
+    <h2 id="switchHeading" data-i18n="switchHeading">Switch account (demo)</h2>
+    <div class="row">
+      <select id="acctSel" title="Demo account" data-i18n-title="demoAcctTitle">
+        <option value="ca_demo_consumer" data-i18n="demoAcctConsumer">Consumer — Alex</option>
+        <option value="ca_demo_trade" data-i18n="demoAcctTrade">Trade — Riverside Builders</option>
+        <option value="ca_demo_admin" data-i18n="demoAcctAdmin">Platform Ops (admin)</option>
+      </select>
+      <button type="button" id="switchBtn" data-i18n="switchBtn">Use this account</button>
+    </div>
+    <p class="hint" id="switchHint" data-i18n="switchHint">Demo only: switches the X-Account-Id used by this browser.</p>
+  </div>
+  <div class="card" id="opsCard" hidden>
+    <h2 id="opsHeading" data-i18n="opsHeading">Operations</h2>
+    <div class="links">
+      <a href="/admin" id="adminLink"><span data-i18n="adminLink">System admin</span><span class="sub" id="adminSub" data-i18n="adminSub">DesignCritic review console</span></a>
+      <a href="/admin/trainer" id="trainerLink"><span data-i18n="trainerLink">Training</span><span class="sub" id="trainerSub" data-i18n="trainerSub">Platform knowledge trainer</span></a>
+      <a href="/admin/l1-learn" id="l1Link"><span data-i18n="l1Link">L1 learn queue</span><span class="sub" id="l1Sub" data-i18n="l1Sub">Vendor draft suggestions</span></a>
+      <a href="/admin/regression" id="regressionLink"><span data-i18n="regressionLink">Regression board</span><span class="sub" id="regressionSub" data-i18n="regressionSub">Metrics &amp; sim-out</span></a>
+      <a href="/admin/test-user" id="testUserLink"><span>Test user agent</span><span class="sub">Suggested probes · start suite · critic</span></a>
+    </div>
+    <p class="hint" id="opsHint" data-i18n="opsHint">Admin APIs still require the Admin Token on those pages.</p>
+  </div>
+  <div class="card" id="companiesCard">
+    <h2 id="companiesHeading" data-i18n="companiesHeading">Seller portals</h2>
+    <div class="links" id="companyLinks"><p class="hint" id="companiesLoading" data-i18n="loading">Loading…</p></div>
+    <p class="hint" id="companiesHint" data-i18n="companiesHint">Open a seller console (e.g. Oppein Canada). Company or Admin token is entered on that page.</p>
+  </div>
+  <div class="card" id="tradeCard" hidden></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const t = (...a) => window.RTA_UI.t(...a);
+
+function accountId() {
+  return localStorage.getItem("rtaAccountId") || "ca_demo_consumer";
+}
+
+function setAccountId(id) {
+  localStorage.setItem("rtaAccountId", id);
+}
+
+async function api(path, opts = {}) {
+  const headers = { "content-type": "application/json", "x-account-id": accountId(), ...(opts.headers || {}) };
+  const res = await fetch(path, { ...opts, headers });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, body };
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function applyLang() {
+  const lang = window.RTA_UI.resolveLang();
+  window.RTA_UI.setLang(lang);
+  document.title = t("meTitle");
+  window.RTA_UI.applyDataI18n();
+  $("langBtn").textContent = t("langToggle");
+}
+
+async function load() {
+  applyLang();
+  $("acctSel").value = accountId();
+  const { ok, body } = await api("/api/me/profile");
+  if (!ok) {
+    $("profileCard").innerHTML = `<h2>${esc(t("profileHeading"))}</h2>
+      <p class="err">${esc(body.error || t("profileLoadFail"))}</p>`;
+    return;
+  }
+  const eff = body.effectiveAccountType || body.accountType;
+  $("acctBadge").textContent = body.accountType === eff
+    ? eff
+    : `${body.accountType} → ${eff}`;
+  const caps = body.capabilities || {};
+  $("opsCard").hidden = !(caps.adminConsole || caps.trainer);
+  $("profileCard").innerHTML = `
+    <h2>${esc(t("profileHeading"))}</h2>
+    <dl class="kv">
+      <dt>${esc(t("labelName"))}</dt><dd>${esc(body.displayName || "—")}</dd>
+      <dt>${esc(t("labelEmail"))}</dt><dd>${esc(body.email || "—")}</dd>
+      <dt>${esc(t("labelAccountType"))}</dt><dd>${esc(body.accountType)}</dd>
+      <dt>${esc(t("labelPricedAs"))}</dt><dd>${esc(eff)}</dd>
+      <dt>${esc(t("labelProvince"))}</dt><dd>${esc(body.province || "—")}</dd>
+      ${body.companyName ? `<dt>${esc(t("company"))}</dt><dd>${esc(body.companyName)}</dd>` : ""}
+    </dl>`;
+
+  if (body.accountType === "trade") {
+    $("tradeCard").hidden = false;
+    await renderTrade(body);
+  } else {
+    $("tradeCard").hidden = true;
+  }
+  await renderCompanies();
+}
+
+async function renderCompanies() {
+  const box = $("companyLinks");
+  const { ok, body } = await api("/api/companies");
+  const list = ok ? (body.companies || []) : [];
+  if (!list.length) {
+    box.innerHTML = `<p class="hint">${esc(t("noSellersYet"))}</p>`;
+    return;
+  }
+  const rank = (id) => (id === "co_oppein" ? 0 : id === "co_pilot" ? 1 : 2);
+  list.sort((a, b) => rank(a.id) - rank(b.id) || String(a.name).localeCompare(String(b.name)));
+  box.innerHTML = list.map((co) => {
+    const alias = (co.aliases || []).slice(0, 3).join(" · ");
+    const sub = alias || co.id;
+    return `<a href="/company/${esc(co.id)}">${esc(co.name)}<span class="sub">${esc(sub)}</span></a>`;
+  }).join("");
+}
+
+async function renderTrade(profile) {
+  const gate = profile.tradePricing || {};
+  const { body } = await api("/api/me/projects");
+  const projects = body.projects || [];
+  const rows = projects.map((x) => `<tr>
+    <td>${esc(x.title)}</td>
+    <td>${esc(x.status)}</td>
+    <td>${x.quoteCount}</td>
+  </tr>`).join("");
+  let gateHtml = "";
+  if (gate.allowed) {
+    gateHtml = `<p class="hint">${esc(t("tradeActive"))}</p>`;
+  } else {
+    gateHtml = `<p class="hint">${esc(gate.reason || "")}</p>
+      ${(gate.nextStep === "submitVerification" || gate.nextStep === "resubmit")
+        ? `<div class="q"><input id="legalName" placeholder="${esc(t("legalName"))}" /></div>
+           <div class="q"><input id="bizNumber" placeholder="${esc(t("bizNumber"))}" /></div>
+           <button type="button" id="verifyBtn">${esc(t("submitVerify"))}</button>`
+        : ""}`;
+  }
+  $("tradeCard").innerHTML = `
+    <h2>${esc(t("myProjects"))}</h2>
+    ${projects.length
+      ? `<table><thead><tr><th>${esc(t("project"))}</th><th>${esc(t("status"))}</th><th>${esc(t("quotes"))}</th></tr></thead>
+         <tbody>${rows}</tbody></table>`
+      : `<p class="hint">${esc(t("noProjectsYet"))}</p>`}
+    <h2 style="margin-top:16px">${esc(t("tradeVerification"))}</h2>
+    ${gateHtml}`;
+  $("verifyBtn")?.addEventListener("click", async () => {
+    const { ok, body: b } = await api("/api/me/verification", {
+      method: "POST",
+      body: JSON.stringify({
+        legalName: $("legalName").value.trim(),
+        businessNumber: $("bizNumber").value.trim(),
+      }),
+    });
+    if (!ok) {
+      $("tradeCard").insertAdjacentHTML("beforeend", `<p class="err">${esc(b.error)}</p>`);
+      return;
+    }
+    await load();
+  });
+}
+
+$("switchBtn").addEventListener("click", () => {
+  setAccountId($("acctSel").value);
+  location.href = "/";
+});
+
+$("langBtn").addEventListener("click", () => {
+  const next = window.RTA_UI.resolveLang() === "zh" ? "en" : "zh";
+  window.RTA_UI.setLang(next);
+  load();
+});
+
+load();
+</script>
+</body>
+</html>

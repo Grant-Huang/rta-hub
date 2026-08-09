@@ -19,6 +19,9 @@
  *   3. **默认摆法**：冰箱放在第一段墙的起点（多数厨房入口在那一头），
  *      其余从最长那段墙的末端往前排。
  *
+ * 硬挡还包括：门洞、障碍、让位侧墙角、**拥有侧转角柜虚位**（`corner-reserve.ts`，
+ * 传入 modules 时生效）——家电不得直接坐进墙角，否则转角柜无处可排。
+ *
  * 放不下就**如实报出来**，不静默丢掉——「你说冰箱要靠近入口，但那面墙放不下
  * 35 寸的冰箱位」对客户是有用的信息。
  */
@@ -28,7 +31,12 @@ import {
   applianceLabel, reservedWidth, type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
-import { buildKitchenPlan, usableSpan } from "./plan-model.js";
+import type { ModuleSpec } from "../domain/types.js";
+import { buildKitchenPlan, doorSpan, usableSpan } from "./plan-model.js";
+import { ownerCornerKeepOuts } from "./corner-reserve.js";
+
+/** 高柜类家电：箱体顶到吊柜高度，不能压在窗洞下。 */
+const TALL_APPLIANCE: ReadonlySet<ApplianceKind> = new Set(["refrigerator", "wallOven"]);
 
 /**
  * 给水槽**连同它两侧台面**预留的宽度。
@@ -141,6 +149,7 @@ export function planAppliances(
   geometry: ParsedGeometry,
   appliances: readonly ApplianceSpec[],
   language: UiLanguage = DEFAULT_LANGUAGE,
+  opts: { modules?: readonly ModuleSpec[] } = {},
 ): AppliancePlan {
   const lang = language ?? DEFAULT_LANGUAGE;
   const placed: PlacedAppliance[] = [];
@@ -170,14 +179,26 @@ export function planAppliances(
     [...(hard.get(runId) ?? []), ...(soft.get(runId) ?? [])]
       .some((t) => x < t.x + t.width && x + width > t.x);
 
-  // 门洞与障碍不能压
+  // 门洞（含门套/台面让位）与障碍不能压——与 splitIntoSegments / SR-G4 同一套 doorSpan
   for (const run of runs) {
     for (const f of run.features) {
-      if (f.kind === "door" || f.kind === "obstruction") {
+      if (f.kind === "door") {
+        const span = doorSpan(f, "base");
+        occupy(run.id, span.x, span.width);
+      } else if (f.kind === "obstruction") {
         occupy(run.id, f.offset, Math.max(f.width, 1));
       }
     }
   }
+
+  /** 窗洞占位：仅对高柜类家电硬挡（冰箱/壁炉式烤箱不能塞进窗下）。 */
+  const windowSpans = (runId: string): Span[] => {
+    const run = runs.find((r) => r.id === runId);
+    if (!run) return [];
+    return run.features
+      .filter((f) => f.kind === "window")
+      .map((f) => ({ x: f.offset, width: Math.max(f.width, 1) }));
+  };
 
   // **内墙角让出去的那一段也不能压。**
   //
@@ -190,6 +211,16 @@ export function planAppliances(
     const span = usableSpan(rp, "base");
     if (span.start > 0) occupy(rp.run.id, 0, span.start);
     if (span.end < rp.run.length) occupy(rp.run.id, span.end, rp.run.length - span.end);
+  }
+
+  // **拥有墙角的那一侧也要先留给转角柜**（盲角虚位 / LSB / L 形）。
+  //
+  // 以前只挡了让位侧：拥有侧末端空着，灶具默认「从最长墙末端往前排」就会
+  // 直接坐进墙角，转角柜再排只剩 24"——BBC/LSB 都塞不进。角区先于家电。
+  if (opts.modules && opts.modules.length > 0) {
+    for (const k of ownerCornerKeepOuts(geometry, opts.modules, "base", plan)) {
+      occupy(k.runId, k.x, k.width);
+    }
   }
 
   // **上下水那一段要给水槽柜留着。**
@@ -214,15 +245,23 @@ export function planAppliances(
 
     const need = reservedWidth(spec);
     const name = applianceLabel(spec.kind, lang);
-    const spot = findSpot(runs, spec, need, overlaps, (runId) => hard.get(runId) ?? [], lang);
+    const tall = TALL_APPLIANCE.has(spec.kind);
+    const overlapsHere = (runId: string, x: number, width: number) =>
+      overlaps(runId, x, width)
+      || (tall && windowSpans(runId).some((t) => x < t.x + t.width && x + width > t.x));
+    const blockersHere = (runId: string) => [
+      ...(hard.get(runId) ?? []),
+      ...(tall ? windowSpans(runId) : []),
+    ];
+    const spot = findSpot(runs, spec, need, overlapsHere, blockersHere, lang);
     if (!spot) {
       warnings.push({
         kind: spec.kind,
         message: msg(lang,
           `${name} needs ${need}" but no wall run can fit it` +
-            ` (excluding doors, obstructions, and other appliances)`,
+            ` (excluding doors${tall ? ", windows" : ""}, obstructions, and other appliances)`,
           `${name}需要 ${need}" 的位置，` +
-            `但没有一段墙能放下（已排除门洞、障碍与其他家电占位）`),
+            `但没有一段墙能放下（已排除门洞${tall ? "、窗洞" : ""}、障碍与其他家电占位）`),
       });
       continue;
     }
@@ -357,17 +396,21 @@ function findSpot(
   //
   // 注意不是"贴墙角放"——贴墙角一侧台面为 0，随后就会被人体工程检查否掉。
   // 靠墙的那一侧留出所需的落台区，本身就是最省地方的合法位置。
+  //
+  // 灶具额外：不要贴着内墙角让位区外侧落——那会看起来像「灶坐在转角上」，
+  // 且开门/转角柜会打架。让位区已在 hard blockers 里；这里再加一段 keep-out。
   const req = LANDING[spec.kind];
   const startAt = req ? req.secondary : 0;
+  const cornerKeepOut = (spec.kind === "range" || spec.kind === "cooktop") ? 24 : 0;
   const longest = [...runs].sort((a, b) => b.length - a.length);
 
   for (const run of longest) {
     // 先试贴着"最小合法边距"的两头——那是对整条台面打断最少的位置
     const candidates = [
-      quantize(startAt),
+      quantize(Math.max(startAt, cornerKeepOut)),
+      quantize(run.length - need - Math.max(startAt, cornerKeepOut)),
       quantize(run.length - need - startAt),
-      quantize(run.length - need),
-      0,
+      quantize(startAt),
     ];
     for (const x of candidates) {
       if (fits(run, x)) {
@@ -383,8 +426,8 @@ function findSpot(
         };
       }
     }
-    // 两头都不行就整段扫一遍
-    for (let probe = 0; probe + need <= run.length; probe = quantize(probe + 3)) {
+    // 两头都不行就整段扫一遍（跳过贴转角 keep-out）
+    for (let probe = cornerKeepOut; probe + need <= run.length - cornerKeepOut; probe = quantize(probe + 3)) {
       if (fits(run, probe)) {
         return {
           runId: run.id, x: probe,

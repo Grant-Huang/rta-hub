@@ -258,6 +258,26 @@ export async function createFloorPlan(
   return (await createFloorPlanWithOutcome(input, image, extractor)).plan;
 }
 
+/**
+ * 无图手输 / 纯对话补尺寸时的空户型壳。
+ * Confirmed Tab 与排布只认 FloorPlan；没有这张壳，聊天里的墙长永远进不了 Design Basis。
+ */
+export function createChatSourcedFloorPlan(
+  conversationId: string,
+  at: string,
+): FloorPlan {
+  return {
+    id: newId("fp"),
+    conversationId,
+    sourceFile: { name: "chat-geometry.txt", mimeType: "text/plain", sizeBytes: 0 },
+    parsedGeometry: { wallRuns: [], confidence: 0.5 },
+    parseConfidence: 0.5,
+    unresolvedItems: [],
+    createdAt: at,
+    updatedAt: at,
+  };
+}
+
 export async function createFloorPlanWithOutcome(
   input: CreateFloorPlanInput,
   image: string | undefined,
@@ -295,6 +315,56 @@ export async function createFloorPlanWithOutcome(
     },
     extraction,
   };
+}
+
+/**
+ * 户型解读摘要（FR-17）——上传后会话回显用。
+ * 有墙段时复述标签与长度；拿不准的写进待确认。
+ */
+export function interpretationSummary(
+  plan: FloorPlan,
+  outcome: ExtractionOutcome,
+  language: UiLanguage = DEFAULT_LANGUAGE,
+): string {
+  const lang = language;
+  const runs = plan.parsedGeometry.wallRuns;
+  const ceil = plan.parsedGeometry.ceilingHeight;
+  const pending = plan.unresolvedItems.filter((u) => !u.resolved);
+
+  if (runs.length === 0) {
+    const why = extractionNote(outcome, lang);
+    return msg(lang,
+      "I received your floor plan but couldn't read wall segments yet." +
+        (why ? ` ${why}` : " Please confirm or enter each wall in chat."),
+      "收到户型图了，但还没读出墙段。" +
+        (why ? ` ${why}` : " 请在对话里确认或补上每一面墙。"));
+  }
+
+  const wallLine = runs.map((r) =>
+    r.length > 0
+      ? msg(lang, `${r.label} ~${r.length}"`, `${r.label} 约 ${r.length}"`)
+      : msg(lang, `${r.label} (length TBD)`, `${r.label}（长度待确认）`),
+  ).join(lang === "zh" ? "；" : "; ");
+
+  const parts = [
+    msg(lang,
+      `Here's what I read from your floor plan (${runs.length} wall` +
+        `${runs.length === 1 ? "" : "s"}): ${wallLine}.`,
+      `从图上读到 ${runs.length} 段墙：${wallLine}。`),
+  ];
+  if (ceil != null) {
+    parts.push(msg(lang, `Ceiling ~${ceil}".`, `层高约 ${ceil}"。`));
+  }
+  if (pending.length > 0) {
+    parts.push(msg(lang,
+      `Please confirm ${pending.length} item(s) I'm unsure about (see Q# on the diagram).`,
+      `有 ${pending.length} 处我拿不准，请按图上的 Q# 确认一下。`));
+  } else {
+    parts.push(msg(lang,
+      "If a wall label doesn't match your room, tell me which is which.",
+      "如果墙名和你家对不上，告诉我哪面是哪面。"));
+  }
+  return parts.join(lang === "zh" ? "" : " ");
 }
 
 /** 把抽取结果翻成一句给客户看的话。 */

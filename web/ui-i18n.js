@@ -16,7 +16,8 @@ window.RTA_UI = {
     noConversations: "No conversations yet.",
     warnSend:
       "Before a quote is sent, you'll see every piece of information that will go to the company — and must confirm. Nothing is sent automatically.",
-    artifactsHint: "Downloads appear here — each file can be saved on its own.",
+    artifactsHint: "Outputs appear here — click to preview in the panel, or download.",
+    download: "Download",
     upload: "① Upload floor plan",
     genLayout: "② Generate layout",
     quote: "③ Get quote",
@@ -28,7 +29,35 @@ window.RTA_UI = {
       "<b>② Generate layout</b> still needs floor-plan sizes: enter each wall length and ceiling height in the conversation — this button lights up when they're complete.",
     gateNeedFloor:
       "<b>② Generate layout</b> needs a floor plan first: click <b>① Upload floor plan</b>. No drawing is fine — after upload, enter walls one by one in the chat.",
-    attachTitle: "Upload a floor plan or drawing",
+    attachTitle: "Add floor plan files (then type & send together)",
+    userChipHint: "Profile & settings",
+    archiveChat: "Archive conversation",
+    restoreChat: "Restore conversation",
+    archivedTag: "Archived",
+    archivedHint: "This conversation is archived. Restore it to continue chatting.",
+    removeAttach: "Remove file",
+    badMime: (name) => `Skipped ${name}: only images and PDF floor plans are allowed.`,
+    engOfferText: (name) => `Create a collaboration thread with ${name}? The seller won't see the main chat—only a handoff summary and that thread.`,
+    engOfferYes: "Create collaboration",
+    engOfferNo: "Not now",
+    engOpened: (name) => `Collaboration with ${name}. Sync shared confirmations from the Confirmed tab when ready.`,
+    engSharedConfirmed: "Project confirmed (shared)",
+    engCompanyConfirmed: (name) => `Seller-specific summary${name ? ` · ${name}` : ""}`,
+    engCompanyEmpty: "No seller-specific picks yet (door style, SKUs, etc.).",
+    engPromote: "Sync to main project",
+    engPromoteHint: "Copies shared house/requirements only—not seller SKUs.",
+    engPromoteConfirm:
+      "Sync shared confirmations to the main project so you don't re-enter them elsewhere? Seller-specific picks stay in this thread.",
+    engInSync: "Already in sync with the main project.",
+    engPull: "Pull latest from main",
+    requirements: "Requirements",
+    companyEngInbox: "Customer collaborations",
+    companyEngHint:
+      "Threads opened after the customer confirms collaboration. Titles match the customer project. Main chat is never included.",
+    companyEngEmpty: "No open collaborations.",
+    companyEngReplyPh: "Reply as seller…",
+    refresh: "Refresh",
+    send: "Send",
     companySelected: (name) => `Talking with ${name}. Ask product details with @, or pick finishes with /doorStyle.`,
     uploadedFile: (name) => `Uploaded: ${name}`,
     layoutReadyChat: "Layout is ready — open Outputs to review the drawings. Say when you want a quote, or type /quote.",
@@ -60,6 +89,7 @@ window.RTA_UI = {
     confirmedEmpty:
       "Design basis will appear here as a short brief — space, plumbing, appliances, style — once discussed.",
     confirmedBasis: "Design basis",
+    confirmedFactsTitle: "Confirmed details",
     tbd: "TBD",
     recorded: "Recorded",
     fromFloorPlan: "From floor plan",
@@ -68,7 +98,7 @@ window.RTA_UI = {
     briefLocked: "confirmed",
     briefProvisional: "deferred",
     briefUntouched: "not discussed",
-    briefClarify: "needs confirm",
+    briefClarify: "assumed",
     field_kitchen_size: "Kitchen size",
     field_layout: "Layout",
     field_style: "Style",
@@ -78,6 +108,9 @@ window.RTA_UI = {
     designDeferred: "No problem — tell me what else to add, and I'll ask again when you're ready.",
     planViewTitle: "Overall plan (review placement first)",
     planViewHint: "Does this placement look right? Approve to unlock full drawings, or keep chatting to adjust.",
+    genericPlanViewTitle: "Generic layout preview (not a seller catalog)",
+    genericPlanViewHint:
+      "Drawn from common industry size steps — not any seller's real SKUs. @ a company to re-layout with their published catalog.",
     approvePlan: "Layout looks good — full drawings",
     planApproved: "Great — generating the full four views next.",
     boxMaterial: "Box material",
@@ -114,6 +147,7 @@ window.RTA_UI = {
     switchedAcct: "Account switched; conversation rebuilt.",
     pricingAs: (from, to) => `${from} → priced as ${to}`,
     noResponse: "(no response)",
+    thinking: "Thinking…",
     popular: "· popular",
     doneNone: "Done / none needed",
     skipQ: "Skip this question",
@@ -121,6 +155,10 @@ window.RTA_UI = {
     submitFail: "Submit failed",
     networkFail: (m) => `Couldn't submit (${m}). Please retry.`,
     saved: "Saved:",
+    savedDoorStyle: "Saved door style:",
+    savedBudget: "Saved budget band:",
+    savedBox: "Saved box material:",
+    savedApplianceWidth: "Saved appliance width:",
     layoutAffected: "(affects layout — regenerate to apply)",
     noPrefsLeft: "Nothing left to choose on price & preferences for now.",
     downloadFail: "Download failed",
@@ -228,6 +266,167 @@ window.RTA_UI = {
     verifyHint:
       "Only the number and registered name — <b>no ID scans</b>. Verification needs a checkable number; storing images only widens the breach surface.",
     retailTitle: "Currently quoting at retail",
+
+    // —— index 遗漏 ——
+    chatPlaceholder: "Tell us your needs — @company · /doorStyle · +",
+    send: "Send",
+    welcomeFallback:
+      "Hi — I'm your cabinet design assistant. Let's start with the kitchen site:\n"
+      + "1. Do you have a floor plan? Tap + to upload.\n"
+      + "2. If not, hand-sketch from the example and upload.\n"
+      + "3. Optional: upload a design-idea sketch (fridge / sink / cooktop).\n\n"
+      + "We'll turn it into an editable block diagram to discuss. Style, budget, and province can come next.",
+    noneNeeded: "None needed",
+    noneSelected: "None",
+    siteDiagramName: "Site blocks · discuss",
+    intakeSampleBtn: "Show example",
+    intakeUploadHint: "Tap + to upload your sketch",
+    suggestReuploadTitle: "Please re-upload a clearer sketch",
+    dragResize: "Drag to resize",
+    accountFallback: "Account",
+    loading: "Loading…",
+    refresh: "Refresh",
+    save: "Save",
+    langToggle: "中文",
+    langToggleTitle: "Switch language",
+
+    // —— /me ——
+    meTitle: "Account · RTA-Hub",
+    meHeading: "Account",
+    backToChat: "← Chat",
+    profileHeading: "Profile",
+    switchHeading: "Switch account (demo)",
+    switchBtn: "Use this account",
+    switchHint: "Demo only: switches the X-Account-Id used by this browser.",
+    demoAcctTitle: "Demo account",
+    demoAcctConsumer: "Consumer — Alex",
+    demoAcctTrade: "Trade — Riverside Builders",
+    demoAcctAdmin: "Platform Ops (admin)",
+    opsHeading: "Operations",
+    adminLink: "System admin",
+    adminSub: "DesignCritic review console",
+    trainerLink: "Training",
+    trainerSub: "Platform knowledge trainer",
+    l1Link: "L1 learn queue",
+    l1Sub: "Vendor draft suggestions",
+    regressionLink: "Regression board",
+    regressionSub: "Metrics & sim-out",
+    opsHint: "Admin APIs still require the Admin Token on those pages.",
+    companiesHeading: "Seller portals",
+    companiesHint: "Open a seller console (e.g. Oppein Canada). Company or Admin token is entered on that page.",
+    profileLoadFail: "Failed to load profile",
+    labelName: "Name",
+    labelEmail: "Email",
+    labelAccountType: "Account type",
+    labelPricedAs: "Priced as",
+    labelProvince: "Province",
+    noSellersYet: "No active sellers yet.",
+    tradeActive: "Trade pricing is active.",
+    noProjectsYet: "No projects yet.",
+    tradeVerification: "Trade verification",
+
+    // —— /company ——
+    companyPageTitle: "Company · RTA-Hub",
+    backToAccount: "← Account",
+    navChat: "Chat",
+    companyAuthHeading: "Access",
+    companyAuthHint: "Use X-Company-Token for this seller, or X-Admin-Token to act on their behalf.",
+    companyProfileHeading: "Seller",
+    companyOpsHeading: "Workspace",
+    companyOpsHint: "Billing / onboarding require a matching company or admin token.",
+    companyBtnSpec: "Load public catalog",
+    companyBtnBilling: "Billing",
+    companyBtnSession: "Spec onboarding session",
+    companyBtnTemplates: "Download blank templates (JSON)",
+    companyTokSaved: "Saved for this browser tab.",
+    companyTokInvalid: "Token rejected — check X-Company-Token or X-Admin-Token.",
+    companyNeedToken: "Enter a company or admin token to open collaborations.",
+    companySettings: "Settings",
+    companyEngPick: "Select a collaboration on the left to open the thread.",
+    companyEngNoMessages: "No messages in this collaboration yet.",
+    companyConfirmedEmpty: "Open a collaboration to see the handoff brief and confirmed preferences.",
+    companyHandoffHeading: "Handoff summary",
+    companySharedHeading: "Shared project",
+    companySpecificHeading: "Seller-specific",
+    companyNoHandoff: "No handoff summary.",
+    companyNoPrefs: "No preferences recorded.",
+    close: "Close",
+    companyMissingId: "Missing company id in URL.",
+    companyNotFound: "Company not found or not active.",
+    labelAliases: "Aliases",
+    labelServiceAreas: "Service areas",
+    httpError: "HTTP error",
+    missing: "missing",
+
+    // —— admin 共用 ——
+    adminNavReview: "Review",
+    adminNavTrainer: "Trainer",
+    adminNavL1: "L1 queue",
+    adminNavRegression: "Regression",
+    adminNavCustomerUi: "Customer UI",
+    adminConfirm: "Confirm",
+    adminPublish: "Publish",
+    adminDeprecate: "Deprecate",
+    adminDismiss: "Dismiss",
+    adminApplyDraft: "Apply → draft",
+    adminPromoteList: "Promote checklist",
+    adminMarkSettled: "Mark wired",
+
+    // —— admin-review ——
+    adminReviewTitle: "RTA-Hub · Ops conversation review",
+    adminReviewH1: "Ops conversation review",
+    adminReviewHint: "DesignCritic · not customer-visible · requires X-Admin-Token",
+    adminFilterAllOrigins: "All origins",
+    adminFilterRunId: "Filter by runId",
+    adminRefreshList: "Refresh list",
+    adminRerunCritique: "Re-run critique",
+    adminConversations: "Conversations",
+    adminCustomerTranscript: "Customer transcript (read-only)",
+    adminSelectConversation: "Select a conversation on the left",
+    adminCriticPanel: "Expert critique thread",
+    adminCriticPlaceholder: "Ask Critic a follow-up (ops only)",
+    adminNoCritiqueYet: "No critique yet — click “Re-run critique”",
+
+    // —— admin-trainer ——
+    adminTrainerTitle: "RTA-Hub · System trainer",
+    adminTrainerH1: "System trainer",
+    adminTrainerHint:
+      "FR-22 · Teach defaults / process; settle by target · ",
+    adminNewSession: "New session",
+    adminTrainerChat: "Training chat",
+    adminTrainerPlaceholder: "e.g. Usually no separate range cabinet — North American stove includes oven…",
+    adminKnowledgeCards: "Session knowledge cards (settle targets)",
+    adminCardsEmpty: "Proposed cards will appear here after you send a message",
+    adminSettleNotePrompt: "Wiring note (SR id / commit)",
+
+    // —— admin-l1 ——
+    adminL1Title: "RTA-Hub · L1 vendor learn queue",
+    adminL1H1: "L1 vendor learn queue",
+    adminL1Hint:
+      "FR-22.2 · Isolated by companyId · never writes L0 / never auto-edits published prices · ",
+    adminL1CompanyPh: "companyId (e.g. co_pilot)",
+    adminScanSignals: "Scan signals",
+    adminL1Summary: (s) =>
+      `Total ${s.total} · draft ${s.byStatus.draft || 0} · confirmed ${s.byStatus.confirmed || 0} · applied ${s.byStatus.applied || 0} · dismissed ${s.byStatus.dismissed || 0}`,
+    adminL1Empty: "No items yet. Enter a companyId and click “Scan signals”.",
+    adminNeedCompanyId: "Enter a companyId first",
+
+    // —— admin-regression ——
+    adminRegTitle: "RTA-Hub · Regression board",
+    adminRegH1: "Regression board",
+    adminRegHint: "FR-22.2 · knowledge-metrics / SessionRun / sim-out / L1 queue · ",
+    adminRegMetrics: "Key metrics (knowledge-metrics.jsonl)",
+    adminRegCards: "Knowledge cards vs learn proposals",
+    adminRegL1: "L1 learn queue",
+    adminRegRuns: "Recent SessionRuns",
+    adminRegSim: "Recent sim-out",
+    adminRegEvents: "Recent metrics events",
+    adminRegSimNote:
+      "Sim output convention: <code>sim-out/YYYY-MM-DD-NN</code> (see <code>pnpm simulate</code>). Board is read-only summary — no forced full re-run.",
+    adminMetricsSource: (p) => `Source file: ${p}`,
+    adminMetricsMissing: (p) => `No metrics file yet: ${p} (written after a blocking audit)`,
+    adminNoSessionRuns: "No SessionRuns (run simulate or a test session)",
+    adminNoSimOut: "No sim-out directory",
   },
   zh: {
     title: "RTA-Hub · 橱柜设计与报价",
@@ -242,7 +441,8 @@ window.RTA_UI = {
     noConversations: "还没有会话。",
     warnSend:
       "报价发送前会列出将要提供给该公司的全部信息，需你确认后才会发出。系统不会自动发送。",
-    artifactsHint: "产出物会出现在这里，可单独下载。",
+    artifactsHint: "输出物会出现在这里——点击可在面板内预览，也可下载。",
+    download: "下载",
     upload: "① 上传户型图",
     genLayout: "② 生成方案",
     quote: "③ 出报价",
@@ -254,7 +454,34 @@ window.RTA_UI = {
       "<b>② 生成方案</b>还差户型尺寸：在对话里把每段墙的长度和层高填完，填齐了这个按钮自动亮。",
     gateNeedFloor:
       "<b>② 生成方案</b>要先有户型：点<b>① 上传户型图</b>；没有图也可以，上传后在对话里一段墙一段墙地录尺寸。",
-    attachTitle: "上传户型图或图纸",
+    attachTitle: "添加户型文件（可继续打字后一并发送）",
+    userChipHint: "个人资料与设置",
+    archiveChat: "存档会话",
+    restoreChat: "恢复会话",
+    archivedTag: "已存档",
+    archivedHint: "此会话已存档。恢复后才能继续聊天。",
+    removeAttach: "移除文件",
+    badMime: (name) => `已跳过 ${name}：仅支持图片与 PDF 户型图。`,
+    engOfferText: (name) => `是否创建与 ${name} 的协作会话？厂商看不到主线程，仅见交接摘要与本协作线程。`,
+    engOfferYes: "创建协作",
+    engOfferNo: "暂不",
+    engOpened: (name) => `已进入与 ${name} 的协作。可在「已确认」将共享信息同步到主项目。`,
+    engSharedConfirmed: "项目已确认（共享）",
+    engCompanyConfirmed: (name) => `厂商专用确认小结${name ? ` · ${name}` : ""}`,
+    engCompanyEmpty: "尚无厂商专用选型（门板、SKU 等）。",
+    engPromote: "同步到主项目",
+    engPromoteHint: "只同步房屋/用户要求等共享项，不同步厂商 SKU。",
+    engPromoteConfirm:
+      "是否将共享确认同步到主项目，以便无需在别处重复输入？厂商专用选型仍留在本线程。",
+    engInSync: "已与主项目一致。",
+    engPull: "采用主项目最新",
+    requirements: "需求摘要",
+    companyEngInbox: "客户协作",
+    companyEngHint: "客户确认开线后的协作线程。标题与客户项目一致。永不包含主线程。",
+    companyEngEmpty: "暂无进行中的协作。",
+    companyEngReplyPh: "以厂商身份回复…",
+    refresh: "刷新",
+    send: "发送",
     companySelected: (name) => `已选中 ${name}。用 @ 问产品细节，用 /doorStyle 选花色。`,
     uploadedFile: (name) => `已上传：${name}`,
     layoutReadyChat: "方案已生成，可在「输出物」查看图纸。要报价直接说，或输入 /quote。",
@@ -285,6 +512,7 @@ window.RTA_UI = {
     tabOutputs: "输出物",
     confirmedEmpty: "这里会用短叙事汇总设计依据——空间、上下水、家电、风格等，聊过之后才会出现。",
     confirmedBasis: "设计依据",
+    confirmedFactsTitle: "已确认细节",
     tbd: "待定",
     recorded: "已记录",
     fromFloorPlan: "已由户型图确认",
@@ -293,7 +521,7 @@ window.RTA_UI = {
     briefLocked: "已确认",
     briefProvisional: "已推迟",
     briefUntouched: "未谈及",
-    briefClarify: "待确认",
+    briefClarify: "推定",
     field_kitchen_size: "厨房尺寸",
     field_layout: "布局",
     field_style: "风格",
@@ -303,6 +531,9 @@ window.RTA_UI = {
     designDeferred: "没问题，你继续补充；齐了之后我会再问要不要出设计。",
     planViewTitle: "全局俯视图（先看排布）",
     planViewHint: "这样排可以吗？认可后出完整图纸；还想改就直接在对话里说。",
+    genericPlanViewTitle: "通用示意排布（非厂商目录）",
+    genericPlanViewHint:
+      "按行业通用尺寸档位绘制，不对应任何厂商真实型号。@ 一家厂商后，会用该公司规格库重新排布出图。",
     approvePlan: "排布可以了，出完整图纸",
     planApproved: "好的，接下来生成完整四视图。",
     boxMaterial: "柜体材质",
@@ -339,6 +570,7 @@ window.RTA_UI = {
     switchedAcct: "已切换账号，会话已重建。",
     pricingAs: (from, to) => `${from} → 按 ${to} 定价`,
     noResponse: "（无响应）",
+    thinking: "正在思考…",
     popular: "· 常见选择",
     doneNone: "选好了 / 都不需要",
     skipQ: "跳过这一题",
@@ -346,6 +578,10 @@ window.RTA_UI = {
     submitFail: "提交失败",
     networkFail: (m) => `没能提交（${m}），请重试。`,
     saved: "已记录：",
+    savedDoorStyle: "已记录门板：",
+    savedBudget: "已记录预算档：",
+    savedBox: "已记录箱体：",
+    savedApplianceWidth: "已记录家电宽度：",
     layoutAffected: "（会改变排布，重新生成方案后生效）",
     noPrefsLeft: "价格与偏好方面暂时没有需要你选的了。",
     downloadFail: "下载失败",
@@ -451,5 +687,211 @@ window.RTA_UI = {
     verifyHint:
       "只需要编号与注册名，<b>不需要上传证件影像</b>——核实只需一个可查证的号码，留存影像会平白扩大泄露面。",
     retailTitle: "当前按零售价报价",
+
+    // —— index 遗漏 ——
+    chatPlaceholder: "说说需求 — @厂商 · /doorStyle · +上传",
+    send: "发送",
+    welcomeFallback:
+      "你好，我是橱柜设计顾问。先从厨房现场开始：\n"
+      + "1. 有户型图吗？有的话点 + 上传。\n"
+      + "2. 没有可对照示例手绘后再上传。\n"
+      + "3. 可选：上传初步设计想法草图（冰箱/水槽/灶台）。\n\n"
+      + "上传后会生成可讨论的柜块拼接图。风格、预算、省份稍后再聊。",
+    noneNeeded: "都不需要",
+    noneSelected: "未选",
+    siteDiagramName: "户型块图 · 讨论",
+    intakeSampleBtn: "查看示例",
+    intakeUploadHint: "点 + 上传你的草图",
+    suggestReuploadTitle: "请重新上传更清晰的标注草图",
+    dragResize: "拖动调整宽度",
+    accountFallback: "账号",
+    loading: "加载中…",
+    refresh: "刷新",
+    save: "保存",
+    langToggle: "EN",
+    langToggleTitle: "切换语言",
+
+    // —— /me ——
+    meTitle: "账号 · RTA-Hub",
+    meHeading: "账号",
+    backToChat: "← 会话",
+    profileHeading: "用户信息",
+    switchHeading: "切换账号（演示）",
+    switchBtn: "使用此账号",
+    switchHint: "仅演示：切换本浏览器使用的账号 ID。",
+    demoAcctTitle: "演示账号",
+    demoAcctConsumer: "消费者 — Alex",
+    demoAcctTrade: "贸易 — Riverside Builders",
+    demoAcctAdmin: "平台运营（管理员）",
+    opsHeading: "系统与训练",
+    adminLink: "系统管理",
+    adminSub: "DesignCritic 运营评审",
+    trainerLink: "训练相关",
+    trainerSub: "平台知识训练助手",
+    l1Link: "L1 学习队列",
+    l1Sub: "厂商 draft 建议",
+    regressionLink: "回归看板",
+    regressionSub: "指标与 sim-out",
+    opsHint: "进入后仍需在页面内填写 Admin Token。",
+    companiesHeading: "厂商入口",
+    companiesHint: "进入厂商工作台（如 Oppein Canada）。公司令牌或 Admin Token 在目标页填写。",
+    profileLoadFail: "加载用户信息失败",
+    labelName: "显示名",
+    labelEmail: "邮箱",
+    labelAccountType: "账号类型",
+    labelPricedAs: "定价身份",
+    labelProvince: "省份",
+    noSellersYet: "暂无已入驻厂商。",
+    tradeActive: "贸易价已开通。",
+    noProjectsYet: "暂无项目。",
+    tradeVerification: "贸易资质",
+
+    // —— /company ——
+    companyPageTitle: "厂商 · RTA-Hub",
+    backToAccount: "← 账号",
+    navChat: "会话",
+    companyAuthHeading: "访问凭证",
+    companyAuthHint: "填写本公司 X-Company-Token；运营可用 X-Admin-Token 代操。",
+    companyProfileHeading: "厂商资料",
+    companyOpsHeading: "工作台",
+    companyOpsHint: "计费 / 规格录入需要匹配的公司令牌或 Admin Token。",
+    companyBtnSpec: "查看公开目录",
+    companyBtnBilling: "计费",
+    companyBtnSession: "规格录入会话",
+    companyBtnTemplates: "空白模板（JSON）",
+    companyTokSaved: "已保存到本页会话。",
+    companyTokInvalid: "令牌无效 — 请核对 X-Company-Token 或 X-Admin-Token。",
+    companyNeedToken: "请填写公司令牌或运营令牌后再查看协作。",
+    companySettings: "设置",
+    companyEngPick: "在左侧选择一条协作以打开线程。",
+    companyEngNoMessages: "此协作尚无消息。",
+    companyConfirmedEmpty: "打开一条协作后，这里显示交接摘要与已确认偏好。",
+    companyHandoffHeading: "交接摘要",
+    companySharedHeading: "项目共享",
+    companySpecificHeading: "本厂专用",
+    companyNoHandoff: "暂无交接摘要。",
+    companyNoPrefs: "暂无已记录偏好。",
+    close: "关闭",
+    companyMissingId: "URL 中缺少公司 ID。",
+    companyNotFound: "未找到已入驻厂商，或尚未 active。",
+    labelAliases: "别名",
+    labelServiceAreas: "服务地区",
+    httpError: "HTTP 错误",
+    missing: "缺失",
+
+    // —— admin 共用 ——
+    adminNavReview: "评审",
+    adminNavTrainer: "训练助手",
+    adminNavL1: "L1 队列",
+    adminNavRegression: "回归看板",
+    adminNavCustomerUi: "客户 UI",
+    adminConfirm: "确认",
+    adminPublish: "发布",
+    adminDeprecate: "废弃",
+    adminDismiss: "驳回",
+    adminApplyDraft: "应用→draft",
+    adminPromoteList: "Promote 清单",
+    adminMarkSettled: "标记已接线",
+
+    // —— admin-review ——
+    adminReviewTitle: "RTA-Hub · 运营会话评审",
+    adminReviewH1: "运营会话评审",
+    adminReviewHint: "DesignCritic · 客户不可见 · 需 X-Admin-Token",
+    adminFilterAllOrigins: "全部来源",
+    adminFilterRunId: "runId 筛选",
+    adminRefreshList: "刷新列表",
+    adminRerunCritique: "手动再评审",
+    adminConversations: "会话",
+    adminCustomerTranscript: "客户 transcript（只读）",
+    adminSelectConversation: "选择左侧会话",
+    adminCriticPanel: "专家评审会话框",
+    adminCriticPlaceholder: "向 Critic 追问（仅运营）",
+    adminNoCritiqueYet: "尚无评审 — 可点「手动再评审」",
+
+    // —— admin-trainer ——
+    adminTrainerTitle: "RTA-Hub · 系统训练助手",
+    adminTrainerH1: "系统训练助手",
+    adminTrainerHint: "FR-22 · 教她常识/默认/流程；按 settleTarget 沉淀 · ",
+    adminNewSession: "新会话",
+    adminTrainerChat: "训练对话",
+    adminTrainerPlaceholder: "例如：通常不需要灶台柜，北美 stove 跟烤箱一体…",
+    adminKnowledgeCards: "本会话知识卡（沉淀目标）",
+    adminCardsEmpty: "发送消息后这里会出现提议的知识卡",
+    adminSettleNotePrompt: "接线备注（SR id / commit）",
+
+    // —— admin-l1 ——
+    adminL1Title: "RTA-Hub · L1 厂商学习队列",
+    adminL1H1: "L1 厂商学习队列",
+    adminL1Hint: "FR-22.2 · 按 companyId 隔离 · 禁止写 L0 / 禁止自动改 published 价目 · ",
+    adminL1CompanyPh: "companyId（如 co_pilot）",
+    adminScanSignals: "扫描信号",
+    adminL1Summary: (s) =>
+      `共 ${s.total} · draft ${s.byStatus.draft || 0} · confirmed ${s.byStatus.confirmed || 0} · applied ${s.byStatus.applied || 0} · dismissed ${s.byStatus.dismissed || 0}`,
+    adminL1Empty: "暂无条目。填写 companyId 后点「扫描信号」。",
+    adminNeedCompanyId: "请先填写 companyId",
+
+    // —— admin-regression ——
+    adminRegTitle: "RTA-Hub · 回归看板",
+    adminRegH1: "回归看板",
+    adminRegHint: "FR-22.2 · knowledge-metrics / SessionRun / sim-out / L1 队列 · ",
+    adminRegMetrics: "关键指标（knowledge-metrics.jsonl）",
+    adminRegCards: "知识卡 vs 学习提议",
+    adminRegL1: "L1 学习队列",
+    adminRegRuns: "最近 SessionRun",
+    adminRegSim: "最近 sim-out",
+    adminRegEvents: "最近 metrics 事件",
+    adminRegSimNote:
+      "模拟输出约定：<code>sim-out/YYYY-MM-DD-NN</code>（见 <code>pnpm simulate</code>）。看板只读摘要，不强制全量重跑。",
+    adminMetricsSource: (p) => `源文件：${p}`,
+    adminMetricsMissing: (p) => `尚无 metrics 文件：${p}（跑会话 audit 阻断后会写入）`,
+    adminNoSessionRuns: "无 SessionRun（可跑 simulate 或测试会话）",
+    adminNoSimOut: "无 sim-out 目录",
   },
+};
+
+/** 当前 UI 语言：读 localStorage，默认 en。 */
+window.RTA_UI.resolveLang = function resolveLang() {
+  try {
+    const s = localStorage.getItem("rtaUiLang") || "";
+    if (s.startsWith("zh")) return "zh";
+  } catch (_) { /* ignore */ }
+  return "en";
+};
+
+window.RTA_UI.setLang = function setLang(lang) {
+  const next = lang === "zh" ? "zh" : "en";
+  window.RTA_UI._lang = next;
+  try { localStorage.setItem("rtaUiLang", next); } catch (_) { /* ignore */ }
+  document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
+  return next;
+};
+
+/** 跨页可用的 t()；页面也可自建同名函数转发到这里。 */
+window.RTA_UI.t = function t(key, ...args) {
+  const lang = window.RTA_UI._lang || window.RTA_UI.resolveLang();
+  const pack = window.RTA_UI[lang] || window.RTA_UI.en;
+  const v = pack[key] ?? window.RTA_UI.en[key] ?? key;
+  return typeof v === "function" ? v(...args) : v;
+};
+
+/** 应用 data-i18n / data-i18n-html / data-i18n-title / data-i18n-placeholder。 */
+window.RTA_UI.applyDataI18n = function applyDataI18n(root) {
+  const scope = root || document;
+  const t = window.RTA_UI.t;
+  scope.querySelectorAll("[data-i18n]").forEach((el) => {
+    const key = el.getAttribute("data-i18n");
+    if (key) el.textContent = t(key);
+  });
+  scope.querySelectorAll("[data-i18n-html]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-html");
+    if (key) el.innerHTML = t(key);
+  });
+  scope.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-title");
+    if (key) el.title = t(key);
+  });
+  scope.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-placeholder");
+    if (key) el.setAttribute("placeholder", t(key));
+  });
 };

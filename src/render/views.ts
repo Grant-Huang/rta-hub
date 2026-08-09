@@ -251,10 +251,11 @@ function drawBox(
     ctx.parts.push(kRect(x, yPx, wIn * s, hIn * s, PALETTE[kind]));
   }
 
-  // 踢脚线
+  // 踢脚线：与柜体同宽对齐。此前左侧缩进 3" 只缩宽度、不缩进深，
+  // 正视图上踢脚与柜脚错位（客户看到的「地脚偏差」）。
   if (toeKick > 0) {
     const kickY = yPx + hIn * s;
-    ctx.parts.push(kRect(x + 3 * s, kickY, (wIn - 3) * s, toeKick * s, PALETTE.toeKick));
+    ctx.parts.push(kRect(x, kickY, wIn * s, toeKick * s, PALETTE.toeKick));
   }
 
   // 标注：水槽写"水槽"、配套柜写它配的是哪台家电，普通柜体写型号码。
@@ -310,11 +311,15 @@ export function renderTopView(
     const kind = elementKindOf(p);
     ctx.parts.push(kRect(x, 0, w, d, PALETTE[kind]));
 
-    // 开门弧线示意（只对柜体画）。铰链在柜子左下角，门朝室内开——
-    // 与全局俯视图用的是同一个图元，弧线的样子必然一致
+    // 开门弧线示意（只对柜体画）。≥24" 双门各半宽，与全局俯视图一致。
     if (p.kind === "cabinet" && p.width >= 9) {
-      const radius = Math.min(w, d) * 0.85;
+      const leaf = p.width >= 24 ? p.width / 2 : p.width;
+      const radius = Math.min(leaf, p.depth) * 0.85 * s;
       ctx.parts.push(swingArc({ x, y: d }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, radius));
+      if (p.width >= 24) {
+        ctx.parts.push(swingArc(
+          { x: x + w, y: d }, { dx: -1, dy: 0 }, { dx: 0, dy: 1 }, radius));
+      }
     }
 
     const ann = annotationFor(p);

@@ -208,12 +208,22 @@ export function aggregateSignals(
  * 客户端提示文案 —— **不得暴露入驻/订阅状态这类内部运营细节**
  * （REQUIREMENTS FR-10、场景 B 第 2 点）。
  */
-export function clientFacingMessage(outcome: Exclude<RouteOutcome, { kind: "routed" }>): string {
+export function clientFacingMessage(
+  outcome: Exclude<RouteOutcome, { kind: "routed" }>,
+  lang: "en" | "zh" = "en",
+): string {
+  const names = outcome.kind === "ambiguous"
+    ? outcome.candidates.map((c) => c.name).join(" / ")
+    : "";
   switch (outcome.kind) {
     case "ambiguous":
-      return `有几家名字接近的公司，你指的是哪一家？${outcome.candidates.map((c) => c.name).join(" / ")}`;
+      return lang === "zh"
+        ? `有几家名字接近的公司，你指的是哪一家？${names}`
+        : `A few company names look similar — which one did you mean? ${names}`;
     case "notActive":
     case "unknown":
-      return "这家公司暂时还不能在平台上直接对话。我可以先按行业通用规格帮你出一版预估，你看可以吗？";
+      return lang === "zh"
+        ? "这家公司暂时还不能在平台上直接对话。我可以先按行业通用规格帮你出一版预估，你看可以吗？"
+        : "That company isn't available for chat on the platform yet. I can draft a generic estimate from industry sizes first — sound ok?";
   }
 }

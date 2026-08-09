@@ -221,7 +221,9 @@ export function matchFaceTemplate(code: string): MatchResult | undefined {
 
   // 转角类
   if (/^(LSB)/.test(sku)) return { templateId: "F9_DIAGONAL_CORNER", params: {}, rule: "LSB → 旋转盘转角地柜" };
-  if (/^(CW|WDC|EWC|LWC)/.test(sku)) return { templateId: "F9_DIAGONAL_CORNER", params: {}, rule: "CW/WDC/EWC/LWC → 转角吊柜" };
+  if (/^(DC)/.test(sku)) return { templateId: "F9_DIAGONAL_CORNER", params: {}, rule: "DC → 钻石/斜切转角地柜" };
+  if (/^(CW|WDC|EWC|LWC)/.test(sku)) return { templateId: "F9_DIAGONAL_CORNER", params: {}, rule: "CW/WDC/EWC/LWC → 钻石/斜切转角吊柜" };
+  if (/^(LC)/.test(sku)) return { templateId: "F1_SINGLE_DOOR", params: {}, rule: "LC → L 形转角吊柜" };
   if (/^(BBC)/.test(sku)) return { templateId: "F10_BLIND_CORNER", params: { blindWidth: 6 }, rule: "BBC → 盲角地柜" };
   if (/^(WBBC|WBC)/.test(sku)) return { templateId: "F10_BLIND_CORNER", params: { blindWidth: 6 }, rule: "WBC/WBBC → 盲角吊柜" };
 

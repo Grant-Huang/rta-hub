@@ -53,7 +53,8 @@ export type CallSite =
   | "designIntent"          // 需求 → 设计意图（FR-4 的入口）
   | "layoutRevision"        // 自然语言修改要求 → 对排布的调整
   | "specTemplateParse"     // 非结构化价目表兜底解析（FR-2 降级路径）
-  | "floorPlanExtract";     // 户型图抽取（FR-3）
+  | "floorPlanExtract"      // 户型图抽取（FR-3）
+  | "designCritique";       // 运营侧 DesignCritic 挑刺（FR-21）
 
 /**
  * 调用点 → 层级。
@@ -68,6 +69,7 @@ export const CALL_SITE_TIER: Record<CallSite, ModelTier> = {
   layoutRevision: "reasoning",
   specTemplateParse: "reasoning",
   floorPlanExtract: "vision",
+  designCritique: "reasoning",
 };
 
 export interface TierConfig {
@@ -93,23 +95,27 @@ const ENV_KEY: Record<ModelTier, string> = {
   vision: "LLM_MODEL_VISION",
 };
 
-/**
- * 解析分层配置。
- *
- * 回退规则（刻意不对称）：
- *   - `chat` 没配 → 回退到 `reasoning`。用强模型做闲聊只是贵，不会出错。
- *   - `reasoning` 没配 → 回退到 `chat`，但**这是有风险的降级**，要能被看见。
- *   - `vision` 没配 → **不回退**。文本模型看不了图，回退过去只会得到一堆瞎猜的
- *     尺寸；不如老实降级为手动录入（FR-3 已经支持）。
- */
-export function resolveModelTiers(env: NodeJS.ProcessEnv = process.env): ModelTierConfig {
+/** 测试用户 / simulate 专用分层（不影响生产 LLM_MODEL_*）。 */
+const TEST_ENV_KEY: Record<ModelTier, string> = {
+  chat: "LLM_MODEL_TEST_CHAT",
+  reasoning: "LLM_MODEL_TEST_REASONING",
+  vision: "LLM_MODEL_TEST_VISION",
+};
+
+function resolveTierKeys(
+  env: NodeJS.ProcessEnv,
+  keys: Record<ModelTier, string>,
+  opts: { legacyOpenAiModel?: boolean } = {},
+): ModelTierConfig {
   const raw = {
-    chat: env[ENV_KEY.chat]?.trim() || undefined,
-    reasoning: env[ENV_KEY.reasoning]?.trim() || undefined,
-    vision: env[ENV_KEY.vision]?.trim() || undefined,
+    chat: env[keys.chat]?.trim() || undefined,
+    reasoning: env[keys.reasoning]?.trim() || undefined,
+    vision: env[keys.vision]?.trim() || undefined,
   };
-  // 单模型部署的向后兼容：只配了 OPENAI_MODEL 就三层都用它（vision 除外）
-  const legacy = env["OPENAI_MODEL"]?.trim() || undefined;
+  // 生产单模型部署的向后兼容：只配了 OPENAI_MODEL 就两层文本都用它（vision 除外）
+  const legacy = opts.legacyOpenAiModel
+    ? (env["OPENAI_MODEL"]?.trim() || undefined)
+    : undefined;
 
   const chat = raw.chat ?? raw.reasoning ?? legacy;
   const reasoning = raw.reasoning ?? raw.chat ?? legacy;
@@ -131,6 +137,51 @@ export function resolveModelTiers(env: NodeJS.ProcessEnv = process.env): ModelTi
     },
     anyConfigured: Boolean(chat || reasoning || raw.vision),
   };
+}
+
+/**
+ * 解析生产分层配置。
+ *
+ * 回退规则（刻意不对称）：
+ *   - `chat` 没配 → 回退到 `reasoning`。用强模型做闲聊只是贵，不会出错。
+ *   - `reasoning` 没配 → 回退到 `chat`，但**这是有风险的降级**，要能被看见。
+ *   - `vision` 没配 → **不回退**。文本模型看不了图，回退过去只会得到一堆瞎猜的
+ *     尺寸；不如老实降级为手动录入（FR-3 已经支持）。
+ */
+export function resolveModelTiers(env: NodeJS.ProcessEnv = process.env): ModelTierConfig {
+  return resolveTierKeys(env, ENV_KEY, { legacyOpenAiModel: true });
+}
+
+/**
+ * 测试用户 / `pnpm simulate` 专用分层。
+ * 读 `LLM_MODEL_TEST_*`，**绝不**回落到生产 `LLM_MODEL_*` / `OPENAI_MODEL`。
+ */
+export function resolveTestModelTiers(env: NodeJS.ProcessEnv = process.env): ModelTierConfig {
+  return resolveTierKeys(env, TEST_ENV_KEY, { legacyOpenAiModel: false });
+}
+
+/** 模拟启动日志：测试分层（与生产 tierReport 分开）。 */
+export function testTierReport(cfg: ModelTierConfig): string[] {
+  if (!cfg.anyConfigured) {
+    return ["测试 LLM 分层：未配置 LLM_MODEL_TEST_* —— 用户 agent / 场景生成走确定性回退"];
+  }
+  const lines: string[] = ["测试 LLM 分层（仅 simulate / 用户 agent；不影响生产）："];
+  for (const tier of ["chat", "reasoning", "vision"] as const) {
+    const t = cfg[tier];
+    const label = { chat: "轻量(对话)", reasoning: "主力(推理)", vision: "视觉(户型图)" }[tier];
+    const key = TEST_ENV_KEY[tier];
+    if (!t.effectiveModelId) {
+      lines.push(
+        tier === "vision"
+          ? `  · ${label}：未配置 —— simulate 户型视觉降级`
+          : `  · ${label}：未配置`,
+      );
+      continue;
+    }
+    const via = t.fellBackTo ? `（回退自 ${TEST_ENV_KEY[t.fellBackTo]}）` : "";
+    lines.push(`  · ${label}：${t.effectiveModelId}${via} ← ${key}`);
+  }
+  return lines;
 }
 
 export function modelFor(cfg: ModelTierConfig, site: CallSite): string | undefined {

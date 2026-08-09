@@ -467,7 +467,19 @@ test("补齐户型 → 出方案 → 四视图 → 转报价（完整 MVP-2 链�
 
   await req(`/api/conversations/${conversation.id}/messages`, {
     method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({ text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Appliances later." }),
+    body: JSON.stringify({
+      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Fridge 36\", stove 30\", dishwasher 24\".",
+    }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      appliances: [
+        { kind: "refrigerator", width: 36 },
+        { kind: "range", width: 30 },
+        { kind: "dishwasher", width: 24 },
+      ],
+    }),
   });
   await advance(conversation.id, CONSUMER, "consent");
   const planRes = await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
@@ -540,7 +552,19 @@ test("局部重算只影响指定墙段", async () => {
   });
   await req(`/api/conversations/${conversation.id}/messages`, {
     method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({ text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Appliances later." }),
+    body: JSON.stringify({
+      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Fridge 36\", stove 30\", dishwasher 24\".",
+    }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      appliances: [
+        { kind: "refrigerator", width: 36 },
+        { kind: "range", width: 30 },
+        { kind: "dishwasher", width: 24 },
+      ],
+    }),
   });
   await advance(conversation.id, CONSUMER, "consent");
   await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
@@ -644,7 +668,7 @@ test("别人的户型图读不到", async () => {
 const TRADE = "ca_demo_trade";
 
 /** 建一个补齐了户型、出过方案的会话，供后面的 PDF / 修订链测试复用。 */
-/** 满足 FR-15 出图前检查表：几何 + 上下水 + 意图 + 窗/家电可推迟说明。 */
+/** 满足 FR-15 出图前检查表：几何 + 上下水 + 意图 + 已确认家电宽度（尺寸不可后定）。 */
 async function seedDesignIntake(conversationId: string, accountId: string, floorPlanId: string) {
   const added = await req(`/api/floorplans/${floorPlanId}/resolve`, {
     method: "POST", accountId,
@@ -662,10 +686,20 @@ async function seedDesignIntake(conversationId: string, accountId: string, floor
       addFeature: { wallRunId: runId, kind: "plumbing", offset: 60, width: 24 },
     }),
   });
+  await req(`/api/floorplans/${floorPlanId}/resolve`, {
+    method: "POST", accountId,
+    body: JSON.stringify({
+      appliances: [
+        { kind: "refrigerator", width: 36 },
+        { kind: "range", width: 30 },
+        { kind: "dishwasher", width: 24 },
+      ],
+    }),
+  });
   await req(`/api/conversations/${conversationId}/messages`, {
     method: "POST", accountId,
     body: JSON.stringify({
-      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Appliances later.",
+      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Fridge 36\", stove 30\", dishwasher 24\".",
     }),
   });
   return runId;
@@ -1461,11 +1495,20 @@ test("客户能补充窗户与上下水位置，排布据此放水槽柜", async
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
   });
 
-  // 先推迟上下水，才能进入阶段；后面再补特征验证水槽柜
+  // 先推迟上下水，才能进入阶段；后面再补特征验证水槽柜（家电尺寸须先明确）
   await req(`/api/conversations/${conversation.id}/messages`, {
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({
-      text: "Modern style, budget CAD $10–20k, Ontario ON. Plumbing later. No windows. Appliances later.",
+      text: "Modern style, budget CAD $10–20k, Ontario ON. Plumbing later. No windows. Fridge 36\", stove 30\".",
+    }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      appliances: [
+        { kind: "refrigerator", width: 36 },
+        { kind: "range", width: 30 },
+      ],
     }),
   });
   // 走阶段：点头 → 俯视图 → 认可

@@ -25,7 +25,7 @@ MVP-1 的目标是"用 1 家真实公司把规格 → 对话 → 报价 → 确�
 
 ## 2. 已完成（本轮）
 
-代码全部有测试，`pnpm test` 共 **330 个用例通过**，`pnpm typecheck` 无错。
+代码全部有测试（用例数随轮次增长；以 `pnpm test` / README 当时记录为准），`pnpm typecheck` 无错。
 
 | 模块 | 文件 | 覆盖的需求 | 说明 |
 |---|---|---|---|
@@ -197,7 +197,7 @@ DP 状态里加上「上一个柜宽」，把**宽度节奏**与**窄柜惩罚**
 | 2 | **trade 多项目管理 + 专属交互模式 + 资质核实** | `src/trade/` 三个文件 |
 | 3 | **计费争议的运营裁定台** | `/api/admin/disputes`、`/api/company/:id/billing/disputes` |
 | 4 | **持久化 `FloorPlan` / `DesignLayout` / `DesignRevision`** | `src/layout/store.ts`、`src/store/repositories.ts` |
-| 5 | NKBA 净空数值核实 | ⬜ **仍未做**，见检查清单 A6（阻断项） |
+| 5 | NKBA 净空数值核实 | ✅ 已按公开 NKBA Kitchen Planning Guidelines PDF 核实（2026-08-08），见 LAUNCH_BLOCKERS A6 |
 
 ### 5.1 PDF：为什么自己写而不是引库
 
@@ -295,15 +295,16 @@ FR-2 入驻、§3.6 规格发布、FR-1 结构化 mention token、FR-3 视觉抽
 还修了一处真实的安全漏洞：公司侧端点没有鉴权，`TenantScope` 拿的是调用方自己填的
 companyId。**租户隔离的前提是先证明你是谁，再按你的身份过滤；顺序反了，过滤只是装饰。**
 
-### 5.5 下一轮候选
+### 5.5 下一轮候选（持续更新）
 
-0. **FR-2 入驻端点 + §3.6 发布端点**（P0）—— 没有这两组，平台**接不进第三家公司**，
-   改一次价要改代码重新部署。库函数已齐，主要是接线与权限。
-0. **计费出账接线**（P0）—— `invoice` 从未被调用，计费事件只进不出，收入链路是断的。
-1. **NKBA 净空数值核实**（阻断项）。
+0. ~~**FR-2 入驻端点 + §3.6 发布端点**（P0）~~ → ✅ M7 已接线（`/api/company/:id/spec/*`）。
+0. **计费出账接线**（P0）—— `invoice` 仍无 HTTP；计费事件只进不出。与 G4 费率定案一起做。
+0. **FR-1 结构化 mention token**（P1）—— 库函数 `routeByToken` 有，服务端/前端仍只走文本匹配。
+1. ~~**NKBA 净空数值核实**~~ → 已按公开 PDF 核实（付费原书页码级可选增强）。
 2. 生产级鉴权（检查清单 E1）——目前是 `X-Account-Id` 头的最小实现。
-3. 留存清除的定时任务接线（B6，计划生成已实现，缺 cron）。
-4. 若商家规模增长，平面文件迁数据库。
+3. ~~留存清除的定时任务接线（B6）~~ → `RETENTION_CRON_MS` + `/api/admin/retention/run` 已落地。
+4. ~~**FR-3 视觉抽取**~~ → ✅ `ollama-vision.ts` 已实现；未配模型时降级手动录入。
+5. 若商家规模增长，平面文件迁数据库。
 
 ## 5.1 MVP-5（v0.7，M5-1 ~ M5-8 与 M5-14 ~ M5-19 已开发，其余仍是设计稿）
 
@@ -475,9 +476,8 @@ Lakeside 无框半覆盖）证明了"命名体系不同也能接入"；第三家
 Birchline 最高只有 39"，但矮档齐全，解出 30+18 = 48 做到顶。
 这说明排布器读的是**档位集合**而不是"谁的柜子更高"。
 
-**先不做**（优先级不变，见 §5 与 DESIGN_REVIEW §2.2）：FR-2 入驻端点、§3.6 发布端点、
-FR-1 结构化 mention token、FR-3 视觉抽取、`invoice` 出账。它们仍是 P0/P1，
-只是与本轮的四组问题正交。
+**当时「先不做」的五项**（见 DESIGN_REVIEW §2.2）：其中 FR-2 / §3.6 / FR-3 已在后续轮次
+接线；**仍未做**的是 FR-1 结构化 mention token 与 `invoice` 出账（见 §5.5）。
 
 ## 6. 与检查清单的对应
 
@@ -500,12 +500,12 @@ FR-1 结构化 mention token、FR-3 视觉抽取、`invoice` 出账。它们仍�
 - ✅ **B8** 数据主体权利入口 + 30 天 SLA 计算
 - 🟡 **E1** 鉴权 —— 账号与管理员两级最小实现 + 整站访问口令（外层闸门，
   生产未配置时**拒绝启动**）。**真正的登录态仍未做**：口令后面的人可互相冒充账号
-- 🟡 **B6** 到期清除 —— 计划生成已实现并测试，**定时任务尚未接**（需部署侧配 cron）
-- ⬜ **A1/A2** 税率核对 —— 结构已数据驱动，**数字仍需运营逐条核实**
+- ✅ **B6** 到期清除 —— 计划 + 执行 + `RETENTION_CRON_MS` / admin run 已接线
+- ✅ **A1/A2** 税率核对 —— 2026-08-08 对照 CRA 公开表 + QC 2012-4；`VERIFIED_TAX_RATES=2026-08-08`
 - ⬜ **A4** `GenericCatalog` 数据来源 —— 未定案，故 disclaimer 目前如实标注为占位数据
 - ⬜ **B1** 隐私政策与条款需法务审阅
 - ⬜ **G4** 线索费率未定案
-- ⬜ **A6** NKBA 净空数值 —— 常量已数据化且有测试，**数字仍需对照官方原文核实**（阻断项）
+- ✅ **A6** NKBA 净空 —— 已按公开 Kitchen Planning Guidelines PDF 核实（2026-08-08）；付费原书页码级可选增强
 - ✅ **F1** 争议裁定有据可查 —— 运营裁定台带审计事件链与内容哈希一致性标记
 - ✅ **H3** 快照篡改可检出 —— `snapshotIntact`
 
@@ -514,12 +514,12 @@ FR-1 结构化 mention token、FR-3 视觉抽取、`invoice` 出账。它们仍�
 ```bash
 pnpm install
 pnpm typecheck     # 无错（含 scripts/）
-pnpm test          # 531 passing
+pnpm test          # 以当前输出为准（README 亦有记录）
 pnpm simulate out 4  # 端到端冒烟，自带断言，失败退出码非 0
 pnpm dev           # http://localhost:8790
 ```
 
-CI（`.github/workflows/ci.yml`）跑的就是上面前三步。冒烟这一步走真实 HTTP 端点，
+CI（`.github/workflows/ci.yml`）跑 typecheck / test / simulate。冒烟走真实 HTTP 端点，
 覆盖单测覆盖不到的那一半：模块之间的接线。
 
 试点数据：

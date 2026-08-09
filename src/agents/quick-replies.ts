@@ -20,7 +20,7 @@ import { DEFAULT_LANGUAGE } from "../i18n/language.js";
 export interface QuickReply {
   /** 缺哪个字段。与 `missingFields` 的返回值同名。 */
   field: string;
-  /** 提示语——告诉客户"回一个词就行"。 */
+  /** 提示语——简短说明怎么答（勿每轮命令式催促）。 */
   hint: string;
   /** 可点选项。点了就把这段文字当成客户的话发出去。 */
   options: string[];
@@ -46,11 +46,12 @@ const CATALOG_EN: Record<string, CatalogEntry> = {
     options: ["I-shape", "L-shape", "U-shape", "With island"],
   },
   style: {
-    hint: "A short phrase is fine — e.g. \"modern\"",
+    hint: "e.g. modern / farmhouse / nordic",
     options: ["Modern", "Farmhouse", "Nordic", "Transitional", "Traditional"],
   },
   budget: {
-    hint: "A range is fine; \"not sure yet\" works too",
+    // 勿写 “A range is fine”——会与灶具 range 混淆，导致会话/解析歧义
+    hint: "A budget band is fine; \"not sure yet\" works too",
     options: [
       "Budget under CAD $10k",
       "Budget CAD $10–20k",
@@ -75,13 +76,13 @@ const CATALOG_ZH: Record<string, CatalogEntry> = {
     options: ["一面墙 8 尺左右", "一面墙 12 尺左右", "两面墙各 10 尺左右", "厨房约 100 平方尺"],
     alternative: "直接上传户型图更准——从图上读出来的数不用你量。",
   },
-  layout: {
-    hint: "点一个就行",
-    options: ["一字型", "L 型", "U 型", "带岛台"],
-  },
   style: {
-    hint: "回两个字就行，比如「现代简约」",
+    hint: "例如「现代简约」",
     options: ["现代简约", "美式乡村", "北欧", "轻奢", "传统欧式"],
+  },
+  layout: {
+    hint: "可选布局",
+    options: ["一字型", "L 型", "U 型", "带岛台"],
   },
   budget: {
     hint: "给个范围就行，不确定也可以直说",
@@ -121,18 +122,20 @@ export function askStyleRules(lang: UiLanguage = DEFAULT_LANGUAGE): string {
   if (lang === "zh") {
     return [
       "提问纪律：",
-      "- 每个问题都要让客户**能用几个字答完**。不确定时，直接说「回一个词就行」。",
-      "- 举例最多给三个，写成「比如现代简约」，不要罗列五六个再加一个「等」。",
+      "- 问题要具体、可答；可用示例或下方选项，**不要**每轮重复说「回一个词就行」「简短回我」——听起来像填表。",
+      "- 举例最多三个（如「比如现代简约」），不要罗列一长串。",
       "- 不要问「您的需求是什么」这类没有答案形状的问题。",
-      "- 客户已经答过的，不要换个说法再问一遍。",
+      "- 客户已经答过的，不要换个说法再问一遍；推定尺寸确认过一次就够。",
+      "- 语气像真人顾问：先确认已记下的内容，再问下一项。",
     ].join("\n");
   }
   return [
     "Asking style:",
-    "- Every question must be answerable in a few words. When unsure, say \"a short phrase is fine\".",
+    "- Ask concrete, answerable questions; use examples or quick options. Do **not** keep saying \"a short phrase is fine\" every turn — it sounds like a form.",
     "- Give at most three examples (e.g. \"modern\"), never a long laundry list.",
     "- Don't ask shapeless questions like \"What are your requirements?\".",
-    "- Don't re-ask something the customer already answered.",
+    "- Don't re-ask something already answered; one confirmation of assumed sizes is enough.",
+    "- Sound like a helpful advisor: briefly acknowledge what you have, then ask the next gap.",
   ].join("\n");
 }
 

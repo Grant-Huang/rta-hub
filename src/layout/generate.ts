@@ -16,10 +16,11 @@
  *
  * 只使用该公司 published 规格里**真实存在**的型号与离散尺寸（FR-4、FR-8）。
  */
-import type { ModuleSpec, ModuleType } from "../domain/types.js";
+import type { ModuleSpec, ModuleType, SharedPreferences } from "../domain/types.js";
 import type { ParsedGeometry, WallFeature, WallRun } from "../floorplan/types.js";
 import { isIsland, quantize } from "../floorplan/types.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
+import { resolveModuleSellUnit } from "../spec/sku-semantics.js";
 import {
   buildKitchenPlan, doorSpan, toPlane, usableSpan, type KitchenPlan,
 } from "./plan-model.js";
@@ -31,9 +32,12 @@ import {
 import { compareCandidates, scoreAesthetics, type AestheticScore } from "./aesthetics.js";
 import { solveStack, stackCandidates, STACK_SEAM_LOSS } from "./stacking.js";
 import { capabilitiesFor, hasRole } from "../spec/capabilities.js";
+import {
+  cornerModulesFor, preferredCornerFootprint, rematchCornerModuleHeight,
+} from "./corner-reserve.js";
 import { planAppliances, type AppliancePlan, type PlacedAppliance } from "./appliance-plan.js";
 import {
-  APPLIANCE_LABEL, applianceLabel, applianceFrom, reservedWidth,
+  APPLIANCE_LABEL, applianceLabel, applianceFrom, defaultAssumedAppliances, reservedWidth,
   type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
 
@@ -50,16 +54,17 @@ export const APPLIANCE_CLEARANCE = {
   dishwasher: 24,
 } as const;
 
-/**
- * 没有家电信息时的兜底。
- *
- * 一律标 `provenance: "assumed"`，好让下游如实告诉客户「这是按常见尺寸猜的」
- * （FR-3.2）。以前这里是两个字符串，猜了也不留痕。
- */
-const DEFAULT_APPLIANCES: readonly ApplianceSpec[] = [
-  applianceFrom({ kind: "refrigerator" }),
-  applianceFrom({ kind: "range" }),
-];
+/** FR-22：解析本轮家电列表（overlay 默认宽度 + preferNoCooktopBase）。 */
+export function resolveLayoutAppliances(opts: LayoutOptions): ApplianceSpec[] {
+  let list = opts.appliances
+    ? [...opts.appliances]
+    : defaultAssumedAppliances(opts.applianceDefaultWidths);
+  if (opts.layoutHeuristic?.preferNoCooktopBase) {
+    // 推定的 cooktop 不排；客户明示的 cooktop 仍要灶下柜
+    list = list.filter((a) => a.kind !== "cooktop" || a.provenance === "customer");
+  }
+  return list;
+}
 
 /** 宽度写成可读的样子，用于图上的家电标签。 */
 function formatWidth(inches: number): string {
@@ -116,6 +121,11 @@ export interface Placement {
    */
   stackBase?: number;
   label?: string;
+  /**
+   * 稳定柜号（从 1 起）。客户可说「把 #12 改成双抽」——
+   * 编号在一次排布结果内稳定，重排后重新编号。
+   */
+  cabinetNo?: number;
 }
 
 export interface LayoutWarning {
@@ -178,6 +188,17 @@ export interface LayoutOptions {
    * 客户语言偏好。人体工程 message / 美观 notes 跟它走；默认英文。
    */
   language?: UiLanguage;
+  /** 排布提示：调料拉篮 / 垃圾桶 / 岛台加长等 */
+  layoutHints?: SharedPreferences["layoutHints"];
+  /**
+   * FR-22 平台布局启发式（来自已发布 knowledge overlay）。
+   * `preferNoCooktopBase`：推定/未声明 cooktop 时不排灶下柜。
+   */
+  layoutHeuristic?: {
+    preferNoCooktopBase?: boolean;
+  };
+  /** FR-22：覆盖默认家电宽度（英寸）。 */
+  applianceDefaultWidths?: Partial<Record<ApplianceKind, number>>;
 }
 
 /**
@@ -346,11 +367,20 @@ function isDedicatedFitting(m: ModuleSpec): boolean {
   return capabilitiesFor(m).capabilities.servesAppliance !== undefined;
 }
 
+/**
+ * 排布只选 combo / standalone（及未声明但启发式为 combo 的逻辑柜型）。
+ * 真实 BOX/DOOR SKU 是目录拆卖行，不能被装箱器当成「又一个地柜宽度」。
+ */
+function isLayoutSku(m: ModuleSpec): boolean {
+  const u = resolveModuleSellUnit(m).sellUnit;
+  return u === "combo" || u === "standalone";
+}
+
 /** 从规格库里挑出某类柜体的宽度候选。 */
 function candidatesFor(modules: readonly ModuleSpec[], types: ModuleType[]): PackCandidate[] {
   const out: PackCandidate[] = [];
   for (const m of modules) {
-    if (!types.includes(m.type) || isDedicatedFitting(m)) continue;
+    if (!types.includes(m.type) || isDedicatedFitting(m) || !isLayoutSku(m)) continue;
     const functional = isFunctionalNarrow(m);
     for (const w of m.widthOptions) {
       out.push({
@@ -387,6 +417,7 @@ function pickModule(
   const wantHeight = typeof preferDrawers === "object" ? preferDrawers.height : undefined;
   const matches = modules.filter(
     (m) => types.includes(m.type) && m.widthOptions.includes(width) && !isDedicatedFitting(m)
+      && isLayoutSku(m)
       && (wantHeight === undefined || m.heightOptions.includes(wantHeight)));
   if (matches.length === 0) return undefined;
   if (typeof preferDrawers === "object") return matches[0];
@@ -452,9 +483,12 @@ export function generateLayout(
   const placements: Placement[] = [];
   const warnings: LayoutWarning[] = [];
   const lang = opts.language ?? DEFAULT_LANGUAGE;
+  const hints = opts.layoutHints;
   // 家电落位**先于分层**统一决定——烟机在吊柜层，位置却由地柜层的灶台定
-  const appliances = opts.appliances ?? DEFAULT_APPLIANCES;
-  const appliancePlan = opts.appliancePlan ?? planAppliances(geometry, appliances, lang);
+  const appliances = resolveLayoutAppliances(opts);
+  const appliancePlan = opts.appliancePlan ?? planAppliances(geometry, appliances, lang, {
+    modules,
+  });
   for (const w of appliancePlan.warnings) {
     warnings.push({ code: "APPLIANCE_NO_ROOM", message: w.message });
   }
@@ -462,7 +496,7 @@ export function generateLayout(
 
   const baseCandidates = candidatesFor(modules, ["base"]);
   // 水槽柜按能力挑：有的商家把水槽柜归在 base 类里，只靠 type 会漏
-  const sinkModules = modules.filter((m) => hasRole(m, "sinkBase"));
+  const sinkModules = modules.filter((m) => hasRole(m, "sinkBase") && isLayoutSku(m));
   const wallCandidates = candidatesFor(modules, ["wall"]);
   const wallHeights = [...new Set(modules.filter((m) => m.type === "wall").flatMap((m) => m.heightOptions))];
   const wallHeight = pickWallCabinetHeight(opts.ceilingHeight, wallHeights);
@@ -545,7 +579,7 @@ export function generateLayout(
     // `corner` 不在 `["base"]` 里——于是这些型号进了规格库却**一次也没被排进去过**，
     // 墙角要么空着要么被两面墙的柜子重复占用。这里把它排上。
     for (const end of cornerEnds.get(run.id) ?? []) {
-      const pick = reserveCornerCabinet(run, segments, cornerCandidates, end);
+      const pick = reserveCornerCabinet(run, segments, cornerCandidates, end, "base");
       if (pick) placeReservedCabinet(pick, run, "base", placements, [undefined]);
     }
 
@@ -734,7 +768,7 @@ export function generateLayout(
       // 但它排成几段（叠装）要等整面墙的高度解出来，所以这里只占位、不落位。
       const cornerPicks = (cornerEnds.get(run.id) ?? []).flatMap((end) => {
         const pick = reserveCornerCabinet(
-          run, wallSegments, cornerModulesFor(modules, "wall"), end);
+          run, wallSegments, cornerModulesFor(modules, "wall"), end, "wall");
         return pick ? [pick] : [];
       });
 
@@ -769,9 +803,24 @@ export function generateLayout(
         warnings.push({ code: "NO_WALL_CABINETS", wallRunId: run.id, message: runStack.note });
       }
 
-      // 转角柜落位：与通用列**用同一套叠装高度**
+      // 转角柜落位：按叠装高度换同款分型号（LC/CW2430 等），再落一段
+      const wallCornerPool = cornerModulesFor(modules, "wall");
       for (const pick of cornerPicks) {
-        placeReservedCabinet(pick, run, "wall", placements, runStack?.heights ?? [wallHeight]);
+        const wantHeights = (runStack?.heights ?? [wallHeight]).filter(
+          (h): h is number => typeof h === "number",
+        );
+        const module = rematchCornerModuleHeight(
+          pick.module, pick.width, wantHeights, wallCornerPool, "wall",
+        );
+        const h = module.heightOptions.find((x) => wantHeights.includes(x))
+          ?? module.heightOptions[0];
+        placeReservedCabinet(
+          { ...pick, module },
+          run,
+          "wall",
+          placements,
+          [h],
+        );
       }
 
       for (const seg of wallSegments) {
@@ -833,13 +882,20 @@ export function generateLayout(
     aesthetics.push({ wallRunId: run.id, score: scoreAesthetics({ run, placements, language: lang }) });
   }
 
+  // 修订提示：调料拉篮 / 垃圾桶 / 按柜号改双抽 —— 先编号再改，改完再重编号
+  assignCabinetNumbers(placements);
+  applyFunctionalPulloutHints(placements, modules, hints);
+  assignCabinetNumbers(placements);
+
   return {
     placements,
     warnings,
     moduleCounts: countModules(placements),
     ergonomics,
     aesthetics,
-    acceptable: !hasBlockingViolation(ergonomics),
+    // 家电放不下 = 硬闸门：不得假装可出图/报价
+    acceptable: !hasBlockingViolation(ergonomics)
+      && !warnings.some((w) => w.code === "APPLIANCE_NO_ROOM"),
   };
 }
 
@@ -882,69 +938,54 @@ function snapToFillable(
 }
 
 /**
- * 某一层的转角柜候选。
- *
- * 按**能力**（`cornerAccess`）而不是型号码前缀挑——第二家公司的转角柜叫
- * `NW-LS33`，按 `BBC`/`LSB` 前缀一个也命不中。层由进深区分：转角吊柜 12"，
- * 转角地柜 24"。
- */
-function cornerModulesFor(
-  modules: readonly ModuleSpec[], layer: "base" | "wall",
-): ModuleSpec[] {
-  const maxDepth = layer === "wall" ? 14 : 30;
-  const minDepth = layer === "wall" ? 0 : 15;
-  return modules.filter((m) => {
-    if (!hasRole(m, "cornerAccess")) return false;
-    const d = m.depthOptions[0] ?? 24;
-    return d > minDepth && d <= maxDepth;
-  });
-}
-
-/**
  * 在拥有墙角的那一段的末尾放一个转角柜，并把对应的子段缩短。
  *
- * 挑最宽的那个装得下的：转角柜越宽，够得着的深处越多。挑不到（这家公司没有
- * 转角柜、或者末尾那段太短）就什么都不做——末尾会由通用装箱填上普通柜体，
- * 而墙角的死角由 `UNREACHABLE_BLIND_CORNER` 提示客户。**不静默塞一个装不下的**。
+ * 挑不到（这家公司没有转角柜、或者末尾那段太短）就什么都不做——末尾会由
+ * 通用装箱填上普通柜体，而墙角的死角由 `UNREACHABLE_BLIND_CORNER` 提示客户。
+ * **不静默塞一个装不下的**。
  */
 interface CornerPick {
   module: ModuleSpec;
+  /** 箱体宽（BOM / 图上标注）。 */
   width: number;
-  /** 沿墙方向的落位起点。 */
+  /** 沿墙占用（盲角=虚拟尺寸）。 */
+  occupy: number;
+  /** 箱体沿墙落位起点（盲角已含墙角侧 gap）。 */
   x: number;
 }
 
 /**
- * 给转角柜**占位**：从可用段里划掉它那一块，返回选中的型号。
+ * 给转角柜**占位**：从可用段里划掉虚位，返回选中的型号与箱体落点。
  *
  * 占位与落位分开，是因为它排成几段（叠装）要等整面墙的高度解出来，
  * 而"这一块归转角柜"必须在通用装箱之前就定下来——反过来的话，
  * 通用装箱会把整段填满，转角柜再放上去就压在别人身上。
  *
- * 挑**装得下的里面最窄的那个**：转角柜的深处本来就够不着，宽一寸就多浪费
- * 一寸储物。挑最宽的话，一面 108" 的墙上光转角柜就吃掉 36"。
+ * 盲角（BBC42 / BBC45）：码宽即沿墙占用，左右通装；箱体贴墙角落位。
+ * 选型与 `corner-reserve.ts` / 家电角区预留同源，避免「家电让开了、装箱却挑了别的宽」。
  */
 function reserveCornerCabinet(
   run: WallRun,
   segments: { start: number; length: number }[],
   candidates: readonly ModuleSpec[],
   end: "start" | "end",
+  layer: "base" | "wall",
 ): CornerPick | undefined {
   const seg = end === "end"
     ? segments.find((s) => Math.abs(s.start + s.length - run.length) < 0.26)
     : segments.find((s) => Math.abs(s.start) < 0.26);
   if (!seg) return undefined;
 
-  const pick = candidates
-    .flatMap((m) => m.widthOptions.map((w) => ({ m, w })))
-    .filter(({ w }) => w <= seg.length)
-    .sort((a, b) => a.w - b.w)[0];
-  if (!pick) return undefined;
+  const foot = preferredCornerFootprint(candidates, seg.length, layer);
+  if (!foot) return undefined;
 
-  const x = end === "end" ? quantize(run.length - pick.w) : quantize(seg.start);
-  seg.length = quantize(seg.length - pick.w);
-  if (end === "start") seg.start = quantize(seg.start + pick.w);
-  return { module: pick.m, width: pick.w, x };
+  const x = end === "end"
+    ? quantize(run.length - foot.occupy + foot.gap)
+    : quantize(seg.start + foot.gap);
+
+  seg.length = quantize(seg.length - foot.occupy);
+  if (end === "start") seg.start = quantize(seg.start + foot.occupy);
+  return { module: foot.module, width: foot.boxWidth, occupy: foot.occupy, x };
 }
 
 /** 把占好位的柜子按给定的高度序列落位（单柜就是一段）。 */
@@ -1296,7 +1337,9 @@ export function regenerateRun(
   // 家电落位按**完整户型**算一次再传进去——只把一段墙交给 generateLayout
   // 会让它以为整个厨房只有这一面墙，冰箱就跑过来了
   const appliancePlan = opts.appliancePlan
-    ?? planAppliances(geometry, opts.appliances ?? DEFAULT_APPLIANCES, opts.language ?? DEFAULT_LANGUAGE);
+    ?? planAppliances(geometry, resolveLayoutAppliances(opts), opts.language ?? DEFAULT_LANGUAGE, {
+      modules,
+    });
   // 平面同理，而且更要命：单独一段墙看不见自己的墙角，重排出来的柜子会一直
   // 排到墙角，压在隔壁那段墙的柜子上——**改一面墙，撞坏另一面墙**
   const plan = opts.plan ?? buildKitchenPlan(geometry, opts.language ?? DEFAULT_LANGUAGE);
@@ -1324,6 +1367,8 @@ export function regenerateRun(
     aesthetics.push({ wallRunId: r.id, score: scoreAesthetics({ run: r, placements, language: lang }) });
   }
 
+  assignCabinetNumbers(placements);
+
   return {
     placements,
     warnings: [
@@ -1333,7 +1378,9 @@ export function regenerateRun(
     moduleCounts: countModules(placements),
     ergonomics,
     aesthetics,
-    acceptable: !hasBlockingViolation(ergonomics),
+    acceptable: !hasBlockingViolation(ergonomics)
+      && ![...current.warnings.filter((w) => w.wallRunId !== wallRunId), ...regenerated.warnings]
+        .some((w) => w.code === "APPLIANCE_NO_ROOM"),
   };
 }
 
@@ -1352,4 +1399,155 @@ export function toSelections(
     hardwareOptionIds: opts.hardwareOptionIds ?? [],
     accessoryOptionIds: opts.accessoryOptionIds ?? [],
   }));
+}
+
+/**
+ * 给柜体编稳定序号（按墙段顺序、再按沿墙 x、再按层 base→wall→tall）。
+ * 客户可用「#12」指代；filler / appliance 不编号。
+ */
+export function assignCabinetNumbers(placements: Placement[]): void {
+  const order = { base: 0, wall: 1, tall: 2 } as const;
+  const cabinets = placements
+    .filter((p) => p.kind === "cabinet")
+    .sort((a, b) =>
+      a.wallRunId.localeCompare(b.wallRunId)
+      || a.x - b.x
+      || order[a.layer] - order[b.layer]
+      || (a.stackBase ?? 0) - (b.stackBase ?? 0));
+  cabinets.forEach((p, i) => { p.cabinetNo = i + 1; });
+}
+
+/** 同墙距某参照（家电/水槽）最近的可换地柜。 */
+function findBaseNearRef(
+  placements: readonly Placement[],
+  near: "range" | "cooktop" | "sink",
+): Placement | undefined {
+  const refs = placements.filter((p) =>
+    near === "sink"
+      ? p.label === "sink"
+      : p.applianceKind === near
+        || (near === "range" && p.applianceKind === "cooktop"));
+  if (!refs.length) return undefined;
+  let best: { p: Placement; dist: number } | undefined;
+  for (const p of placements) {
+    if (p.kind !== "cabinet" || p.layer !== "base") continue;
+    if (p.applianceKind || p.label === "sink") continue;
+    for (const r of refs) {
+      if (r.wallRunId !== p.wallRunId) continue;
+      const dist = Math.abs((r.x + r.width / 2) - (p.x + p.width / 2));
+      if (!best || dist < best.dist) best = { p, dist };
+    }
+  }
+  return best?.p;
+}
+
+/** 按修订提示把普通柜换成调料拉篮 / 垃圾桶柜（按 #N 或 near，不写死 B12）。 */
+export function applyFunctionalPulloutHints(
+  placements: Placement[],
+  modules: readonly ModuleSpec[],
+  hints: SharedPreferences["layoutHints"] | undefined,
+): void {
+  if (!hints) return;
+  const swapAt = (
+    hit: Placement | undefined,
+    wantCode: string,
+    preferredWidth: number,
+  ) => {
+    if (!hit) return;
+    const target = modules.find((m) => m.code === wantCode && isLayoutSku(m));
+    if (!target) return;
+    const w = target.widthOptions.includes(preferredWidth)
+      ? preferredWidth
+      : (target.widthOptions[0] ?? preferredWidth);
+    if (hit.moduleCode === wantCode) return;
+    // 目标柜宽不够时，退到同墙任意够宽的 base（仍不依赖具体旧型号码）
+    let use = hit;
+    if (use.width < w) {
+      const wider = placements.find((p) =>
+        p.kind === "cabinet" && p.layer === "base"
+        && !p.applianceKind && p.label !== "sink"
+        && p.moduleCode !== wantCode
+        && p.width >= w);
+      if (!wider) return;
+      use = wider;
+    }
+    const leftover = quantize(use.width - w);
+    use.width = w;
+    use.moduleId = target.id;
+    use.moduleCode = target.code;
+    use.faceTemplateId = target.faceTemplateId;
+    if (leftover > 0.26) {
+      placements.push({
+        kind: "filler", layer: "base", wallRunId: use.wallRunId,
+        x: quantize(use.x + w), width: leftover,
+        height: use.height, depth: use.depth, label: "Filler",
+      });
+    }
+  };
+  const pickHit = (
+    cabinetNo: number | undefined,
+    near: "range" | "cooktop" | "sink" | undefined,
+    preferredWidth: number,
+  ): Placement | undefined => {
+    if (cabinetNo !== undefined) {
+      const byNo = placements.find((p) =>
+        p.cabinetNo === cabinetNo && p.kind === "cabinet" && p.layer === "base");
+      if (byNo) return byNo;
+    }
+    if (near) {
+      const byNear = findBaseNearRef(placements, near);
+      if (byNear) return byNear;
+    }
+    // 最后按宽度选任意可换 base，绝不按写死的旧型号码列表
+    return placements.find((p) =>
+      p.kind === "cabinet" && p.layer === "base"
+      && !p.applianceKind && p.label !== "sink"
+      && (p.width === preferredWidth || p.width >= preferredWidth));
+  };
+  if (hints.includeSpicePullout) {
+    swapAt(pickHit(hints.spiceCabinetNo, hints.spiceNear ?? "range", 9), "B09SP", 9);
+  }
+  if (hints.includeTrashPullout) {
+    swapAt(pickHit(hints.trashCabinetNo, hints.trashNear ?? "sink", 18), "BTC18", 18);
+  }
+
+  // 「改成双抽」：按柜号换成同宽 2DB/3DB
+  for (const no of hints.doubleDrawerNos ?? []) {
+    const p = placements.find((x) => x.cabinetNo === no && x.kind === "cabinet");
+    if (!p || p.width === undefined) continue;
+    const drawer = modules.find((m) =>
+      isLayoutSku(m) && m.type === "base"
+      && m.widthOptions.includes(p.width)
+      && hasRole(m, "drawerStorage") && !hasRole(m, "doorStorage"));
+    if (!drawer) continue;
+    p.moduleId = drawer.id;
+    p.moduleCode = drawer.code;
+    p.faceTemplateId = drawer.faceTemplateId;
+  }
+
+  // 「改成一样宽」：把列出的柜号统一到其中最常见/最大宽度
+  const matchNos = hints.matchCabinetNos ?? [];
+  if (matchNos.length >= 2) {
+    const group = matchNos
+      .map((n) => placements.find((p) => p.cabinetNo === n && p.kind === "cabinet"))
+      .filter((p): p is Placement => !!p);
+    if (group.length >= 2) {
+      const width = Math.max(...group.map((p) => p.width));
+      for (const p of group) {
+        if (p.width === width) continue;
+        const mod = pickModule(modules, [p.layer === "wall" ? "wall" : "base"], width, false);
+        if (!mod) continue;
+        const delta = width - p.width;
+        p.width = width;
+        p.moduleId = mod.id;
+        p.moduleCode = mod.code;
+        p.faceTemplateId = mod.faceTemplateId;
+        // 简单处理：同墙后续柜子右移，超出墙长的留给检查器报
+        for (const other of placements) {
+          if (other.wallRunId !== p.wallRunId || other.layer !== p.layer) continue;
+          if (other.x > p.x) other.x = quantize(other.x + delta);
+        }
+      }
+    }
+  }
 }

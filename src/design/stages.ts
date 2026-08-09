@@ -43,6 +43,17 @@ export type DesignStage =
   | "quoted";
 
 /**
+ * 未选厂商时的设计会话哨兵（FR-18）。
+ * 用通用规格伪模块出示意俯视图；**不能**进真实报价 / 发送闸门。
+ * `@` 厂商后 `sessionFor` 会因 companyId 不同而重开一段绑定该公司规格库的进程。
+ */
+export const GENERIC_DESIGN_COMPANY_ID = "__generic__";
+
+export function isGenericDesignCompany(companyId: string | undefined | null): boolean {
+  return !companyId || companyId === GENERIC_DESIGN_COMPANY_ID;
+}
+
+/**
  * 客户在全局俯视图上提的一次修改。
  *
  * `note` 是客户自己的话，`applied` 是**系统真正据此改了什么**——两者分开记，

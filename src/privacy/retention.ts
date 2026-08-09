@@ -126,6 +126,52 @@ export function planRetentionSweep(input: RetentionSweepInput): RetentionSweepPl
   return plan;
 }
 
+/** 一次清除执行结果（计划已应用后的计数）。 */
+export interface RetentionSweepResult {
+  plan: RetentionSweepPlan;
+  conversationsDeleted: number;
+  estimatesDeleted: number;
+  quotesDeIdentified: number;
+  billingDeIdentified: number;
+  auditDeleted: number;
+  executedAt: string;
+  dryRun: boolean;
+}
+
+/**
+ * 把计划应用到仓储回调。`dryRun: true` 时只回传计数、不调用写操作。
+ * 定时任务与 Admin `POST /api/admin/retention/run` 共用。
+ */
+export async function executeRetentionSweep(input: {
+  plan: RetentionSweepPlan;
+  at: string;
+  dryRun?: boolean;
+  deleteConversation: (id: string) => Promise<void>;
+  deleteEstimate: (id: string) => Promise<void>;
+  deIdentifyQuote: (id: string) => Promise<void>;
+  deIdentifyBilling: (id: string) => Promise<void>;
+  deleteAudit: (id: string) => Promise<void>;
+}): Promise<RetentionSweepResult> {
+  const dryRun = Boolean(input.dryRun);
+  if (!dryRun) {
+    for (const id of input.plan.conversationsToDelete) await input.deleteConversation(id);
+    for (const id of input.plan.estimatesToDelete) await input.deleteEstimate(id);
+    for (const id of input.plan.quotesToDeIdentify) await input.deIdentifyQuote(id);
+    for (const id of input.plan.billingToDeIdentify) await input.deIdentifyBilling(id);
+    for (const id of input.plan.auditToDelete) await input.deleteAudit(id);
+  }
+  return {
+    plan: input.plan,
+    conversationsDeleted: input.plan.conversationsToDelete.length,
+    estimatesDeleted: input.plan.estimatesToDelete.length,
+    quotesDeIdentified: input.plan.quotesToDeIdentify.length,
+    billingDeIdentified: input.plan.billingToDeIdentify.length,
+    auditDeleted: input.plan.auditToDelete.length,
+    executedAt: input.at,
+    dryRun,
+  };
+}
+
 // ── 去标识化 ──────────────────────────────────────────────────────────────
 
 export const DEIDENTIFIED = "__deidentified__";
@@ -197,19 +243,26 @@ export function exportAccountData(
     quotes: readonly Quote[];
   },
   at: string,
+  language: "en" | "zh" = "en",
 ): AccountExport {
   const conversations = data.conversations.filter((c) => c.customerAccountId === account.id);
   const convIds = new Set(conversations.map((c) => c.id));
+  const notes = language === "zh"
+    ? [
+        `本导出包含截至 ${at} 我们持有的与该账号相关的个人信息。`,
+        `已发送的报价单因财务法定留存需保留 ${RETENTION.financialYears} 年，删除请求将执行去标识化保留。`,
+      ]
+    : [
+        `This export includes personal information we hold for this account as of ${at}.`,
+        `Sent quotes are kept ${RETENTION.financialYears} years for financial retention; a deletion request will de-identify them instead of hard-deleting.`,
+      ];
   return {
     account,
     conversations,
     estimates: data.estimates.filter((e) => convIds.has(e.conversationId)),
     quotes: data.quotes.filter((q) => q.customerAccountId === account.id),
     generatedAt: at,
-    notes: [
-      `本导出包含截至 ${at} 我们持有的与该账号相关的个人信息。`,
-      `已发送的报价单因财务法定留存需保留 ${RETENTION.financialYears} 年，删除请求将执行去标识化保留。`,
-    ],
+    notes,
   };
 }
 
@@ -235,18 +288,28 @@ export function executeDeletionRequest(
     quotes: readonly Quote[];
     billingEvents: readonly LeadBillingEvent[];
   },
+  language: "en" | "zh" = "en",
 ): DeletionOutcome {
   const conversations = data.conversations.filter((c) => c.customerAccountId === accountId);
   const convIds = new Set(conversations.map((c) => c.id));
   const quotes = data.quotes.filter((q) => q.customerAccountId === accountId);
   const billing = data.billingEvents.filter((e) => e.customerAccountId === accountId);
+  const estimateCount = data.estimates.filter((e) => convIds.has(e.conversationId)).length;
+  const deletedItems = conversations.length + estimateCount;
 
   const explanation = quotes.length > 0 || billing.length > 0
-    ? `已删除你的对话记录与预估共 ${conversations.length + data.estimates.filter((e) => convIds.has(e.conversationId)).length} 项。` +
-      `其中 ${quotes.length} 份已发送的报价单与 ${billing.length} 条计费记录因加拿大财务与税务法规要求保留 ` +
-      `${RETENTION.financialYears} 年，我们已将其去标识化：移除了你的姓名、邮箱与会话关联，` +
-      "仅保留金额与型号明细，无法再关联到你本人。"
-    : `已删除你的对话记录与预估共 ${conversations.length} 项。我们不再持有你的个人信息。`;
+    ? (language === "zh"
+      ? `已删除你的对话记录与预估共 ${deletedItems} 项。` +
+        `其中 ${quotes.length} 份已发送的报价单与 ${billing.length} 条计费记录因加拿大财务与税务法规要求保留 ` +
+        `${RETENTION.financialYears} 年，我们已将其去标识化：移除了你的姓名、邮箱与会话关联，` +
+        "仅保留金额与型号明细，无法再关联到你本人。"
+      : `Deleted ${deletedItems} conversation(s) and estimate(s). ` +
+        `${quotes.length} sent quote(s) and ${billing.length} billing event(s) are retained for ` +
+        `${RETENTION.financialYears} years under Canadian financial/tax rules; we de-identified them ` +
+        "(removed your name, email, and conversation links), keeping only amounts and SKU lines that cannot identify you.")
+    : (language === "zh"
+      ? `已删除你的对话记录与预估共 ${conversations.length} 项。我们不再持有你的个人信息。`
+      : `Deleted ${conversations.length} conversation(s) and estimate(s). We no longer hold your personal information.`);
 
   return {
     conversationsDeleted: conversations.map((c) => c.id),

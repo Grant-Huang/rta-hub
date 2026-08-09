@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RTA-Hub · Apps SDK UI bridge (dev)</title>
+  </head>
+  <body class="bg-surface text-primary p-8">
+    <h1 class="heading-lg flex items-center gap-2">
+      <span data-sdk-icon="Cabinet"></span>
+      Apps SDK UI icon bridge
+    </h1>
+    <p class="text-secondary mt-2 text-sm">
+      Dev preview for <code>@openai/apps-sdk-ui</code>. Production loads
+      <code>/vendor/apps-sdk-ui/bridge.js</code> from legacy pages.
+    </p>
+    <div class="mt-6 flex flex-wrap gap-4 text-2xl">
+      <span data-sdk-icon="ChatCompose" data-sdk-title="New chat"></span>
+      <span data-sdk-icon="Archive" data-sdk-title="Archive"></span>
+      <span data-sdk-icon="RestoreUntrash" data-sdk-title="Restore"></span>
+      <span data-sdk-icon="PlusComposer" data-sdk-title="Attach"></span>
+      <span data-sdk-icon="PaperclipAttach"></span>
+      <span data-sdk-icon="ArrowUp" data-sdk-title="Send"></span>
+      <span data-sdk-icon="ChevronLeft" data-sdk-title="Back"></span>
+      <span data-sdk-icon="AvatarProfile"></span>
+      <span data-sdk-icon="AtSign"></span>
+      <span data-sdk-icon="X"></span>
+    </div>
+    <script type="module" src="/src/bridge-entry.tsx"></script>
+  </body>
+</html>

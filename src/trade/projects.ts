@@ -7,6 +7,7 @@
  */
 import { format, type Money } from "../domain/money.js";
 import type { Conversation, CustomerAccount, Quote } from "../domain/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export type ProjectStatus =
   | "collecting"   // 还在聊需求
@@ -41,12 +42,14 @@ export interface ProjectListInput {
   conversations: readonly Conversation[];
   quotes: readonly Quote[];
   at: string;
+  language?: UiLanguage;
 }
 
 const DAY_MS = 86_400_000;
 
 export function listProjects(input: ProjectListInput): ProjectSummary[] {
   const mine = input.conversations.filter((c) => c.customerAccountId === input.account.id);
+  const lang = input.language ?? DEFAULT_LANGUAGE;
 
   return mine
     .map((conv) => {
@@ -62,7 +65,7 @@ export function listProjects(input: ProjectListInput): ProjectSummary[] {
 
       return {
         conversationId: conv.id,
-        title: projectTitle(conv),
+        title: projectTitle(conv, lang),
         status: deriveStatus({ quotes, sentCount, daysIdle, conv }),
         createdAt: conv.createdAt,
         lastActivityAt,
@@ -80,12 +83,13 @@ export function listProjects(input: ProjectListInput): ProjectSummary[] {
 }
 
 /** 项目名取需求摘要的首行——建商记不住 `cv_a1b2c3d4`。 */
-function projectTitle(conv: Conversation): string {
+function projectTitle(conv: Conversation, lang: UiLanguage): string {
   const firstLine = conv.designRequirements.split("\n")[0]?.trim();
   if (firstLine) return firstLine.length > 40 ? `${firstLine.slice(0, 39)}…` : firstLine;
   const firstUser = conv.messages.find((m) => m.role === "user")?.content.trim();
   if (firstUser) return firstUser.length > 40 ? `${firstUser.slice(0, 39)}…` : firstUser;
-  return `项目 ${conv.createdAt.slice(0, 10)}`;
+  const day = conv.createdAt.slice(0, 10);
+  return msg(lang, `Project ${day}`, `项目 ${day}`);
 }
 
 function deriveStatus(input: {

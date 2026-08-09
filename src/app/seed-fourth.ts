@@ -1,22 +1,43 @@
 /**
  * 第四家试点公司 —— Oppein Canada（欧派海外渠道）
- * 
- * 产品数据来源：
- * - OCCW SPEC BOOK 2026-02.pdf
- * - OCCW-MSRP-2026.xlsx
- * - 欧派编码字典.xlsx
- * 
- * 编码规则：
- * - 柜体：B12-PLY-BOX (夹板), B12-PB-BOX (刨花板)
- * - 门板：B12-MNW-DOOR (胭脂木), B12-PGW-DOOR (高光白), B12-WSS-DOOR (白Shaker), B12-SSW-DOOR (窄边Shaker)
- * - 组合件：B12-PLY-MNW (夹板柜体+胭脂木门板)
+ *
+ * 产品数据来源：OCCW SPEC BOOK / MSRP / 编码字典。
+ *
+ * FR-16：售卖单元用**真实模块行**表达，禁止 PriceGroup 冒充 -BOX/-DOOR：
+ * - 逻辑柜型 `B12` → sellUnit=combo（型号 × 门板价格组）
+ * - 拆卖 SKU `B12-PLY-BOX` / `B12-MNW-DOOR` / `B12-PLY-MNW` → 独立模块行
+ * - 价格组只表示门板花色档（MNW/PGW/…），箱体板材走 BoxMaterialOption
  */
-import type { CabinetCompany, ProductSpecVersion, ModuleSpec, DoorStyle, PriceGroup, PriceMatrixEntry } from "../domain/types.js";
+import type {
+  BoxMaterialOption, CabinetCompany, CompanyCodingRules, DoorStyle, ModuleSpec,
+  PriceGroup, PriceMatrixEntry, ProductSpecVersion,
+} from "../domain/types.js";
 import { fromDollars } from "../domain/money.js";
 
 export const OPPEIN_COMPANY_ID = "co_oppein";
 export const OPPEIN_SPEC_VERSION_ID = "spec_oppein_v1";
 const NOW = "2026-01-01T00:00:00.000Z";
+
+export const oppeinCodingRules: CompanyCodingRules = {
+  usesBoxDoorSuffixes: true,
+  prefixGuide: [
+    { pattern: "^B\\d", meaning: "base, typically 1 drawer over door", mapsToRoles: ["doorStorage", "drawerStorage"] },
+    { pattern: "^3DB", meaning: "3-drawer base", mapsToRoles: ["drawerStorage"] },
+    { pattern: "^2DB", meaning: "2-drawer base", mapsToRoles: ["drawerStorage"] },
+    { pattern: "^SB", meaning: "sink base", mapsToRoles: ["sinkBase"] },
+    { pattern: "^W\\d", meaning: "wall cabinet", mapsToRoles: ["doorStorage"] },
+    { pattern: "^PC", meaning: "pantry / tall", mapsToRoles: ["doorStorage"] },
+    { pattern: "^BBC|^BLS", meaning: "blind / lazy-susan corner", mapsToRoles: ["cornerAccess"] },
+    { pattern: "^WF|^TK", meaning: "filler / toe kick", mapsToRoles: ["trim"] },
+  ],
+  materialTokens: { PLY: "Plywood", PB: "Particle Board" },
+  finishTokens: {
+    MNW: "Melamine Natural Wood",
+    PGW: "PET Glossy White",
+    WSS: "White Shaker",
+    SSW: "Slim Shaker White",
+  },
+};
 
 export const oppeinCompany: CabinetCompany = {
   id: OPPEIN_COMPANY_ID,
@@ -40,131 +61,162 @@ export const oppeinSpecVersion: ProductSpecVersion = {
   currency: "CAD",
   construction: "frameless",
   overlay: "full",
+  codingRules: oppeinCodingRules,
   effectiveFrom: NOW,
   publishedAt: NOW,
   publishedBy: "ops@oppein.ca",
-  changeNote: "Oppein Canada 初始版本 - 欧派海外渠道 RTA 橱柜",
+  changeNote: "Oppein Canada 初始版本 — FR-16 真实 BOX/DOOR/combo 模块行",
 };
 
 const base = { specVersionId: OPPEIN_SPEC_VERSION_ID, companyId: OPPEIN_COMPANY_ID };
 
-/** 柜体材质分组 */
+/** 门板花色价格组——不再用 PLY-BOX / MNW-DOOR 冒充售卖单元。 */
 export const oppeinPriceGroups: PriceGroup[] = [
-  // 柜体材质
-  { ...base, id: "pg_ply_box", code: "PLY-BOX", displayName: "夹板柜体 (Plywood)", rank: 1 },
-  { ...base, id: "pg_pb_box", code: "PB-BOX", displayName: "刨花板柜体 (Particle Board)", rank: 2 },
-  // 门板花色
-  { ...base, id: "pg_mnw_door", code: "MNW-DOOR", displayName: "胭脂木门板 (Melamine Natural Wood)", rank: 3 },
-  { ...base, id: "pg_pgw_door", code: "PGW-DOOR", displayName: "高光白门板 (PET Glossy White)", rank: 4 },
-  { ...base, id: "pg_wss_door", code: "WSS-DOOR", displayName: "白Shaker门板 (White Shaker)", rank: 5 },
-  { ...base, id: "pg_ssw_door", code: "SSW-DOOR", displayName: "窄边Shaker门板 (Slim Shaker White)", rank: 6 },
-  // 组合件（柜体+门板）
-  { ...base, id: "pg_ply_mnw", code: "PLY-MNW", displayName: "夹板+胭脂木组合件", rank: 7 },
-  { ...base, id: "pg_ply_pgw", code: "PLY-PGW", displayName: "夹板+高光白组合件", rank: 8 },
-  { ...base, id: "pg_ply_wss", code: "PLY-WSS", displayName: "夹板+白Shaker组合件", rank: 9 },
-  { ...base, id: "pg_ply_ssw", code: "PLY-SSW", displayName: "夹板+窄边Shaker组合件", rank: 10 },
+  { ...base, id: "pg_mnw", code: "MNW", displayName: "Melamine Natural Wood", rank: 1 },
+  { ...base, id: "pg_pgw", code: "PGW", displayName: "PET Glossy White", rank: 2 },
+  { ...base, id: "pg_wss", code: "WSS", displayName: "White Shaker", rank: 3 },
+  { ...base, id: "pg_ssw", code: "SSW", displayName: "Slim Shaker White", rank: 4 },
 ];
 
-/** 门板花色定义 */
 export const oppeinDoorStyles: DoorStyle[] = [
-  { ...base, id: "ds_mnw", name: "胭脂木 (Melamine Natural Wood)", priceGroupId: "pg_mnw_door", material: "Melamine", color: "Natural Wood" },
-  { ...base, id: "ds_pgw", name: "高光白 (PET Glossy White)", priceGroupId: "pg_pgw_door", material: "PET", color: "Glossy White" },
-  { ...base, id: "ds_wss", name: "白Shaker (White Shaker)", priceGroupId: "pg_wss_door", material: "MDF", color: "White" },
-  { ...base, id: "ds_ssw", name: "窄边Shaker (Slim Shaker White)", priceGroupId: "pg_ssw_door", material: "MDF", color: "White" },
+  { ...base, id: "ds_mnw", name: "Melamine Natural Wood", priceGroupId: "pg_mnw", material: "Melamine", color: "Natural Wood" },
+  { ...base, id: "ds_pgw", name: "PET Glossy White", priceGroupId: "pg_pgw", material: "PET", color: "Glossy White" },
+  { ...base, id: "ds_wss", name: "White Shaker", priceGroupId: "pg_wss", material: "MDF", color: "White" },
+  { ...base, id: "ds_ssw", name: "Slim Shaker White", priceGroupId: "pg_ssw", material: "MDF", color: "White" },
 ];
 
-/** Oppein 型号定义 */
-export const oppeinModuleSpecs: ModuleSpec[] = [
-  // ========== 地柜 B系列 ==========
-  { ...base, id: "oppein_B12", code: "B12", type: "base", widthOptions: [12], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B15", code: "B15", type: "base", widthOptions: [15], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B18", code: "B18", type: "base", widthOptions: [18], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B21", code: "B21", type: "base", widthOptions: [21], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B24", code: "B24", type: "base", widthOptions: [24], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B30", code: "B30", type: "base", widthOptions: [30], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B36", code: "B36", type: "base", widthOptions: [36], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B42", code: "B42", type: "base", widthOptions: [42], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-
-  // ========== 全开门地柜 FH系列 ==========
-  { ...base, id: "oppein_B12FH", code: "B12FH", type: "base", widthOptions: [12], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B15FH", code: "B15FH", type: "base", widthOptions: [15], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B18FH", code: "B18FH", type: "base", widthOptions: [18], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B24FH", code: "B24FH", type: "base", widthOptions: [24], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B30FH", code: "B30FH", type: "base", widthOptions: [30], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_B36FH", code: "B36FH", type: "base", widthOptions: [36], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-
-  // ========== 抽屉地柜 3DB ==========
-  { ...base, id: "oppein_3DB12", code: "3DB12", type: "base", widthOptions: [12], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_3DB15", code: "3DB15", type: "base", widthOptions: [15], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_3DB18", code: "3DB18", type: "base", widthOptions: [18], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_3DB21", code: "3DB21", type: "base", widthOptions: [21], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_3DB24", code: "3DB24", type: "base", widthOptions: [24], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_3DB30", code: "3DB30", type: "base", widthOptions: [30], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_3DB36", code: "3DB36", type: "base", widthOptions: [36], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-
-  // ========== 2DB 双抽 ==========
-  { ...base, id: "oppein_2DB30", code: "2DB30", type: "base", widthOptions: [30], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_2DB36", code: "2DB36", type: "base", widthOptions: [36], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-
-  // ========== 水槽柜 SB ==========
-  { ...base, id: "oppein_SB30", code: "SB30", type: "sinkBase", widthOptions: [30], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_SB33", code: "SB33", type: "sinkBase", widthOptions: [33], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_SB36", code: "SB36", type: "sinkBase", widthOptions: [36], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_SB42", code: "SB42", type: "sinkBase", widthOptions: [42], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-
-  // ========== 吊柜 W系列 ==========
-  { ...base, id: "oppein_W1230", code: "W1230", type: "wall", widthOptions: [12], heightOptions: [30], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W1530", code: "W1530", type: "wall", widthOptions: [15], heightOptions: [30], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W1830", code: "W1830", type: "wall", widthOptions: [18], heightOptions: [30], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W2430", code: "W2430", type: "wall", widthOptions: [24], heightOptions: [30], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W3030", code: "W3030", type: "wall", widthOptions: [30], heightOptions: [30], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W3630", code: "W3630", type: "wall", widthOptions: [36], heightOptions: [30], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W2436", code: "W2436", type: "wall", widthOptions: [24], heightOptions: [36], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W3036", code: "W3036", type: "wall", widthOptions: [30], heightOptions: [36], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W3636", code: "W3636", type: "wall", widthOptions: [36], heightOptions: [36], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W2442", code: "W2442", type: "wall", widthOptions: [24], heightOptions: [42], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W3042", code: "W3042", type: "wall", widthOptions: [30], heightOptions: [42], depthOptions: [12], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_W3642", code: "W3642", type: "wall", widthOptions: [36], heightOptions: [42], depthOptions: [12], assemblyOptions: ["RTA"] },
-
-  // ========== 高柜 PC系列 ==========
-  { ...base, id: "oppein_PC1884", code: "PC1884", type: "tall", widthOptions: [18], heightOptions: [84], depthOptions: [24], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_PC1890", code: "PC1890", type: "tall", widthOptions: [18], heightOptions: [90], depthOptions: [24], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_PC1896", code: "PC1896", type: "tall", widthOptions: [18], heightOptions: [96], depthOptions: [24], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_PC2484", code: "PC2484", type: "tall", widthOptions: [24], heightOptions: [84], depthOptions: [24], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_PC2490", code: "PC2490", type: "tall", widthOptions: [24], heightOptions: [90], depthOptions: [24], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_PC2496", code: "PC2496", type: "tall", widthOptions: [24], heightOptions: [96], depthOptions: [24], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_PC3084", code: "PC3084", type: "tall", widthOptions: [30], heightOptions: [84], depthOptions: [24], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_PC3090", code: "PC3090", type: "tall", widthOptions: [30], heightOptions: [90], depthOptions: [24], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_PC3096", code: "PC3096", type: "tall", widthOptions: [30], heightOptions: [96], depthOptions: [24], assemblyOptions: ["RTA"] },
-
-  // ========== 特殊功能柜 ==========
-  { ...base, id: "oppein_BBC42", code: "BBC42", type: "corner", widthOptions: [42], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_BLS36", code: "BLS36", type: "corner", widthOptions: [36], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_BTC18", code: "BTC18", type: "base", widthOptions: [18], heightOptions: [30], depthOptions: [23.875], assemblyOptions: ["RTA"] },
-
-  // ========== 配件（Filler 等独立产品，无门板） ==========
-  { ...base, id: "oppein_WF3", code: "WF3", type: "filler", widthOptions: [3], heightOptions: [30, 36, 42], depthOptions: [0.75], assemblyOptions: ["RTA"] },
-  { ...base, id: "oppein_TK", code: "TK", type: "toeKick", widthOptions: [96], heightOptions: [4.5], depthOptions: [0.25], assemblyOptions: ["RTA"] },
+/** 箱体板材——与门板花色正交；PB 相对 PLY 的差价作修饰。 */
+export const oppeinBoxMaterials: BoxMaterialOption[] = [
+  {
+    ...base, id: "bm_oppein_ply", code: "plywood", name: "Plywood box",
+    isDefault: true, priceModifier: { kind: "flat", value: fromDollars(0) },
+  },
+  {
+    ...base, id: "bm_oppein_pb", code: "particleBoard", name: "Particle board box",
+    isDefault: false, priceModifier: { kind: "percent", value: -30 },
+    note: "Particle board carcass discount vs plywood list",
+  },
 ];
 
-/**
- * Oppein 价格矩阵 (MSRP 2026 CAD)
- * 
- * 包含：
- * 1. 柜体价格 (-BOX)：PLY 和 PB 两种材质
- * 2. 门板价格 (-DOOR)：MNW, PGW, WSS, SSW 四种花色
- * 3. 组合件价格：无后缀，PLY+花色
- * 
- * Filler/TK 等配件无门板变体
- */
+type LogicDef = {
+  code: string;
+  type: ModuleSpec["type"];
+  width: number;
+  height: number;
+  depth: number;
+  sellUnit?: ModuleSpec["sellUnit"];
+  finishDependent?: boolean;
+};
 
-// 辅助函数：生成价格矩阵条目
-function priceEntry(moduleCode: string, priceGroupId: string, priceCAD: number): PriceMatrixEntry {
-  const moduleId = `oppein_${moduleCode}`;
-  return { ...base, moduleId, priceGroupId, listPrice: fromDollars(priceCAD) };
+const LOGIC: LogicDef[] = [
+  // 地柜 B
+  ...[12, 15, 18, 21, 24, 30, 36, 42].map((w) => ({ code: `B${w}`, type: "base" as const, width: w, height: 30, depth: 23.875 })),
+  // FH
+  ...[12, 15, 18, 24, 30, 36].map((w) => ({ code: `B${w}FH`, type: "base" as const, width: w, height: 30, depth: 23.875 })),
+  // 3DB / 2DB
+  ...[12, 15, 18, 21, 24, 30, 36].map((w) => ({ code: `3DB${w}`, type: "base" as const, width: w, height: 30, depth: 23.875 })),
+  { code: "2DB30", type: "base", width: 30, height: 30, depth: 23.875 },
+  { code: "2DB36", type: "base", width: 36, height: 30, depth: 23.875 },
+  // SB
+  ...[30, 33, 36, 42].map((w) => ({ code: `SB${w}`, type: "sinkBase" as const, width: w, height: 30, depth: 23.875 })),
+  // W
+  { code: "W1230", type: "wall", width: 12, height: 30, depth: 12 },
+  { code: "W1530", type: "wall", width: 15, height: 30, depth: 12 },
+  { code: "W1830", type: "wall", width: 18, height: 30, depth: 12 },
+  { code: "W2430", type: "wall", width: 24, height: 30, depth: 12 },
+  { code: "W3030", type: "wall", width: 30, height: 30, depth: 12 },
+  { code: "W3630", type: "wall", width: 36, height: 30, depth: 12 },
+  { code: "W2436", type: "wall", width: 24, height: 36, depth: 12 },
+  { code: "W3036", type: "wall", width: 30, height: 36, depth: 12 },
+  { code: "W3636", type: "wall", width: 36, height: 36, depth: 12 },
+  { code: "W2442", type: "wall", width: 24, height: 42, depth: 12 },
+  { code: "W3042", type: "wall", width: 30, height: 42, depth: 12 },
+  { code: "W3642", type: "wall", width: 36, height: 42, depth: 12 },
+  // PC
+  ...([18, 24, 30] as const).flatMap((w) =>
+    ([84, 90, 96] as const).map((h) => ({ code: `PC${w}${h}`, type: "tall" as const, width: w, height: h, depth: 24 }))),
+  // corner / special
+  { code: "BBC42", type: "corner", width: 42, height: 30, depth: 23.875 },
+  { code: "BLS36", type: "corner", width: 36, height: 30, depth: 23.875 },
+  { code: "BTC18", type: "base", width: 18, height: 30, depth: 23.875 },
+  // trim
+  { code: "WF3", type: "filler", width: 3, height: 30, depth: 0.75, sellUnit: "standalone" },
+  { code: "TK", type: "toeKick", width: 96, height: 4.5, depth: 0.25, sellUnit: "standalone", finishDependent: false },
+];
+
+function logicModule(d: LogicDef): ModuleSpec {
+  return {
+    ...base,
+    id: `oppein_${d.code}`,
+    code: d.code,
+    type: d.type,
+    sellUnit: d.sellUnit ?? (d.type === "filler" || d.type === "toeKick" || d.type === "panel" || d.type === "crown" || d.type === "leg"
+      ? "standalone" : "combo"),
+    widthOptions: [d.width],
+    heightOptions: d.code === "WF3" ? [30, 36, 42] : [d.height],
+    depthOptions: [d.depth],
+    assemblyOptions: ["RTA"],
+    ...(d.finishDependent === false ? { finishDependent: false } : {}),
+  };
 }
 
-// 核心型号价格（部分示例）
+/** 代表性拆卖 SKU（真实 BOX / DOOR / combo 行）——布局器会跳过 box/door。 */
+const SPLIT_SAMPLES = ["B12", "B24", "SB36", "W2430"] as const;
+const FINISHES = ["MNW", "PGW", "WSS", "SSW"] as const;
+
+function splitModules(): ModuleSpec[] {
+  const out: ModuleSpec[] = [];
+  for (const code of SPLIT_SAMPLES) {
+    const logic = LOGIC.find((d) => d.code === code)!;
+    for (const mat of ["PLY", "PB"] as const) {
+      out.push({
+        ...base,
+        id: `oppein_${code}-${mat}-BOX`,
+        code: `${code}-${mat}-BOX`,
+        type: logic.type,
+        sellUnit: "box",
+        finishDependent: false,
+        widthOptions: [logic.width],
+        heightOptions: [logic.height],
+        depthOptions: [logic.depth],
+        assemblyOptions: ["RTA"],
+      });
+    }
+    for (const fin of FINISHES) {
+      out.push({
+        ...base,
+        id: `oppein_${code}-${fin}-DOOR`,
+        code: `${code}-${fin}-DOOR`,
+        type: logic.type,
+        sellUnit: "door",
+        widthOptions: [logic.width],
+        heightOptions: [logic.height],
+        depthOptions: [0.75],
+        assemblyOptions: ["RTA"],
+      });
+    }
+    for (const fin of FINISHES) {
+      out.push({
+        ...base,
+        id: `oppein_${code}-PLY-${fin}`,
+        code: `${code}-PLY-${fin}`,
+        type: logic.type,
+        sellUnit: "combo",
+        widthOptions: [logic.width],
+        heightOptions: [logic.height],
+        depthOptions: [logic.depth],
+        assemblyOptions: ["RTA"],
+      });
+    }
+  }
+  return out;
+}
+
+export const oppeinModuleSpecs: ModuleSpec[] = [
+  ...LOGIC.map(logicModule),
+  ...splitModules(),
+];
+
 const boxPrices: Record<string, { ply: number; pb: number }> = {
   "B12": { ply: 235, pb: 161 },
   "B15": { ply: 262, pb: 175 },
@@ -187,7 +239,7 @@ const boxPrices: Record<string, { ply: number; pb: number }> = {
   "3DB24": { ply: 346, pb: 207 },
   "3DB30": { ply: 414, pb: 250 },
   "3DB36": { ply: 484, pb: 295 },
-  "2DB30": { ply: 376, pb: 0 },  // 无PB
+  "2DB30": { ply: 376, pb: 0 },
   "2DB36": { ply: 434, pb: 0 },
   "SB30": { ply: 288, pb: 203 },
   "SB33": { ply: 309, pb: 218 },
@@ -273,45 +325,61 @@ const doorPrices: Record<string, { mnw: number; pgw: number; wss: number; ssw: n
   "BTC18": { mnw: 47, pgw: 104, wss: 121, ssw: 132 },
 };
 
-// 生成完整价格矩阵
+const PG: Record<(typeof FINISHES)[number], string> = {
+  MNW: "pg_mnw", PGW: "pg_pgw", WSS: "pg_wss", SSW: "pg_ssw",
+};
+
+function priceEntry(moduleCode: string, priceGroupId: string, priceCAD: number): PriceMatrixEntry {
+  return {
+    ...base,
+    moduleId: `oppein_${moduleCode}`,
+    priceGroupId,
+    listPrice: fromDollars(priceCAD),
+  };
+}
+
 export const oppeinPriceMatrix: PriceMatrixEntry[] = [];
 
-// 1. 柜体价格 (-BOX)
-for (const [code, prices] of Object.entries(boxPrices)) {
-  // PLY 柜体
-  if (prices.ply > 0) {
-    oppeinPriceMatrix.push(priceEntry(code, "pg_ply_box", prices.ply));
-  }
-  // PB 柜体
-  if (prices.pb > 0) {
-    oppeinPriceMatrix.push(priceEntry(code, "pg_pb_box", prices.pb));
-  }
-}
-
-// 2. 门板价格 (-DOOR)
-for (const [code, prices] of Object.entries(doorPrices)) {
-  oppeinPriceMatrix.push(priceEntry(code, "pg_mnw_door", prices.mnw));
-  oppeinPriceMatrix.push(priceEntry(code, "pg_pgw_door", prices.pgw));
-  oppeinPriceMatrix.push(priceEntry(code, "pg_wss_door", prices.wss));
-  oppeinPriceMatrix.push(priceEntry(code, "pg_ssw_door", prices.ssw));
-}
-
-// 3. 组合件价格 (PLY + 门板花色)
+// 逻辑柜型 combo：PLY 箱体 + 门板（默认 plywood list；PB 靠 boxMaterial 修饰）
 for (const [code, boxP] of Object.entries(boxPrices)) {
-  if (boxP.ply > 0 && doorPrices[code]) {
-    const doorP = doorPrices[code];
-    oppeinPriceMatrix.push(priceEntry(code, "pg_ply_mnw", boxP.ply + doorP.mnw));
-    oppeinPriceMatrix.push(priceEntry(code, "pg_ply_pgw", boxP.ply + doorP.pgw));
-    oppeinPriceMatrix.push(priceEntry(code, "pg_ply_wss", boxP.ply + doorP.wss));
-    oppeinPriceMatrix.push(priceEntry(code, "pg_ply_ssw", boxP.ply + doorP.ssw));
+  const doorP = doorPrices[code];
+  if (!doorP || boxP.ply <= 0) continue;
+  oppeinPriceMatrix.push(priceEntry(code, "pg_mnw", boxP.ply + doorP.mnw));
+  oppeinPriceMatrix.push(priceEntry(code, "pg_pgw", boxP.ply + doorP.pgw));
+  oppeinPriceMatrix.push(priceEntry(code, "pg_wss", boxP.ply + doorP.wss));
+  oppeinPriceMatrix.push(priceEntry(code, "pg_ssw", boxP.ply + doorP.ssw));
+}
+
+// trim：finishDependent 默认 true 的 filler 每组一行；TK 不随花色
+for (const pgId of Object.values(PG)) {
+  oppeinPriceMatrix.push(priceEntry("WF3", pgId, 35));
+}
+oppeinPriceMatrix.push(priceEntry("TK", "pg_mnw", 40));
+
+// 拆卖 SKU 矩阵
+for (const code of SPLIT_SAMPLES) {
+  const boxP = boxPrices[code];
+  const doorP = doorPrices[code];
+  if (!boxP || !doorP) continue;
+  if (boxP.ply > 0) {
+    for (const pgId of Object.values(PG)) {
+      oppeinPriceMatrix.push(priceEntry(`${code}-PLY-BOX`, pgId, boxP.ply));
+    }
+  }
+  if (boxP.pb > 0) {
+    for (const pgId of Object.values(PG)) {
+      oppeinPriceMatrix.push(priceEntry(`${code}-PB-BOX`, pgId, boxP.pb));
+    }
+  }
+  const doorMap = { MNW: doorP.mnw, PGW: doorP.pgw, WSS: doorP.wss, SSW: doorP.ssw } as const;
+  for (const fin of FINISHES) {
+    oppeinPriceMatrix.push(priceEntry(`${code}-${fin}-DOOR`, PG[fin], doorMap[fin]));
+    if (boxP.ply > 0) {
+      oppeinPriceMatrix.push(priceEntry(`${code}-PLY-${fin}`, PG[fin], boxP.ply + doorMap[fin]));
+    }
   }
 }
 
-// 4. 配件（Filler, TK 无门板变体）
-oppeinPriceMatrix.push(priceEntry("WF3", "pg_ply_box", 35));
-oppeinPriceMatrix.push(priceEntry("TK", "pg_ply_box", 40));
-
-/** 导出完整厂商数据 */
 export function buildOppeinCompanyBundle() {
   return {
     company: oppeinCompany,
@@ -320,6 +388,7 @@ export function buildOppeinCompanyBundle() {
     doorStyles: oppeinDoorStyles,
     modules: oppeinModuleSpecs,
     priceMatrix: oppeinPriceMatrix,
+    boxMaterialOptions: oppeinBoxMaterials,
     hardwareOptions: [],
     accessoryOptions: [],
     discountRules: [],

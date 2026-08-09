@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   CALL_SITE_TIER, escalationDecision, modelFor, NO_PROGRESS_TURNS, resolveModelTiers,
-  tierForTurn, tierReport, type CallSite,
+  resolveTestModelTiers, tierForTurn, tierReport, type CallSite,
 } from "../src/agents/model-tiers.js";
 
 const env = (o: Record<string, string> = {}): NodeJS.ProcessEnv => o;
@@ -26,6 +26,7 @@ test("按「错了的代价」分层，不是按「看起来难不难」", () =>
   assert.equal(CALL_SITE_TIER.specTemplateParse, "reasoning");
   // 户型图是图，文本模型无从下手
   assert.equal(CALL_SITE_TIER.floorPlanExtract, "vision");
+  assert.equal(CALL_SITE_TIER.designCritique, "reasoning");
 });
 
 // ── 配置与回退 ────────────────────────────────────────────────────────────
@@ -68,6 +69,29 @@ test("单模型部署仍然能跑（向后兼容 OPENAI_MODEL）", () => {
   assert.equal(modelFor(cfg, "designIntent"), "only-1");
   // 视觉仍然不蒙混过关
   assert.equal(modelFor(cfg, "floorPlanExtract"), undefined);
+});
+
+test("测试分层读 LLM_MODEL_TEST_*，不回落生产 LLM_MODEL_* / OPENAI_MODEL", () => {
+  const cfg = resolveTestModelTiers(env({
+    LLM_MODEL_CHAT: "prod-chat",
+    LLM_MODEL_REASONING: "prod-reason",
+    LLM_MODEL_VISION: "prod-vision",
+    OPENAI_MODEL: "prod-only",
+    LLM_MODEL_TEST_CHAT: "qwen2.5:14b-instruct",
+    LLM_MODEL_TEST_REASONING: "qwen2.5:14b-instruct",
+    LLM_MODEL_TEST_VISION: "qwen2.5vl:latest",
+  }));
+  assert.equal(modelFor(cfg, "orchestratorChat"), "qwen2.5:14b-instruct");
+  assert.equal(modelFor(cfg, "designIntent"), "qwen2.5:14b-instruct");
+  assert.equal(modelFor(cfg, "floorPlanExtract"), "qwen2.5vl:latest");
+});
+
+test("未配 TEST 模型时测试分层为空（即使生产已配）", () => {
+  const cfg = resolveTestModelTiers(env({
+    LLM_MODEL_CHAT: "prod-chat", OPENAI_MODEL: "prod-only",
+  }));
+  assert.equal(cfg.anyConfigured, false);
+  assert.equal(modelFor(cfg, "orchestratorChat"), undefined);
 });
 
 test("一个都没配 → 对话降级为确定性问答，核心链路不受影响", () => {

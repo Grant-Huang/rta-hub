@@ -7,7 +7,7 @@
  *      回答不了就是回答不了，不编、不借用别家信息。
  *   3. **Agent 不产出价格。** 它只输出「选择」，价格由 PricingEngine 算（FR-8 第 1 条）。
  */
-import type { ModuleSelection } from "../domain/types.js";
+import type { CompanyEngagementHandoff, ModuleSelection } from "../domain/types.js";
 import type { CallSite } from "./model-tiers.js";
 
 /**
@@ -39,6 +39,13 @@ export interface AgentContext {
   /** 已收集的需求摘要，逐轮累积。 */
   requirements: string;
   history: { role: "user" | "assistant"; content: string }[];
+  /** FR-23 子轨：交接包（含 confirmedFacts / 厂专用选型）；公司 Agent 必读。 */
+  handoff?: CompanyEngagementHandoff;
+  /**
+   * 当前会话户型几何摘要（墙长/层高）。
+   * 厂商谈转角柜/懒人转盘时必须结合实际墙长，不能空谈型号。
+   */
+  geometryNote?: string;
 }
 
 export interface AgentReply {

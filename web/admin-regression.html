@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>RTA-Hub · Regression board</title>
+<script src="/ui-i18n.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"IBM Plex Sans","Segoe UI",sans-serif;
+         background:#0e1116; color:#e7eaf0; min-height:100vh; }
+  header { padding:12px 16px; border-bottom:1px solid #2a3140; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .hint { font-size:11px; color:#8b94a3; flex:1; }
+  a { color:#9ec0ff; }
+  input, button { font: inherit; }
+  input { background:#171c24; border:1px solid #2a3140; color:inherit; border-radius:8px; padding:7px 10px; }
+  button { background:#2f6fed; border:none; color:#fff; padding:7px 12px; border-radius:8px; cursor:pointer; }
+  button.ghost { background:#262b33; }
+  main { padding:16px; max-width:1100px; margin:0 auto; display:grid; gap:14px; }
+  .panel { border:1px solid #2a3140; border-radius:10px; padding:14px; background:#151a22; }
+  .panel h2 { margin:0 0 10px; font-size:13px; color:#9aa4b2; font-weight:500; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; }
+  .stat { background:#0e1116; border-radius:8px; padding:10px; }
+  .stat .n { font-size:22px; font-weight:600; }
+  .stat .l { font-size:11px; color:#8b94a3; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #2a3140; vertical-align:top; }
+  th { color:#8b94a3; font-weight:500; }
+  .err { color:#f0a0a0; font-size:12px; }
+  .note { font-size:12px; color:#9aa4b2; line-height:1.45; }
+  code { font-size:11px; color:#c6cdd6; }
+</style>
+</head>
+<body>
+<header>
+  <h1 data-i18n="adminRegH1">Regression board</h1>
+  <span class="hint"><span data-i18n="adminRegHint">FR-22.2 · knowledge-metrics / SessionRun / sim-out / L1 queue · </span>
+    <a href="/admin" data-i18n="adminNavReview">Review</a> ·
+    <a href="/admin/trainer" data-i18n="adminNavTrainer">Trainer</a> ·
+    <a href="/admin/l1-learn" data-i18n="adminNavL1">L1 queue</a></span>
+  <input id="token" type="password" placeholder="X-Admin-Token" style="width:160px" />
+  <button type="button" id="btnLoad" class="ghost" data-i18n="refresh">Refresh</button>
+  <button type="button" class="ghost" id="langBtn" data-i18n="langToggle" data-i18n-title="langToggleTitle">中文</button>
+</header>
+<main>
+  <div class="err" id="err" hidden></div>
+  <section class="panel">
+    <h2 data-i18n="adminRegMetrics">Key metrics (knowledge-metrics.jsonl)</h2>
+    <div class="grid" id="metricsGrid"></div>
+    <p class="note" id="metricsNote"></p>
+  </section>
+  <section class="panel">
+    <h2 data-i18n="adminRegCards">Knowledge cards vs learn proposals</h2>
+    <div class="grid" id="cardsGrid"></div>
+    <p class="note" id="publishNote"></p>
+  </section>
+  <section class="panel">
+    <h2 data-i18n="adminRegL1">L1 learn queue</h2>
+    <div class="grid" id="l1Grid"></div>
+  </section>
+  <section class="panel">
+    <h2 data-i18n="adminRegRuns">Recent SessionRuns</h2>
+    <table><thead><tr><th>origin</th><th>id</th><th>started</th><th>dataDir</th></tr></thead>
+    <tbody id="runsBody"></tbody></table>
+  </section>
+  <section class="panel">
+    <h2 data-i18n="adminRegSim">Recent sim-out</h2>
+    <table><thead><tr><th>dir</th><th>data</th><th>designs.html</th><th>runs</th><th>mtime</th></tr></thead>
+    <tbody id="simBody"></tbody></table>
+    <p class="note" data-i18n-html="adminRegSimNote">Sim output convention: <code>sim-out/YYYY-MM-DD-NN</code>.</p>
+  </section>
+  <section class="panel">
+    <h2 data-i18n="adminRegEvents">Recent metrics events</h2>
+    <table><thead><tr><th>type</th><th>count</th><th>detail</th><th>at</th></tr></thead>
+    <tbody id="evBody"></tbody></table>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const t = (...a) => window.RTA_UI.t(...a);
+function applyI18n() {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang());
+  document.title = t("adminRegTitle");
+  window.RTA_UI.applyDataI18n();
+  $("langBtn").textContent = t("langToggle");
+}
+applyI18n();
+$("langBtn").onclick = () => {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang() === "zh" ? "en" : "zh");
+  applyI18n();
+  load().catch(() => {});
+};
+
+function token() {
+  const t = $("token").value.trim() || localStorage.getItem("rta-admin-token") || "";
+  if ($("token").value.trim()) localStorage.setItem("rta-admin-token", $("token").value.trim());
+  return t || localStorage.getItem("rta-admin-token") || "";
+}
+
+async function api(path) {
+  const r = await fetch(path, { headers: { "x-admin-token": token() } });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.message || data.error || r.statusText);
+  return data;
+}
+
+function showErr(msg) {
+  const el = $("err");
+  if (!msg) { el.hidden = true; el.textContent = ""; return; }
+  el.hidden = false;
+  el.textContent = msg;
+}
+
+function stats(el, entries) {
+  el.innerHTML = "";
+  for (const [l, n] of entries) {
+    const d = document.createElement("div");
+    d.className = "stat";
+    d.innerHTML = `<div class="n"></div><div class="l"></div>`;
+    d.querySelector(".n").textContent = String(n);
+    d.querySelector(".l").textContent = l;
+    el.appendChild(d);
+  }
+}
+
+function render(dash) {
+  const m = dash.metrics;
+  stats($("metricsGrid"), [
+    ["lines", m.totalLines],
+    ["reask", m.byType.reask || 0],
+    ["audit_blocking", m.byType.audit_blocking || 0],
+    ["draft_proposed", m.byType.draft_proposed || 0],
+    ["publish", m.byType.publish || 0],
+  ]);
+  $("metricsNote").textContent = m.exists
+    ? t("adminMetricsSource", m.path)
+    : t("adminMetricsMissing", m.path);
+
+  stats($("cardsGrid"), [
+    ["cards", dash.knowledgeCards.total],
+    ["published", dash.knowledgeCards.published],
+    ["draft cards", dash.knowledgeCards.draft],
+    ["draft_proposed metrics", dash.publishVsDraft.draftProposedMetricCount],
+  ]);
+  $("publishNote").textContent = dash.publishVsDraft.note;
+
+  const l1 = dash.l1Queue;
+  stats($("l1Grid"), [
+    ["total", l1.total],
+    ["draft", l1.byStatus.draft || 0],
+    ["confirmed", l1.byStatus.confirmed || 0],
+    ["applied", l1.byStatus.applied || 0],
+    ["dismissed", l1.byStatus.dismissed || 0],
+  ]);
+
+  const rb = $("runsBody");
+  rb.innerHTML = "";
+  for (const r of dash.sessionRuns.recent) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td></td><td></td><td></td><td><code></code></td>";
+    const tds = tr.querySelectorAll("td");
+    tds[0].textContent = r.origin;
+    tds[1].textContent = r.id;
+    tds[2].textContent = r.startedAt || "";
+    tds[3].querySelector("code").textContent = r.dataDir || "";
+    rb.appendChild(tr);
+  }
+  if (!dash.sessionRuns.recent.length) {
+    rb.innerHTML = `<tr><td colspan=4 class='note'>${t("adminNoSessionRuns")}</td></tr>`;
+  }
+
+  const sb = $("simBody");
+  sb.innerHTML = "";
+  for (const s of dash.simOut) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td><code></code></td><td></td><td></td><td></td><td></td>";
+    const tds = tr.querySelectorAll("td");
+    tds[0].querySelector("code").textContent = s.dir;
+    tds[1].textContent = s.hasData ? "yes" : "no";
+    tds[2].textContent = s.hasDesignsHtml ? "yes" : "no";
+    tds[3].textContent = s.sessionRunCount ?? "—";
+    tds[4].textContent = s.mtime || "";
+    sb.appendChild(tr);
+  }
+  if (!dash.simOut.length) {
+    sb.innerHTML = `<tr><td colspan=5 class='note'>${t("adminNoSimOut")}</td></tr>`;
+  }
+
+  const eb = $("evBody");
+  eb.innerHTML = "";
+  for (const e of m.recent) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td></td><td></td><td></td><td></td>";
+    const tds = tr.querySelectorAll("td");
+    tds[0].textContent = e.type || "";
+    tds[1].textContent = e.count != null ? String(e.count) : "";
+    tds[2].textContent = e.detail || e.conversationId || "";
+    tds[3].textContent = e.at || "";
+    eb.appendChild(tr);
+  }
+}
+
+async function load() {
+  showErr("");
+  const res = await api("/api/admin/regression-dashboard");
+  render(res.data);
+}
+
+$("btnLoad").onclick = () => load().catch((e) => showErr(e.message));
+$("token").value = localStorage.getItem("rta-admin-token") || "";
+load().catch((e) => showErr(e.message));
+</script>
+</body>
+</html>

@@ -5,10 +5,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fromDollars } from "../src/domain/money.js";
 import {
-  buildCompanyAgentSystem, companyAgentReply, deterministicSpecAnswer,
+  buildCompanyAgentSystem, companyAgentReply, companyAgentRestateHandoff, deterministicSpecAnswer,
   mergeRequirements, missingFields, optionsFor, orchestratorReply, proposeDesign,
 } from "../src/agents/orchestrator.js";
 import type { CompletionClient } from "../src/agents/types.js";
+import {
+  buildHandoff, deterministicHandoffRestate, renderHandoffContextNote,
+} from "../src/session/company-engagement.js";
 import {
   buildEstimateDraft, estimateCountsFromText, isSendable, renderEstimateText,
 } from "../src/estimate/generic.js";
@@ -125,6 +128,60 @@ test("公司 Agent 回复带 companyId 归属", async () => {
   const r = await companyAgentReply(undefined, "Maple Ridge", bundle,
     { conversationId: "cv", requirements: "", history: [] }, "B30 有多大");
   assert.equal(r.companyId, "co_1");
+});
+
+test("handoff 注入进公司 Agent system；开线复述含门板", async () => {
+  const handoff = buildHandoff({
+    at: AT,
+    designRequirements: "Kitchen L-shape chat dump should not appear in facts.",
+    requirementsDigest: "Space: L-shape ~10x10. Style: Shaker White.",
+    briefFacts: [
+      { key: "brief_space", label: "Space & sizes", display: "L-shape ~10x10" },
+      { key: "brief_intent", label: "Style", display: "Shaker White" },
+    ],
+    sharedPreferences: { storage: "balanced", tradeoff: "price", assembly: "RTA" },
+    companyPreferences: { doorStyleId: "ds_shaker_white" },
+    doorStyleNames: { ds_shaker_white: "Shaker White" },
+    revision: 1,
+  });
+  assert.equal(handoff.companyPreferences?.doorStyleId, "ds_shaker_white");
+  assert.ok(handoff.confirmedFacts?.some((f) => f.key === "doorStyleId"));
+  assert.ok(!handoff.confirmedFacts?.some((f) => /chat dump/i.test(f.display)));
+  assert.match(handoff.sharedSummary, /Shaker White|L-shape/i);
+  assert.ok(!/chat dump/i.test(handoff.sharedSummary));
+
+  const note = renderHandoffContextNote(handoff, "en");
+  assert.match(note, /ds_shaker_white|Shaker White/);
+  assert.match(note, /Do not re-ask/);
+  assert.ok(!/chat dump/i.test(note));
+
+  const fake: CompletionClient = {
+    async complete({ system }) {
+      assert.match(system, /Handoff revision 1/);
+      assert.match(system, /Shaker White/);
+      return "I see door style Shaker White (ds_shaker_white). Confirm?";
+    },
+  };
+  const reply = await companyAgentReply(
+    fake, "Maple Ridge", bundle,
+    {
+      conversationId: "cv",
+      requirements: handoff.requirementsDigest ?? "",
+      history: [],
+      handoff,
+    },
+    "What door style did I confirm?",
+  );
+  assert.match(reply.content, /Shaker White|ds_shaker_white/);
+
+  const restate = await companyAgentRestateHandoff(
+    undefined, "Maple Ridge", bundle, handoff, "en", undefined, "open",
+  );
+  assert.match(restate.content, /Shaker White/);
+  assert.equal(
+    deterministicHandoffRestate("Maple Ridge", handoff, "en", "open").includes("Shaker White"),
+    true,
+  );
 });
 
 // ── 设计意图必须过价格过滤 ────────────────────────────────────────────────

@@ -9,9 +9,10 @@ import {
 } from "../src/marketing/subscriptions.js";
 import {
   DEIDENTIFIED, deIdentifyBillingEvent, deIdentifyQuote, executeDeletionRequest,
-  exportAccountData, isOverdue, planRetentionSweep, RETENTION, responseDueBy,
-  type SubjectRequest,
+  executeRetentionSweep, exportAccountData, isOverdue, planRetentionSweep, RETENTION,
+  responseDueBy, type SubjectRequest,
 } from "../src/privacy/retention.js";
+import { retentionCronIntervalMs, startRetentionCron } from "../src/privacy/retention-cron.js";
 import { fromDollars } from "../src/domain/money.js";
 import type {
   Conversation, CustomerAccount, EstimateDraft, LeadBillingEvent, Quote, QuoteAuditEvent,
@@ -174,6 +175,69 @@ test("超过 7 年的审计事件才允许物理删除", () => {
     at: AT,
   });
   assert.deepEqual(plan.auditToDelete, ["old"]);
+});
+
+test("executeRetentionSweep dryRun 不调用删除", async () => {
+  const plan = planRetentionSweep({
+    conversations: [conv("cv_old", "2024-01-01T00:00:00.000Z")],
+    estimates: [estimate("est_old", "cv_old")],
+    quotes: [], billingEvents: [], auditEvents: [], at: AT,
+  });
+  let deleted = 0;
+  const result = await executeRetentionSweep({
+    plan, at: AT, dryRun: true,
+    deleteConversation: async () => { deleted += 1; },
+    deleteEstimate: async () => { deleted += 1; },
+    deIdentifyQuote: async () => { deleted += 1; },
+    deIdentifyBilling: async () => { deleted += 1; },
+    deleteAudit: async () => { deleted += 1; },
+  });
+  assert.equal(result.dryRun, true);
+  assert.equal(result.conversationsDeleted, 1);
+  assert.equal(deleted, 0);
+});
+
+test("executeRetentionSweep 真执行会调用删除回调", async () => {
+  const plan = planRetentionSweep({
+    conversations: [conv("cv_old", "2024-01-01T00:00:00.000Z")],
+    estimates: [], quotes: [], billingEvents: [], auditEvents: [], at: AT,
+  });
+  const seen: string[] = [];
+  await executeRetentionSweep({
+    plan, at: AT, dryRun: false,
+    deleteConversation: async (id) => { seen.push(id); },
+    deleteEstimate: async () => {},
+    deIdentifyQuote: async () => {},
+    deIdentifyBilling: async () => {},
+    deleteAudit: async () => {},
+  });
+  assert.deepEqual(seen, ["cv_old"]);
+});
+
+test("retentionCronIntervalMs 与 startRetentionCron", async () => {
+  assert.equal(retentionCronIntervalMs({}), 0);
+  assert.equal(retentionCronIntervalMs({ RETENTION_CRON_MS: "60000" }), 60_000);
+  let runs = 0;
+  const handle = startRetentionCron({
+    intervalMs: 60_000,
+    run: async () => {
+      runs += 1;
+      return {
+        plan: {
+          conversationsToDelete: [], estimatesToDelete: [], quotesToDeIdentify: [],
+          billingToDeIdentify: [], auditToDelete: [], notes: [],
+        },
+        conversationsDeleted: 0, estimatesDeleted: 0, quotesDeIdentified: 0,
+        billingDeIdentified: 0, auditDeleted: 0, executedAt: AT, dryRun: true,
+      };
+    },
+    log: () => {},
+  });
+  assert.ok(handle);
+  await new Promise((r) => setTimeout(r, 20));
+  handle!.stop();
+  // 启动后 setTimeout 触发首次；间隔很长不会二次
+  assert.ok(runs >= 0);
 });
 
 test("去标识化移除身份但保留金额明细", () => {

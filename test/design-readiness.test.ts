@@ -27,10 +27,11 @@ function readyPlan(over: Partial<FloorPlan["parsedGeometry"]> = {}): FloorPlan {
     conversationId: "cv_1",
     sourceFile: { name: "k.png", mimeType: "image/png", sizeBytes: 1 },
     parsedGeometry: {
+      // 上下水靠一端，另一侧留出冰箱位（中置水槽 78" 软占位会把 36" 冰箱挤没）
       wallRuns: [{
-        id: "wr_1", label: "North", length: 144,
+        id: "wr_1", label: "North", length: 168,
         startsAtCorner: false, endsAtCorner: false,
-        features: [{ id: "wf_1", kind: "plumbing", offset: 60, width: 24 }],
+        features: [{ id: "wf_1", kind: "plumbing", offset: 24, width: 24 }],
       }],
       ceilingHeight: 96,
       confidence: 0.9,
@@ -68,12 +69,16 @@ test("几何齐但缺上下水时不能问出设计（不能猜）", () => {
 });
 
 test("关键项齐备时 ready，并给出文字确认复述", () => {
+  const plan = readyPlan();
+  plan.appliances = [{
+    kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer",
+  }];
   const r = evaluateDesignReadiness({
     conversation: conv({
       designRequirements:
-        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nAppliances later",
+        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\"",
     }),
-    plan: readyPlan(),
+    plan,
     companyId: "co_1",
     companyName: "Pilot Co",
     language: "en",
@@ -84,7 +89,7 @@ test("关键项齐备时 ready，并给出文字确认复述", () => {
   assert.ok(r.sections.some((s) => s.id === "space" && s.status === "locked"));
 });
 
-test("推定家电宽度记为 needs_confirm，但仍可进入出图问句（复述里必须写出）", () => {
+test("推定家电宽度记为 needs_confirm，且阻断进入出图问句", () => {
   const plan = readyPlan();
   plan.appliances = [{
     kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "assumed",
@@ -96,9 +101,83 @@ test("推定家电宽度记为 needs_confirm，但仍可进入出图问句（复
     plan,
     language: "en",
   });
-  assert.equal(r.readyToAskDesign, true);
+  assert.equal(r.readyToAskDesign, false);
   assert.equal(r.items.find((i) => i.id === "appliances_sizes")?.status, "needs_confirm");
-  assert.match(r.confirmationText, /assumed/i);
+  assert.equal(r.items.find((i) => i.id === "appliances_sizes")?.critical, true);
+  assert.match(r.confirmationText, /assumed|confirm|宽度|推定/i);
+});
+
+test("接受推定后家电区为 assumed 标签且不再阻断出图", () => {
+  const plan = readyPlan({
+    wallRuns: [{
+      id: "wr_1", label: "North", length: 216,
+      startsAtCorner: false, endsAtCorner: false,
+      features: [{ id: "wf_1", kind: "plumbing", offset: 24, width: 24 }],
+    }],
+  });
+  plan.appliances = [{
+    kind: "refrigerator", width: 33, clearanceEachSide: 1, provenance: "assumed",
+  }, {
+    kind: "range", width: 30, clearanceEachSide: 0, provenance: "assumed",
+  }, {
+    kind: "dishwasher", width: 24, clearanceEachSide: 0, provenance: "assumed",
+  }];
+  const r = evaluateDesignReadiness({
+    conversation: conv({
+      designRequirements:
+        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nassumed widths are fine",
+    }),
+    plan,
+    language: "en",
+  });
+  assert.equal(r.items.find((i) => i.id === "appliances_sizes")?.status, "assumed");
+  assert.equal(r.items.find((i) => i.id === "appliances_fit")?.status, "ok");
+  assert.equal(r.readyToAskDesign, true);
+  const applSection = r.sections.find((s) => s.id === "appliances");
+  assert.equal(applSection?.status, "clarify");
+  assert.match(applSection!.body, /33"|Refrigerator/i);
+  assert.ok(r.confirmedFacts.some((f) => f.key.startsWith("appliance:") && f.status === "assumed"));
+});
+
+test("墙长与家电宽度冲突时 appliances_fit 立即阻断就绪", () => {
+  const plan = readyPlan({
+    wallRuns: [{
+      id: "wr_1", label: "North", length: 84,
+      startsAtCorner: false, endsAtCorner: false,
+      features: [{ id: "wf_1", kind: "plumbing", offset: 36, width: 24 }],
+    }],
+  });
+  plan.appliances = [
+    { kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer" },
+    { kind: "range", width: 30, clearanceEachSide: 0, provenance: "customer" },
+  ];
+  const r = evaluateDesignReadiness({
+    conversation: conv({
+      designRequirements:
+        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\" range 30\"",
+    }),
+    plan,
+    language: "zh",
+  });
+  assert.equal(r.readyToAskDesign, false);
+  const fit = r.items.find((i) => i.id === "appliances_fit");
+  assert.equal(fit?.status, "missing");
+  assert.equal(fit?.critical, true);
+  assert.match(fit!.brief, /放不下|Refrigerator|冰箱|range|灶/i);
+});
+
+test("家电后定不能冒充就绪", () => {
+  const r = evaluateDesignReadiness({
+    conversation: conv({
+      designRequirements:
+        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nAppliances later",
+    }),
+    plan: readyPlan(),
+    language: "en",
+  });
+  assert.equal(r.readyToAskDesign, false);
+  assert.equal(r.items.find((i) => i.id === "appliances_kinds")?.status, "missing");
+  assert.equal(r.items.find((i) => i.id === "appliances_sizes")?.status, "missing");
 });
 
 test("Tab1 sections 未谈及时写 Not discussed，而不是铺满 TBD 字段", () => {
@@ -106,4 +185,25 @@ test("Tab1 sections 未谈及时写 Not discussed，而不是铺满 TBD 字段",
   const site = r.sections.find((s) => s.id === "site");
   assert.ok(site);
   assert.match(site!.body, /Not discussed/i);
+});
+
+test("风格 brief 写出标准术语，禁止「已记在需求里」", () => {
+  const plan = readyPlan();
+  plan.appliances = [{
+    kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer",
+  }];
+  const r = evaluateDesignReadiness({
+    conversation: conv({
+      designRequirements:
+        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\"",
+    }),
+    plan,
+    language: "zh",
+  });
+  const style = r.items.find((i) => i.id === "style");
+  assert.ok(style);
+  assert.equal(style!.status, "ok");
+  assert.match(style!.brief, /现代|Modern/i);
+  assert.doesNotMatch(style!.brief, /已记在需求里/);
+  assert.doesNotMatch(r.confirmationText, /noted in your requirements/i);
 });

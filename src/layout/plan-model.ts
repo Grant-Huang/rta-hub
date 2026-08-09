@@ -27,9 +27,8 @@
  * 每段墙有起点 `origin` 与走向 `heading`；**沿走向看，室内在右手侧**，
  * 柜子的进深就往那一侧伸。这条约定一旦定死，"门朝哪开"就不用再猜。
  *
- * 墙段的走向是**推出来的，不是存的**：`WallRun` 只有长度和「两端是不是内墙角」，
- * 户型抽取给不出可靠方位，硬要客户填也不现实。推不出来的（墙段之间不相接）
- * 如实标注为「示意排列」，不假装知道。
+ * 墙段走向优先读罗盘/口语标签（North/东墙/Left…）；没有标签时仍按相接链
+ * 右转推出。推不出来的（墙段之间不相接）如实标注为「示意排列」，不假装知道。
  */
 import type { ParsedGeometry, WallFeature, WallRun } from "../floorplan/types.js";
 import { isIsland } from "../floorplan/types.js";
@@ -46,6 +45,77 @@ const DIR: Record<Heading, { dx: number; dy: number }> = {
 /** 顺时针转 90°——厨房绕着人转，L/U 型都是同一个方向绕。 */
 function turnRight(h: Heading): Heading {
   return (((h + 90) % 360) as Heading);
+}
+
+/**
+ * 从墙标签读罗盘走向（沿墙行走方向，室内在右手）。
+ *
+ * 北墙：自西向东走 → heading 0；东墙：自北向南 → 90；南墙 → 180；西墙 → 270。
+ * Left/Back/Right/Front 对应聊天建壳的 L 型默认标签，与上述同序。
+ */
+export function compassHeading(label: string): Heading | undefined {
+  const raw = label.trim();
+  if (!raw) return undefined;
+  if (/northeast|northwest|southeast|southwest|东北|西北|东南|西南/i.test(raw)) {
+    return undefined;
+  }
+
+  if (/\bnorth\b|^北([墙壁侧]|$)|北墙|北边/i.test(raw)) return 0;
+  if (/\beast\b|^东([墙壁侧]|$)|东墙|东边/i.test(raw)) return 90;
+  if (/\bsouth\b|^南([墙壁侧]|$)|南墙|南边/i.test(raw)) return 180;
+  if (/\bwest\b|^西([墙壁侧]|$)|西墙|西边/i.test(raw)) return 270;
+
+  if (/^left\b|^左([墙壁侧]|$)/i.test(raw)) return 0;
+  if (/^back\b|^后([墙壁侧]|$)/i.test(raw)) return 90;
+  if (/^right\b|^右([墙壁侧]|$)/i.test(raw)) return 180;
+  if (/^front\b|^前([墙壁侧]|$)/i.test(raw)) return 270;
+
+  return undefined;
+}
+
+/** 两段罗盘墙是否相邻（相差 90°），相对墙不得当成内墙角相接。 */
+export function compassWallsAdjacent(aLabel: string, bLabel: string): boolean | undefined {
+  const a = compassHeading(aLabel);
+  const b = compassHeading(bLabel);
+  if (a === undefined || b === undefined) return undefined;
+  const d = Math.abs(a - b);
+  return d === 90 || d === 270;
+}
+
+/**
+ * 全部带罗盘标签时，按顺时针（室内在右）重排并修正墙角旗标。
+ * 排不出连续链则返回原序。
+ */
+function orderWallsByCompass(walls: readonly WallRun[]): WallRun[] {
+  const tagged = walls.map((w) => ({ w, h: compassHeading(w.label) }));
+  if (tagged.some((t) => t.h === undefined) || tagged.length < 2) return [...walls];
+
+  const byH = new Map<Heading, WallRun>();
+  for (const t of tagged) {
+    if (byH.has(t.h!)) return [...walls]; // 同向两面墙，无法唯一排序
+    byH.set(t.h!, t.w);
+  }
+
+  const starts: Heading[] = [0, 90, 180, 270].filter((h) => byH.has(h as Heading)) as Heading[];
+  for (const start of starts) {
+    const ordered: WallRun[] = [];
+    let h: Heading = start;
+    let ok = true;
+    for (let i = 0; i < walls.length; i++) {
+      const run = byH.get(h);
+      if (!run) { ok = false; break; }
+      ordered.push(run);
+      h = turnRight(h);
+    }
+    if (!ok) continue;
+    if (new Set(ordered.map((r) => r.id)).size !== walls.length) continue;
+    return ordered.map((run, idx, arr) => ({
+      ...run,
+      startsAtCorner: idx > 0,
+      endsAtCorner: idx < arr.length - 1,
+    }));
+  }
+  return [...walls];
 }
 
 /**
@@ -115,6 +185,12 @@ export const AISLE = {
   walkway: 36,
   /** 工作过道建议值（单人操作）。低于它可以出图，但要告诉客户。 */
   work: 42,
+  /**
+   * 岛台到周边柜列的「太远」上限（建议）。
+   * 北美常见做法：过道够宽即可，但岛台离主操作区过远会打断工作三角；
+   * 超过此值给出提示（不阻断）。
+   */
+  maxComfort: 60,
 } as const;
 
 export interface PlacedRun {
@@ -190,13 +266,13 @@ export function buildKitchenPlan(
   geometry: ParsedGeometry,
   language: UiLanguage = DEFAULT_LANGUAGE,
 ): KitchenPlan {
-  const walls = geometry.wallRuns.filter((r) => !isIsland(r));
+  const walls = orderWallsByCompass(geometry.wallRuns.filter((r) => !isIsland(r)));
   const islands = geometry.wallRuns.filter((r) => isIsland(r));
 
   const runs: PlacedRun[] = [];
   const corners: PlanCorner[] = [];
   let cursor = { x: 0, y: 0 };
-  let heading: Heading = 0;
+  let heading: Heading = compassHeading(walls[0]?.label ?? "") ?? 0;
   let connected = true;
 
   walls.forEach((run, i) => {
@@ -204,12 +280,13 @@ export function buildKitchenPlan(
     let joinsPrev = false;
     if (prev) {
       if (prev.endsAtCorner && run.startsAtCorner) {
-        heading = turnRight(heading);
+        const labeled = compassHeading(run.label);
+        heading = labeled ?? turnRight(heading);
         joinsPrev = true;
       } else {
         // 拼不上：另起一行画，别假装知道它在哪
         connected = false;
-        heading = 0;
+        heading = compassHeading(run.label) ?? 0;
         cursor = { x: 0, y: cursor.y + 60 };
       }
     }

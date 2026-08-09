@@ -8,6 +8,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import type { EmailSubscription } from "../domain/types.js";
+import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export class SubscriptionError extends Error {
   constructor(message: string, readonly code: string) {
@@ -25,6 +26,7 @@ export interface SubscribeInput {
   userAgent?: string;
   ipAddress?: string;
   at: string;
+  language?: UiLanguage;
 }
 
 /**
@@ -47,22 +49,34 @@ export function anonymizeIp(ip: string): string {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export function subscribe(input: SubscribeInput): EmailSubscription {
+  const lang = input.language ?? DEFAULT_LANGUAGE;
   const email = input.email.trim().toLowerCase();
   if (!EMAIL_RE.test(email)) {
-    throw new SubscriptionError(`邮箱格式不合法：${input.email}`, "INVALID_EMAIL");
+    throw new SubscriptionError(
+      msg(lang, `Invalid email address: ${input.email}`, `邮箱格式不合法：${input.email}`),
+      "INVALID_EMAIL",
+    );
   }
   if (!input.companyName.trim()) {
-    throw new SubscriptionError("必须填写公司名称", "MISSING_COMPANY");
+    throw new SubscriptionError(
+      msg(lang, "Company name is required", "必须填写公司名称"),
+      "MISSING_COMPANY",
+    );
   }
   // ★ CASL：同意必须是主动的
   if (!input.consentGiven) {
     throw new SubscriptionError(
-      "必须主动勾选同意才能加入邮件列表（CASL Express Consent）",
+      msg(lang,
+        "You must actively check the consent box to join the mailing list (CASL Express Consent)",
+        "必须主动勾选同意才能加入邮件列表（CASL Express Consent）"),
       "CONSENT_REQUIRED",
     );
   }
   if (!input.termsVersion) {
-    throw new SubscriptionError("同意记录必须带条款版本号", "MISSING_TERMS_VERSION");
+    throw new SubscriptionError(
+      msg(lang, "Consent records must include a terms version", "同意记录必须带条款版本号"),
+      "MISSING_TERMS_VERSION",
+    );
   }
 
   return {
@@ -85,9 +99,15 @@ export function unsubscribeByToken(
   subscriptions: readonly EmailSubscription[],
   token: string,
   at: string,
+  language: UiLanguage = DEFAULT_LANGUAGE,
 ): EmailSubscription {
   const sub = subscriptions.find((s) => s.unsubscribeToken === token);
-  if (!sub) throw new SubscriptionError("退订链接无效或已失效", "INVALID_TOKEN");
+  if (!sub) {
+    throw new SubscriptionError(
+      msg(language, "Unsubscribe link is invalid or expired", "退订链接无效或已失效"),
+      "INVALID_TOKEN",
+    );
+  }
   return { ...sub, status: "unsubscribed", unsubscribedAt: at };
 }
 

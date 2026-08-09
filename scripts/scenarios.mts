@@ -29,6 +29,22 @@ export interface ScenarioWall {
   depth?: number;
 }
 
+/** 仅注入 user agent 的私有事实（FR-20）——系统侧不得读取。 */
+export interface CustomerFacts {
+  intent?: string;
+  kitchenTalk?: string;
+  walls?: { label: string; length: number }[];
+  ceilingHeight?: number;
+  style?: string;
+  budget?: string;
+  province?: string;
+  appliances?: string;
+  plumbing?: string;
+  windows?: string;
+  mentionCompany?: string;
+  notes?: string;
+}
+
 export interface Scenario {
   id: string;
   name: string;
@@ -36,7 +52,15 @@ export interface Scenario {
   /** 覆盖意图——这个场景是冲着哪个边界去的。 */
   covers: string;
   accountType: "consumer" | "trade";
+  /**
+   * @deprecated 保留兼容；模拟优先用 user agent + customerFacts（FR-20）。
+   * 不再把 turns 当「客户主动报齐」的剧本。
+   */
   turns: string[];
+  /**
+   * 客户私有意图——只给 user agent，不给系统 LLM。
+   */
+  customerFacts?: CustomerFacts;
   ceilingHeight: number;
   walls: ScenarioWall[];
   /**
@@ -62,12 +86,23 @@ export interface Scenario {
     hardwareOptionIds?: string[];
     accessoryOptionIds?: string[];
     tradeoff?: "price" | "quality" | "lookAndFeel";
+    layoutHints?: {
+      includeSpicePullout?: boolean;
+      includeTrashPullout?: boolean;
+      enlargeIslandInches?: number;
+      matchCabinetNos?: number[];
+      doubleDrawerNos?: number[];
+      spiceCabinetNo?: number;
+      spiceNear?: "range" | "cooktop" | "sink";
+      trashCabinetNo?: number;
+      trashNear?: "range" | "cooktop" | "sink";
+    };
   };
   /**
-   * 客户在全局俯视图阶段提的修改，**每一轮都要带上具体改什么**。
+   * 客户在全局俯视图阶段提的修改——用**意图**表达，不写死不存在的 SKU。
    *
-   * 只给一个轮次数字是测不出东西的：系统可以什么都不改、把同一张图再画一遍，
-   * 测试照样"通过"。带上 `changes` 才能验证「客户提的意见真的改到了排布上」。
+   * `note`（含真实 #N）由模拟器在见到第一版柜号索引后再生成；
+   * 静态 note 仅用于不含柜号/型号的口语意图。
    */
   revisions: ScenarioRevision[];
   /**
@@ -77,11 +112,28 @@ export interface Scenario {
   sourceImage?: string;
 }
 
+/** 修订意图——禁止在场景里写死 B12 等可能本版不存在的 SKU。 */
+export type RevisionIntent =
+  | "spice_near_cooktop"
+  | "trash_pullout"
+  | "more_drawers"
+  | "doors_over_drawers"
+  | "enlarge_island"
+  | "double_drawer"
+  | "sink_under_window"
+  | "swap_door_style"
+  | "unactionable";
+
 export interface ScenarioRevision {
-  /** 客户的原话。 */
-  note: string;
-  /** 这句话对应到系统里的哪些偏好项。空对象表示这轮是句改不动的话（也要测）。 */
-  changes: Scenario["prefs"];
+  /** 结构化意图（权威）；模拟器据此生成 note / 补全 #N。 */
+  intent: RevisionIntent;
+  /**
+   * 可选口语；若含 #N/型号须在见到首版图后由模拟器填写。
+   * 场景定义阶段不要写死 B12。
+   */
+  note?: string;
+  /** 可选偏好改动；意图解析器可再合并 spiceCabinetNo 等。 */
+  changes?: Scenario["prefs"];
 }
 
 export interface ScenarioSet {
@@ -110,8 +162,10 @@ const SYSTEM = [
   "- 墙段长度 30–240 英寸之间，1/4 英寸的整数倍；",
   "- 特征的 offset + width 必须 ≤ 该墙段长度；",
   "- doorStyleId 只能从给定清单里选；hardwareOptionIds / accessoryOptionIds 同理；",
-  "- revisions 取 0–3 条。每条要有 note（客户原话）和 changes（对应的偏好改动）；",
-  "  changes 的键与 prefs 相同。**至少有一条 changes 为空对象**——模拟客户提了句",
+  "- revisions 取 0–3 条。每条必须有 intent（spice_near_cooktop|trash_pullout|more_drawers|",
+  "  doors_over_drawers|enlarge_island|double_drawer|sink_under_window|swap_door_style|unactionable）；",
+  "  **禁止**在 note 里写死 B12 等具体型号；#N 由模拟器见首版图后再填。",
+  "  changes 可选。**至少有一条 intent=unactionable**——模拟客户提了句",
   "  系统落不下去的话（如「看着大气一点」），要验证系统会如实说「这轮没有改动」",
   "  而不是假装改过了。",
 ].join("\n");
@@ -129,8 +183,8 @@ const SCHEMA_HINT = `{
       "storage": "balanced", "assembly": "RTA",
       "hardwareOptionIds": [], "accessoryOptionIds": [], "tradeoff": "price" },
     "revisions": [
-      { "note": "锅碗多，能不能多做点抽屉", "changes": { "storage": "drawers" } },
-      { "note": "整体想看着大气一点", "changes": {} }
+      { "intent": "more_drawers", "changes": { "storage": "drawers" } },
+      { "intent": "unactionable" }
     ]
   }]
 }`;
@@ -235,9 +289,62 @@ function validate(raw: unknown, input: GenerateInput): Scenario[] {
         accessoryOptionIds: idsIn(prefs["accessoryOptionIds"], input.accessoryIds),
       },
       revisions: cleanRevisions(s["revisions"], input),
+      customerFacts: attachCustomerFacts({
+        turns: turns.length > 0 ? turns : ["想重做厨房橱柜"],
+        walls: cleanWalls,
+        ceilingHeight: quantize(clamp(Number(s["ceilingHeight"]) || 96, 84, 120)),
+        prefs: {
+          ...pick(prefs, "budgetBand", ["economy", "standard", "premium", "unsure"]),
+        },
+        shape: String(s["shape"] ?? ""),
+        rawFacts: s["customerFacts"],
+      }),
     } as Scenario);
   }
   return out;
+}
+
+/** 为场景补全仅供 user agent 的私有事实（FR-20）。 */
+function attachCustomerFacts(input: {
+  turns: string[];
+  walls: ScenarioWall[];
+  ceilingHeight: number;
+  prefs: { budgetBand?: string };
+  shape: string;
+  rawFacts?: unknown;
+}): CustomerFacts {
+  if (input.rawFacts && typeof input.rawFacts === "object") {
+    return input.rawFacts as CustomerFacts;
+  }
+  const budgetMap: Record<string, string> = {
+    economy: "Budget under CAD $10k",
+    standard: "Budget CAD $10–20k",
+    premium: "Budget over CAD $20k",
+    unsure: "Budget not decided yet",
+  };
+  const hasPlumb = input.walls.some((w) => w.features.some((f) => f.kind === "plumbing"));
+  const hasWin = input.walls.some((w) => w.features.some((f) => f.kind === "window"));
+  const plumbWall = input.walls.find((w) => w.features.some((f) => f.kind === "plumbing"));
+  return {
+    intent: input.turns[0] ?? "Want new kitchen cabinets",
+    kitchenTalk: `${input.shape || "kitchen"}, roughly ` +
+      input.walls.map((w) => `${w.label} ${Math.round(w.length / 12)} ft`).join(", "),
+    walls: input.walls.map((w) => ({ label: w.label, length: w.length })),
+    ceilingHeight: input.ceilingHeight,
+    style: /质感|高级灰|modern|现代|北欧|farmhouse/i.test(input.turns.join("\n"))
+      ? (input.turns.find((t) => /质感|高级灰|现代|风格|nordic|farmhouse|modern/i.test(t)) ?? "Modern")
+      : "Modern",
+    budget: input.prefs.budgetBand
+      ? budgetMap[input.prefs.budgetBand]
+      : "Budget CAD $10–20k",
+    province: "Ontario ON",
+    appliances: "Fridge and range; not sure about exact widths",
+    plumbing: hasPlumb
+      ? `Plumbing on ${plumbWall?.label ?? "the main wall"}, near the middle`
+      : "Plumbing later",
+    windows: hasWin ? "There is a window on one of the walls" : "No windows",
+    mentionCompany: "枫岭橱柜",
+  };
 }
 
 const KINDS = new Set(["window", "plumbing", "gas", "electrical", "door"]);
@@ -248,6 +355,26 @@ const KINDS = new Set(["window", "plumbing", "gas", "electrical", "door"]);
  * `changes` 走和 `prefs` 一样的过滤——模型很容易在这里编一个不存在的门板 id，
  * 而服务端会 400，那时候看到的是"测试挂了"，不是"模型编了个 id"。
  */
+const REVISION_INTENTS: readonly RevisionIntent[] = [
+  "spice_near_cooktop", "trash_pullout", "more_drawers", "doors_over_drawers",
+  "enlarge_island", "double_drawer", "sink_under_window", "swap_door_style",
+  "unactionable",
+];
+
+function inferRevisionIntent(note: string, changes: Record<string, unknown>): RevisionIntent {
+  if (/调料|spice|拉篮/i.test(note)) return "spice_near_cooktop";
+  if (/垃圾桶|trash/i.test(note)) return "trash_pullout";
+  if (/岛台.*大|enlarge.*island|岛台做大/i.test(note)) return "enlarge_island";
+  if (/双抽|double.?drawer|#\d+.*抽/i.test(note)) return "double_drawer";
+  if (/窗子下面|under.?window|sink base/i.test(note)) return "sink_under_window";
+  if (/门板换|door.?style|换个样式/i.test(note)) return "swap_door_style";
+  if (/大气|怪怪的|整体.*好看|looks? nicer/i.test(note)) return "unactionable";
+  if (changes["storage"] === "drawers") return "more_drawers";
+  if (changes["storage"] === "doors") return "doors_over_drawers";
+  if (Object.keys(changes).length === 0) return "unactionable";
+  return "more_drawers";
+}
+
 function cleanRevisions(raw: unknown, input: GenerateInput): ScenarioRevision[] {
   if (!Array.isArray(raw)) return [];
   return raw.slice(0, 3).map((item) => {
@@ -255,20 +382,27 @@ function cleanRevisions(raw: unknown, input: GenerateInput): ScenarioRevision[] 
     const ch = (r["changes"] ?? {}) as Record<string, unknown>;
     const hw = idsIn(ch["hardwareOptionIds"], input.hardwareIds);
     const ac = idsIn(ch["accessoryOptionIds"], input.accessoryIds);
-    return {
-      note: String(r["note"] ?? "再调一下排布"),
-      changes: {
-        ...pick(ch, "budgetBand", ["economy", "standard", "premium", "unsure"]),
-        ...(input.doorStyleIds.includes(String(ch["doorStyleId"]))
-          ? { doorStyleId: String(ch["doorStyleId"]) } : {}),
-        ...pick(ch, "storage", ["drawers", "doors", "balanced"]),
-        ...pick(ch, "assembly", ["RTA", "assembled"]),
-        ...pick(ch, "tradeoff", ["price", "quality", "lookAndFeel"]),
-        // 空数组和"没提"是两回事：只有真给了才写进去
-        ...(hw.length ? { hardwareOptionIds: hw } : {}),
-        ...(ac.length ? { accessoryOptionIds: ac } : {}),
-      },
+    const changes: Scenario["prefs"] = {
+      ...pick(ch, "budgetBand", ["economy", "standard", "premium", "unsure"]),
+      ...(input.doorStyleIds.includes(String(ch["doorStyleId"]))
+        ? { doorStyleId: String(ch["doorStyleId"]) } : {}),
+      ...pick(ch, "storage", ["drawers", "doors", "balanced"]),
+      ...pick(ch, "assembly", ["RTA", "assembled"]),
+      ...pick(ch, "tradeoff", ["price", "quality", "lookAndFeel"]),
+      ...(hw.length ? { hardwareOptionIds: hw } : {}),
+      ...(ac.length ? { accessoryOptionIds: ac } : {}),
     };
+    const intentRaw = String(r["intent"] ?? "");
+    const intent = (REVISION_INTENTS as readonly string[]).includes(intentRaw)
+      ? intentRaw as RevisionIntent
+      : inferRevisionIntent(String(r["note"] ?? ""), ch);
+    // 丢弃含写死型号的 note——由模拟器见首版后再生成
+    const rawNote = String(r["note"] ?? "").trim();
+    const note =
+      rawNote && !/\bB\d{2}\b|\b[A-Z]{2,}\d{2}[A-Z]*/i.test(rawNote)
+        ? rawNote
+        : undefined;
+    return { intent, ...(note ? { note } : {}), changes };
   });
 }
 
@@ -322,12 +456,34 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
       walls: [{
         label: "北墙", length: 84,
         features: [
-          { kind: "window", offset: 6, width: 24 },
-          { kind: "plumbing", offset: 12, width: 24 },
+          { kind: "window", offset: 30, width: 24 },
+          { kind: "plumbing", offset: 36, width: 24 },
         ],
       }],
       prefs: { budgetBand: "economy", doorStyleId: d(0), storage: "doors", assembly: "RTA", tradeoff: "price" },
-      revisions: [],
+      // 故意偏大：84" 墙 + 水槽区装不下 36"+30" —— 期望 early-fit 拦住，不得出图报价
+      appliances: [
+        { kind: "refrigerator", width: 36 },
+        { kind: "range", width: 30 },
+      ],
+      revisions: [
+        {
+          intent: "sink_under_window",
+          note: "sink base要放在窗子下面",
+          changes: { layoutHints: { includeSpicePullout: false } },
+        },
+        // note / #N 由模拟器见首版 cabinetIndex 后生成——禁止写死 B12
+        { intent: "spice_near_cooktop" },
+      ],
+      customerFacts: {
+        intent: "小公寓换橱柜，想在灶台旁加调料拉篮",
+        kitchenTalk: "一字型，北墙大约七尺",
+        style: "白色简约",
+        budget: "Budget under CAD $10k",
+        province: "Ontario ON",
+        appliances: "Fridge 36\", range 30\"",
+        notes: "prefer spice pullout near cooktop; expect early space check",
+      },
     },
     {
       id: "B", name: "独立屋 · L 型 · 高层高", shape: "L 型",
@@ -360,9 +516,13 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
         tradeoff: "quality",
       },
       revisions: [
-        // 一条能落下去的（改排布）+ 一条落不下去的（验证系统如实说明）
-        { note: "抽屉做这么多有点贵，还是多用门板柜吧", changes: { storage: "doors" } },
-        { note: "整体看着大气一点就好", changes: {} },
+        {
+          intent: "doors_over_drawers",
+          note: "抽屉做这么多有点贵，还是多用门板柜吧",
+          changes: { storage: "doors" },
+        },
+        { intent: "trash_pullout" },
+        { intent: "unactionable", note: "整体看着大气一点就好", changes: {} },
       ],
     },
     {
@@ -389,7 +549,7 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
             { kind: "plumbing", offset: 54, width: 24 },
           ],
         },
-        { label: "东墙", length: 132, features: [] },
+        { label: "东墙", length: 132, features: [{ kind: "gas", offset: 54, width: 30 }] },
       ],
       prefs: {
         budgetBand: "premium", doorStyleId: d(3), storage: "balanced", assembly: "assembled",
@@ -397,7 +557,13 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
         tradeoff: "lookAndFeel",
       },
       revisions: [
-        { note: "业主说锅具多，灶台附近都换成抽屉", changes: { storage: "drawers", budgetBand: "standard" } },
+        {
+          intent: "more_drawers",
+          note: "业主说锅具多，灶台附近都换成抽屉",
+          changes: { storage: "drawers", budgetBand: "standard" },
+        },
+        // #N 见首版后再填
+        { intent: "double_drawer" },
       ],
     },
     {
@@ -415,9 +581,17 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
       }],
       prefs: { budgetBand: "unsure", doorStyleId: d(2), storage: "balanced", assembly: "RTA" },
       revisions: [
-        { note: "门板换个样式看看", changes: { doorStyleId: d(1) } },
-        { note: "锅碗瓢盆多，抽屉柜能不能多排一些", changes: { storage: "drawers" } },
-        { note: "这个位置我总觉得怪怪的", changes: {} },
+        {
+          intent: "swap_door_style",
+          note: "门板换个样式看看",
+          changes: { doorStyleId: d(1) },
+        },
+        {
+          intent: "more_drawers",
+          note: "锅碗瓢盆多，抽屉柜能不能多排一些",
+          changes: { storage: "drawers" },
+        },
+        { intent: "unactionable", note: "这个位置我总觉得怪怪的", changes: {} },
       ],
     },
     {
@@ -448,7 +622,12 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
         tradeoff: "lookAndFeel",
       },
       revisions: [
-        { note: "岛台这边多做点抽屉", changes: { storage: "drawers" } },
+        {
+          intent: "more_drawers",
+          note: "岛台这边多做点抽屉",
+          changes: { storage: "drawers" },
+        },
+        { intent: "enlarge_island" },
       ],
     },
     {
@@ -480,7 +659,7 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
         tradeoff: "quality",
       },
       revisions: [
-        { note: "上面那一截看着空，能做满吗", changes: {} },
+        { intent: "unactionable", note: "上面那一截看着空，能做满吗", changes: {} },
       ],
     },
     {
@@ -552,7 +731,7 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
         tradeoff: "quality",
       },
       revisions: [
-        { note: "烤箱那边先按标准的来吧", changes: {} },
+        { intent: "unactionable", note: "烤箱那边先按标准的来吧", changes: {} },
       ],
     },
     {
@@ -590,8 +769,21 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
         tradeoff: "quality",
       },
       revisions: [
-        { note: "More drawers near the range please", changes: { storage: "drawers" } },
+        {
+          intent: "more_drawers",
+          note: "More drawers near the range please",
+          changes: { storage: "drawers" },
+        },
       ],
+      customerFacts: {
+        intent: "Design from floor plan photo; more drawers near the range",
+        kitchenTalk: "L-shaped kitchen from uploaded plan",
+        style: "Modern shaker",
+        budget: "Budget CAD $15–25k",
+        province: "Ontario ON",
+        appliances: "Fridge 36\", range 30\", dishwasher 24\"",
+        notes: "preference intent: more_drawers near range — never hardcode B12",
+      },
     },
   ];
 
@@ -601,5 +793,14 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
       `BUILTIN_SCENARIO_COUNT=${BUILTIN_SCENARIO_COUNT}，实际内置 ${base.length} 个场景，` +
       `请同步改常量，否则模拟器默认跑不全`);
   }
-  return base.slice(0, Math.max(1, input.count));
+  return base.slice(0, Math.max(1, input.count)).map((s) => ({
+    ...s,
+    customerFacts: attachCustomerFacts({
+      turns: s.turns,
+      walls: s.walls,
+      ceilingHeight: s.ceilingHeight,
+      prefs: { budgetBand: s.prefs.budgetBand },
+      shape: s.shape,
+    }),
+  }));
 }

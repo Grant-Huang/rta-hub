@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>RTA-Hub · 测试用户 Agent</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"IBM Plex Sans","Segoe UI",sans-serif;
+         background:#0e1116; color:#e7eaf0; min-height:100vh; }
+  header { padding:12px 16px; border-bottom:1px solid #2a3140; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .hint { font-size:11px; color:#8b94a3; }
+  a { color:#9ec0ff; }
+  input, select, button { font: inherit; }
+  input, select { background:#171c24; border:1px solid #2a3140; color:inherit; border-radius:8px; padding:7px 10px; }
+  button { background:#2f6fed; border:none; color:#fff; padding:7px 12px; border-radius:8px; cursor:pointer; }
+  button.ghost { background:#262b33; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  main { padding:16px; max-width:1100px; margin:0 auto; display:grid; gap:14px; }
+  .panel { border:1px solid #2a3140; border-radius:10px; padding:14px; background:#151a22; }
+  .panel h2 { margin:0 0 10px; font-size:13px; color:#9aa4b2; font-weight:500; }
+  .points { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:8px; max-height:360px; overflow:auto; }
+  .pt { display:flex; gap:8px; align-items:flex-start; background:#0e1116; border-radius:8px; padding:8px 10px; font-size:12px; }
+  .pt label { cursor:pointer; }
+  .pt .t { font-weight:500; }
+  .pt .d { color:#8b94a3; margin-top:2px; line-height:1.4; }
+  .pt .r { color:#d8c37b; font-size:11px; margin-top:2px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #2a3140; vertical-align:top; }
+  th { color:#8b94a3; font-weight:500; }
+  .ok { color:#7bd88f; } .fail { color:#d87b7b; } .run { color:#d8c37b; }
+  .err { color:#d87b7b; font-size:12px; }
+  pre { white-space:pre-wrap; font-size:11.5px; background:#0e1116; padding:10px; border-radius:8px; max-height:220px; overflow:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>测试用户 Agent</h1>
+  <span class="hint">独立 TEST LLM · 会话标题 test- · 跑完可触发 DesignCritic ·
+    <a href="/admin">评审</a> · <a href="/admin/regression">回归板</a> · <a href="/">客户 UI</a></span>
+  <input id="token" type="password" placeholder="ADMIN_TOKEN" style="width:160px" />
+</header>
+<main>
+  <section class="panel">
+    <h2>启动套件</h2>
+    <div class="row">
+      <label>用例数 <input id="count" type="number" min="1" max="8" value="3" style="width:64px" /></label>
+      <label><input id="runCritic" type="checkbox" checked /> 跑完后专家评审</label>
+      <button type="button" class="ghost" id="btnSuggested">仅建议点</button>
+      <button type="button" class="ghost" id="btnAll">全选</button>
+      <button type="button" id="btnStart">启动测试</button>
+    </div>
+    <p class="hint">会话写入当前 DATA_DIR，origin=test；用演示账号 ca_demo_consumer 可在客户 UI 看到「test-」标题。</p>
+    <div class="err" id="err" hidden></div>
+    <div class="points" id="points"></div>
+  </section>
+  <section class="panel">
+    <h2>最近运行</h2>
+    <button type="button" class="ghost" id="btnRefresh">刷新</button>
+    <table>
+      <thead><tr><th>id</th><th>状态</th><th>用例</th><th>时间</th><th></th></tr></thead>
+      <tbody id="runsBody"></tbody>
+    </table>
+  </section>
+  <section class="panel" id="detailPanel" hidden>
+    <h2>运行详情</h2>
+    <div id="detailMeta" class="hint"></div>
+    <table>
+      <thead><tr><th>case</th><th>标题</th><th>状态</th><th>points</th><th>notes</th><th>会话</th></tr></thead>
+      <tbody id="casesBody"></tbody>
+    </table>
+    <h2 style="margin-top:14px">专家建议摘要</h2>
+    <pre id="critiqueBox">—</pre>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let points = [];
+let suggestedIds = [];
+
+function token() {
+  const v = $("token").value.trim();
+  if (v) localStorage.setItem("rta_admin_token", v);
+  return v || localStorage.getItem("rta_admin_token") || "";
+}
+$("token").value = localStorage.getItem("rta_admin_token") || "";
+
+async function api(path, init = {}) {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      "x-admin-token": token(),
+      ...(init.headers || {}),
+    },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.message || body.error || res.statusText);
+  return body.data ?? body;
+}
+
+function selectedIds() {
+  return [...document.querySelectorAll(".pt input:checked")].map((el) => el.value);
+}
+
+function renderPoints() {
+  const box = $("points");
+  box.innerHTML = "";
+  for (const p of points) {
+    const id = "pt_" + p.id;
+    const wrap = document.createElement("div");
+    wrap.className = "pt";
+    wrap.innerHTML = `<input type="checkbox" id="${id}" value="${p.id}" ${p.suggested ? "checked" : ""} />
+      <label for="${id}"><div class="t">${esc(p.title)}</div>
+      <div class="d">${esc(p.description)}</div>
+      <div class="r">${esc((p.refs || []).join(" · "))}</div></label>`;
+    box.appendChild(wrap);
+  }
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+
+async function loadPoints() {
+  const data = await api("/api/admin/test-user/points");
+  points = data.points || [];
+  suggestedIds = data.suggestedIds || [];
+  renderPoints();
+}
+
+async function loadRuns() {
+  const data = await api("/api/admin/test-user/runs");
+  const body = $("runsBody");
+  body.innerHTML = "";
+  for (const r of data.runs || []) {
+    const tr = document.createElement("tr");
+    const passed = (r.cases || []).filter((c) => c.status === "passed").length;
+    const total = (r.cases || []).length;
+    tr.innerHTML = `<td><code>${esc(r.id)}</code></td>
+      <td class="${r.status === "completed" ? "ok" : r.status === "failed" ? "fail" : "run"}">${esc(r.status)}</td>
+      <td>${passed}/${total}</td>
+      <td>${esc((r.endedAt || r.startedAt || r.createdAt || "").slice(0, 19))}</td>
+      <td><button type="button" class="ghost" data-id="${esc(r.id)}">详情</button></td>`;
+    tr.querySelector("button").onclick = () => showDetail(r.id);
+    body.appendChild(tr);
+  }
+}
+
+async function showDetail(id) {
+  const data = await api("/api/admin/test-user/runs/" + id);
+  const run = data.run;
+  $("detailPanel").hidden = false;
+  $("detailMeta").textContent =
+    `${run.id} · account ${run.accountId} · sessionRun ${run.sessionRunId} · critic=${run.runCritic}`;
+  const tb = $("casesBody");
+  tb.innerHTML = "";
+  for (const c of run.cases || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${esc(c.id)}</td>
+      <td>${esc(c.title)}${c.persona ? ` <span class="sub">(${esc(c.persona)})</span>` : ""}</td>
+      <td class="${c.status === "passed" ? "ok" : "fail"}">${esc(c.status)}</td>
+      <td>${esc((c.pointIds || []).join(", "))}</td>
+      <td>${esc((c.notes || []).join(" · "))}${(c.errors || []).length ? " | " + esc(c.errors.join("; ")) : ""}</td>
+      <td>${c.conversationId ? `<a href="/?conv=${esc(c.conversationId)}" target="_blank">${esc(c.conversationId)}</a>` : "—"}</td>`;
+    tb.appendChild(tr);
+  }
+  $("critiqueBox").textContent = run.critiqueSummary || "—";
+}
+
+$("btnSuggested").onclick = () => {
+  document.querySelectorAll(".pt input").forEach((el) => {
+    el.checked = suggestedIds.includes(el.value);
+  });
+};
+$("btnAll").onclick = () => {
+  document.querySelectorAll(".pt input").forEach((el) => { el.checked = true; });
+};
+$("btnRefresh").onclick = () => loadRuns().catch(showErr);
+$("btnStart").onclick = async () => {
+  $("err").hidden = true;
+  $("btnStart").disabled = true;
+  try {
+    const data = await api("/api/admin/test-user/runs", {
+      method: "POST",
+      body: JSON.stringify({
+        count: Number($("count").value) || 3,
+        pointIds: selectedIds(),
+        runCritic: $("runCritic").checked,
+        accountId: "ca_demo_consumer",
+      }),
+    });
+    await loadRuns();
+    if (data.run?.id) await showDetail(data.run.id);
+  } catch (e) {
+    showErr(e);
+  } finally {
+    $("btnStart").disabled = false;
+  }
+};
+
+function showErr(e) {
+  $("err").hidden = false;
+  $("err").textContent = e.message || String(e);
+}
+
+loadPoints().then(loadRuns).catch(showErr);
+</script>
+</body>
+</html>

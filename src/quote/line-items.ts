@@ -27,6 +27,8 @@ import type {
 import type { BomCategory, BomLine } from "../layout/bom.js";
 import { matchFaceTemplate } from "../render/templates.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
+import { isStandaloneSellUnit, resolveModuleSellUnit } from "../spec/sku-semantics.js";
+import type { CompanyCodingRules } from "../domain/types.js";
 
 export type QuoteCategory = "cabinet" | "door" | "hardware" | "accessory" | "trim";
 
@@ -126,6 +128,8 @@ export interface BuildListInput {
   boxMaterials?: readonly BoxMaterialOption[];
   /** 客户可见文案语言；默认英文。 */
   language?: UiLanguage;
+  /** FR-16：本公司编码规则，影响 sellUnit 启发式。 */
+  codingRules?: CompanyCodingRules;
 }
 
 const BOM_TO_QUOTE: Record<BomCategory, QuoteCategory> = {
@@ -141,14 +145,21 @@ export function buildQuoteList(input: BuildListInput): QuoteList {
 
   const cabinets: CabinetGroup[] = [];
   const trim: QuoteListRow[] = [];
+  /** FR-16：真实 box / door SKU 单独成行（不做门板从属）。 */
+  const splitSkus: QuoteListRow[] = [];
 
   for (const line of quote.lineItems) {
     const spec = byModule.get(line.moduleId);
     const bom = bomBy.get(line.moduleId);
+    const sell = spec
+      ? resolveModuleSellUnit(spec, input.codingRules)
+      : undefined;
     const category = bom
       ? BOM_TO_QUOTE[bom.category]
-      : spec && ["filler", "toeKick", "leg", "panel", "crown"].includes(spec.type)
-        ? "trim" : "cabinet";
+      : sell && isStandaloneSellUnit(sell.sellUnit)
+        ? "trim"
+        : spec && ["filler", "toeKick", "leg", "panel", "crown"].includes(spec.type)
+          ? "trim" : "cabinet";
 
     const row: QuoteListRow = {
       code: line.moduleCode,
@@ -160,7 +171,21 @@ export function buildQuoteList(input: BuildListInput): QuoteList {
       ...(bom?.reason ? { note: bom.reason } : {}),
     };
 
-    if (category === "trim") { trim.push(row); continue; }
+    if (category === "trim" || (sell && isStandaloneSellUnit(sell.sellUnit))) {
+      trim.push(row);
+      continue;
+    }
+
+    // 真实 BOX / DOOR SKU：独立可售行，不挂「含在柜体价内」的门板从属
+    if (sell?.sellUnit === "box" || sell?.sellUnit === "door") {
+      splitSkus.push({
+        ...row,
+        note: sell.sellUnit === "box"
+          ? msg(lang, "Cabinet box only (no door)", "仅柜体（不含门）")
+          : msg(lang, "Door / drawer front only", "仅门板/抽屉面"),
+      });
+      continue;
+    }
 
     const face = countFaces(line.moduleCode);
     cabinets.push({
@@ -185,9 +210,11 @@ export function buildQuoteList(input: BuildListInput): QuoteList {
     });
   }
 
-  const subtotals = buildSubtotals(cabinets, trim, doorStyle?.name, lang);
+  // 拆卖 SKU 暂挂在 trim 区之后以独立行呈现——计入 itemsTotal，分类归 cabinet
+  const subtotals = buildSubtotals(cabinets, trim, doorStyle?.name, lang, splitSkus);
   const itemsTotal = (cabinets.reduce((s, g) => s + g.groupTotal, 0)
-    + trim.reduce((s, r) => s + r.lineTotal, 0)) as Money;
+    + trim.reduce((s, r) => s + r.lineTotal, 0)
+    + splitSkus.reduce((s, r) => s + r.lineTotal, 0)) as Money;
 
   const box = (input.boxMaterials ?? []).find((m) => m.id === quote.boxMaterialId);
 
@@ -201,7 +228,9 @@ export function buildQuoteList(input: BuildListInput): QuoteList {
         ...(box.note ? { note: box.note } : {}),
       },
     } : {}),
-    cabinets, trim, subtotals, itemsTotal,
+    cabinets,
+    trim: [...trim, ...splitSkus],
+    subtotals, itemsTotal,
     reconciliationDelta: (itemsTotal - quote.subtotal) as Money,
   };
 }
@@ -217,9 +246,11 @@ function buildSubtotals(
   trim: readonly QuoteListRow[],
   doorStyleName: string | undefined,
   lang: UiLanguage,
+  splitSkus: readonly QuoteListRow[] = [],
 ): CategorySubtotal[] {
   const cabinetBase = cabinets.reduce(
-    (s, g) => s + g.cabinet.lineTotal - g.modifiers.reduce((t, m) => t + m.lineTotal, 0), 0);
+    (s, g) => s + g.cabinet.lineTotal - g.modifiers.reduce((t, m) => t + m.lineTotal, 0), 0)
+    + splitSkus.reduce((s, r) => s + r.lineTotal, 0);
 
   const hardware = cabinets.flatMap((g) => g.modifiers.filter((m) => isHardware(m.code)));
   const accessory = cabinets.flatMap((g) => g.modifiers.filter((m) => !isHardware(m.code)));
@@ -228,7 +259,8 @@ function buildSubtotals(
   const out: CategorySubtotal[] = [
     {
       category: "cabinet", label: categoryLabel("cabinet", lang),
-      itemCount: cabinets.reduce((n, g) => n + g.cabinet.qty, 0),
+      itemCount: cabinets.reduce((n, g) => n + g.cabinet.qty, 0)
+        + splitSkus.reduce((n, r) => n + r.qty, 0),
       amount: cabinetBase as Money,
     },
     {

@@ -46,7 +46,10 @@ export function annotationFor(p: Placement): Annotation | undefined {
     };
   }
   if (p.label === "sink") {
-    return { primary: "Sink", ...(p.moduleCode ? { secondary: p.moduleCode } : {}) };
+    return {
+      primary: p.cabinetNo ? `#${p.cabinetNo} Sink` : "Sink",
+      ...(p.moduleCode ? { secondary: p.moduleCode } : {}),
+    };
   }
   if (p.applianceKind !== undefined && p.moduleCode) {
     // Appliance cabinet: name what it serves; SKU is secondary.
@@ -55,11 +58,16 @@ export function annotationFor(p: Placement): Annotation | undefined {
         ? p.label
         : `${applianceLabelForDrawing(p.applianceKind)} cabinet`;
     return {
-      primary: englishCabinet,
+      primary: p.cabinetNo ? `#${p.cabinetNo} ${englishCabinet}` : englishCabinet,
       secondary: p.moduleCode,
     };
   }
-  if (p.moduleCode) return { primary: p.moduleCode };
+  if (p.moduleCode) {
+    return {
+      primary: p.cabinetNo ? `#${p.cabinetNo}` : p.moduleCode,
+      ...(p.cabinetNo ? { secondary: p.moduleCode } : {}),
+    };
+  }
   if (p.kind === "filler") return undefined;
   // Drop Chinese placement labels from the drawing — use English fallbacks.
   if (p.label) {

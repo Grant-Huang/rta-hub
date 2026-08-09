@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>RTA-Hub · Ops conversation review</title>
+<script src="/ui-i18n.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+         background:#0e1116; color:#e7eaf0; height:100vh; display:flex; flex-direction:column; }
+  header { padding:12px 16px; border-bottom:1px solid #2a3140; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.02em; }
+  header .hint { font-size:11px; color:#8b94a3; }
+  input, select, button { font: inherit; }
+  input, select { background:#171c24; border:1px solid #2a3140; color:inherit; border-radius:8px; padding:7px 10px; }
+  button { background:#2f6fed; border:none; color:#fff; padding:7px 12px; border-radius:8px; cursor:pointer; }
+  button.ghost { background:#262b33; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  main { flex:1; min-height:0; display:grid; grid-template-columns:280px 1fr 1fr; }
+  .col { min-width:0; min-height:0; display:flex; flex-direction:column; border-right:1px solid #2a3140; }
+  .col:last-child { border-right:none; }
+  .col h2 { margin:0; padding:10px 12px; font-size:12px; color:#9aa4b2; font-weight:500; border-bottom:1px solid #2a3140; }
+  .list { flex:1; overflow:auto; padding:8px; }
+  .item { display:block; width:100%; text-align:left; background:none; border:1px solid transparent;
+          border-radius:8px; padding:8px 10px; margin-bottom:4px; color:inherit; cursor:pointer; }
+  .item:hover { background:#171c24; }
+  .item.active { background:#1a2a4a; border-color:#3d6fd8; }
+  .item .t { font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .item .m { font-size:11px; color:#6a7382; margin-top:2px; }
+  .log { flex:1; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .msg { max-width:95%; padding:8px 11px; border-radius:10px; font-size:13px; line-height:1.5; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; background:#2a5bd7; }
+  .msg.assistant { align-self:flex-start; background:#1c2129; }
+  .msg.critic { align-self:flex-start; background:#2b2416; color:#e6d29a; border:1px solid #4a3f22; }
+  .msg.operator { align-self:flex-end; background:#243528; border:1px solid #35543c; }
+  .meta { padding:8px 12px; font-size:11px; color:#8b94a3; border-bottom:1px solid #2a3140; }
+  .composer { display:flex; gap:8px; padding:10px; border-top:1px solid #2a3140; }
+  .composer input { flex:1; }
+  .err { color:#d87b7b; font-size:12px; padding:8px 12px; }
+  .findings { padding:8px 12px; font-size:12px; color:#c6cdd6; border-bottom:1px solid #2a3140; max-height:120px; overflow:auto; }
+  .findings b { color:#d8c37b; }
+</style>
+</head>
+<body>
+<header>
+  <h1 data-i18n="adminReviewH1">Ops conversation review</h1>
+  <span class="hint" data-i18n="adminReviewHint">DesignCritic · not customer-visible · requires X-Admin-Token</span>
+  <input id="token" type="password" placeholder="ADMIN_TOKEN" style="width:160px" />
+  <select id="origin">
+    <option value="" data-i18n="adminFilterAllOrigins">All origins</option>
+    <option value="production">production</option>
+    <option value="simulate">simulate</option>
+    <option value="test">test</option>
+  </select>
+  <input id="runFilter" data-i18n-placeholder="adminFilterRunId" placeholder="Filter by runId" style="width:200px" />
+  <button id="refresh" type="button" data-i18n="adminRefreshList">Refresh list</button>
+  <button id="rerun" class="ghost" type="button" disabled data-i18n="adminRerunCritique">Re-run critique</button>
+  <button type="button" class="ghost" id="langBtn" data-i18n="langToggle" data-i18n-title="langToggleTitle">中文</button>
+  <a href="/admin/trainer" style="color:#9ec0ff;font-size:12px" data-i18n="adminNavTrainer">Trainer</a>
+  <a href="/admin/l1-learn" style="color:#9ec0ff;font-size:12px" data-i18n="adminNavL1">L1 queue</a>
+  <a href="/admin/regression" style="color:#9ec0ff;font-size:12px" data-i18n="adminNavRegression">Regression</a>
+  <a href="/" style="color:#8b94a3;font-size:12px;margin-left:auto" data-i18n="adminNavCustomerUi">Customer UI</a>
+</header>
+<main>
+  <section class="col">
+    <h2 data-i18n="adminConversations">Conversations</h2>
+    <div id="convList" class="list"></div>
+  </section>
+  <section class="col">
+    <h2 data-i18n="adminCustomerTranscript">Customer transcript (read-only)</h2>
+    <div id="custMeta" class="meta" data-i18n="adminSelectConversation">Select a conversation on the left</div>
+    <div id="custLog" class="log"></div>
+  </section>
+  <section class="col">
+    <h2 data-i18n="adminCriticPanel">Expert critique thread</h2>
+    <div id="critMeta" class="meta">—</div>
+    <div id="findings" class="findings" hidden></div>
+    <div id="critLog" class="log"></div>
+    <form id="critForm" class="composer">
+      <input id="critInput" data-i18n-placeholder="adminCriticPlaceholder" placeholder="Ask Critic a follow-up (ops only)" disabled />
+      <button type="submit" disabled data-i18n="send">Send</button>
+    </form>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const t = (...a) => window.RTA_UI.t(...a);
+function applyI18n() {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang());
+  document.title = t("adminReviewTitle");
+  window.RTA_UI.applyDataI18n();
+  $("langBtn").textContent = t("langToggle");
+}
+applyI18n();
+$("langBtn").onclick = () => {
+  window.RTA_UI.setLang(window.RTA_UI.resolveLang() === "zh" ? "en" : "zh");
+  applyI18n();
+  if (state.selectedId) selectConv(state.selectedId).catch(showErr);
+  else refreshList().catch(() => {});
+};
+const state = { conversations: [], selectedId: null, critiques: [], activeCritiqueId: null };
+
+function adminHeaders(json = true) {
+  const h = { "x-admin-token": $("token").value.trim() };
+  if (json) h["content-type"] = "application/json";
+  return h;
+}
+
+async function api(path, init = {}) {
+  const res = await fetch(path, {
+    ...init,
+    headers: { ...adminHeaders(!!init.body), ...(init.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText || String(res.status));
+  return body;
+}
+
+function addMsg(el, role, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + role;
+  d.textContent = text;
+  el.appendChild(d);
+}
+
+async function refreshList() {
+  const origin = $("origin").value;
+  const runId = $("runFilter").value.trim();
+  const q = new URLSearchParams();
+  if (origin) q.set("origin", origin);
+  if (runId) q.set("runId", runId);
+  const body = await api("/api/admin/conversations?" + q.toString());
+  state.conversations = body.conversations || [];
+  const list = $("convList");
+  list.innerHTML = "";
+  for (const c of state.conversations) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "item" + (c.id === state.selectedId ? " active" : "");
+    b.innerHTML = `<span class="t">${esc(c.preview || c.id)}</span>
+      <span class="m">${esc(c.origin || "?")} · ${esc(c.runId || "—")} · ${c.messageCount} msgs</span>`;
+    b.onclick = () => selectConv(c.id);
+    list.appendChild(b);
+  }
+}
+
+async function selectConv(id) {
+  state.selectedId = id;
+  $("rerun").disabled = false;
+  await refreshList();
+  const body = await api("/api/admin/conversations/" + id);
+  const conv = body.conversation;
+  $("custMeta").textContent =
+    `${conv.id} · account ${conv.customerAccountId} · origin ${conv.origin || "production"} · run ${conv.runId || "—"}`;
+  const log = $("custLog");
+  log.innerHTML = "";
+  for (const m of conv.messages || []) addMsg(log, m.role, m.content);
+  state.critiques = body.critiques || [];
+  renderCritiques();
+}
+
+function renderCritiques() {
+  const log = $("critLog");
+  log.innerHTML = "";
+  const findings = $("findings");
+  findings.hidden = true;
+  findings.innerHTML = "";
+  if (!state.critiques.length) {
+    $("critMeta").textContent = t("adminNoCritiqueYet");
+    $("critInput").disabled = true;
+    $("critForm").querySelector("button").disabled = true;
+    state.activeCritiqueId = null;
+    return;
+  }
+  const latest = state.critiques[0];
+  state.activeCritiqueId = latest.id;
+  $("critMeta").textContent =
+    `${latest.id} · ${latest.trigger} · ${latest.status} · ${latest.createdAt}`;
+  if (latest.findings?.length) {
+    findings.hidden = false;
+    findings.innerHTML = latest.findings.map((f) =>
+      `<div><b>[${f.severity}/${f.category}]</b> ${esc(f.title)} — ${esc(f.body)}</div>`).join("");
+  }
+  for (const m of latest.messages || []) addMsg(log, m.role, m.content);
+  $("critInput").disabled = false;
+  $("critForm").querySelector("button").disabled = false;
+}
+
+async function rerun() {
+  if (!state.selectedId) return;
+  await api("/api/admin/conversations/" + state.selectedId + "/critiques", { method: "POST", body: "{}" });
+  await selectConv(state.selectedId);
+}
+
+$("refresh").onclick = () => refreshList().catch(showErr);
+$("rerun").onclick = () => rerun().catch(showErr);
+$("critForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $("critInput").value.trim();
+  if (!text || !state.activeCritiqueId) return;
+  $("critInput").value = "";
+  await api("/api/admin/critiques/" + state.activeCritiqueId + "/messages", {
+    method: "POST",
+    body: JSON.stringify({ text, conversationId: state.selectedId }),
+  });
+  const body = await api("/api/admin/conversations/" + state.selectedId + "/critiques");
+  state.critiques = body.critiques || [];
+  renderCritiques();
+};
+
+function showErr(e) {
+  alert(e.message || String(e));
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+
+$("token").value = localStorage.getItem("rta_admin_token") || "";
+$("token").onchange = () => localStorage.setItem("rta_admin_token", $("token").value.trim());
+if ($("token").value) refreshList().catch(() => {});
+</script>
+</body>
+</html>

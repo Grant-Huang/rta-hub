@@ -52,6 +52,18 @@ export const pilotSpecVersion: ProductSpecVersion = {
   currency: "CAD",
   construction: "framed",
   overlay: "full",
+  codingRules: {
+    usesBoxDoorSuffixes: false,
+    prefixGuide: [
+      { pattern: "^B\\d", meaning: "base cabinet (1 drawer over door when ≤21\")", mapsToRoles: ["doorStorage", "drawerStorage"] },
+      { pattern: "^SB", meaning: "sink base", mapsToRoles: ["sinkBase"] },
+      { pattern: "^W\\d", meaning: "wall cabinet", mapsToRoles: ["doorStorage"] },
+      { pattern: "^3DB|^DB", meaning: "drawer base", mapsToRoles: ["drawerStorage"] },
+      { pattern: "^LSB|^BBC|^BC|^DC", meaning: "lazy susan / blind / diamond corner base", mapsToRoles: ["cornerAccess"] },
+      { pattern: "^CW|^LC|^WBC|^WBBC", meaning: "corner / diamond / L / blind wall", mapsToRoles: ["cornerAccess"] },
+      { pattern: "^WF|^BF|^TK|^EP", meaning: "filler / toe kick / end panel", mapsToRoles: ["trim"] },
+    ],
+  },
   effectiveFrom: NOW,
   publishedAt: NOW,
   publishedBy: "ops@mapleridge.example",
@@ -80,13 +92,23 @@ const MODULE_DEFS: [string, ModuleSpec["type"], number[], number[], number[], st
   ["B24", "base", [24], [34.5], [24], "212.00"],
   ["B30", "base", [30], [34.5], [24], "245.50"],
   ["B36", "base", [36], [34.5], [24], "289.00"],
+  /** 调料拉篮 / 窄功能柜 —— 客户可要求「把 B12 换成调料拉篮」 */
+  ["B09SP", "base", [9], [34.5], [24], "198.00"],
+  /** 垃圾桶拉出柜 */
+  ["BTC18", "base", [18], [34.5], [24], "248.00"],
   ["3DB24", "base", [24], [34.5], [24], "318.00"],
   ["3DB30", "base", [30], [34.5], [24], "356.00"],
   ["2DB30", "base", [30], [34.5], [24], "342.00"],
+  ["2DB24", "base", [24], [34.5], [24], "298.00"],
   ["SB33", "sinkBase", [33], [34.5], [24], "268.00"],
   ["SB36", "sinkBase", [36], [34.5], [24], "284.00"],
-  ["BBC36", "corner", [36], [34.5], [24], "352.00"],
+  // 转角地柜：盲角 BBC42/45；LSB↔DC 同尺寸可互换（33/36）；均左右通装
+  ["BBC42", "corner", [42], [34.5], [24], "352.00"],
+  ["BBC45", "corner", [45], [34.5], [24], "398.00"],
   ["LSB33", "corner", [33], [34.5], [24], "418.00"],
+  ["LSB36", "corner", [36], [34.5], [24], "448.00"],
+  ["DC33", "corner", [33], [34.5], [24], "388.00"],
+  ["DC36", "corner", [36], [34.5], [24], "412.00"],
   // 吊柜（规范：深 12"、高 30/36/42"）
   ["W1230", "wall", [12], [30, 36, 42], [12], "118.00"],
   ["W1530", "wall", [15], [30, 36, 42], [12], "126.00"],
@@ -95,7 +117,15 @@ const MODULE_DEFS: [string, ModuleSpec["type"], number[], number[], number[], st
   ["W3030", "wall", [30], [30, 36, 42], [12], "178.00"],
   ["W3630", "wall", [36], [30, 36, 42], [12], "204.00"],
   ["W3618", "wall", [36], [12, 15, 18], [12], "132.00"],
-  ["CW2430", "corner", [24], [30, 36, 42], [12], "236.00"],
+  // 吊柜转角：CW↔LC 同尺寸可互换（2412/2430/2436/2442）
+  ["CW2412", "corner", [24], [12], [12], "168.00"],
+  ["CW2430", "corner", [24], [30], [12], "236.00"],
+  ["CW2436", "corner", [24], [36], [12], "258.00"],
+  ["CW2442", "corner", [24], [42], [12], "278.00"],
+  ["LC2412", "corner", [24], [12], [12], "178.00"],
+  ["LC2430", "corner", [24], [30], [12], "248.00"],
+  ["LC2436", "corner", [24], [36], [12], "268.00"],
+  ["LC2442", "corner", [24], [42], [12], "288.00"],
   // 冰箱上柜：与冰箱齐深（24"），比普通吊柜矮。不做的话冰箱顶上是个积灰空当。
   // 烤箱高柜用已有的 OC3084（见 PILOT_CAPABILITIES）
   ["RFW3615", "wall", [33, 36, 39], [12, 15, 18], [24], "268.00"],
@@ -147,6 +177,24 @@ const PILOT_CAPABILITIES: Record<string, ModuleSpec["capabilities"]> = {
   OC3084: { roles: ["applianceHousing"], servesAppliance: "wallOven" },
   // 配套柜：排布器按 servesAppliance 找它们，不按型号码前缀猜
   RFW3615: { roles: ["doorStorage"], servesAppliance: "refrigerator" },
+  // 窄功能件：调料拉篮 / 垃圾桶拉出——装箱时不按「凑数窄柜」惩罚
+  B09SP: { roles: ["openDisplay", "doorStorage"] },
+  BTC18: { roles: ["openDisplay", "doorStorage"] },
+  // 转角做法（码宽即占墙宽；左右通装）
+  BBC42: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "blind" },
+  BBC45: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "blind" },
+  LSB33: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "lazySusan" },
+  LSB36: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "lazySusan" },
+  DC33: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "diagonal" },
+  DC36: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "diagonal" },
+  CW2412: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "diagonal" },
+  CW2430: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "diagonal" },
+  CW2436: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "diagonal" },
+  CW2442: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "diagonal" },
+  LC2412: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "lShape" },
+  LC2430: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "lShape" },
+  LC2436: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "lShape" },
+  LC2442: { roles: ["cornerAccess", "doorStorage"], cornerStyle: "lShape" },
 };
 
 /**
@@ -158,6 +206,14 @@ const PILOT_CAPABILITIES: Record<string, ModuleSpec["capabilities"]> = {
  */
 const PILOT_FACES: Record<string, string> = {
   RFW3615: "F2_DOUBLE_DOOR",
+  B09SP: "F1_SINGLE_DOOR",
+  BTC18: "F1_SINGLE_DOOR",
+  "2DB24": "F6_DRAWER_STACK",
+  // L 形转角吊柜：迎面两翼，正视图按单门示意
+  LC2412: "F1_SINGLE_DOOR",
+  LC2430: "F1_SINGLE_DOOR",
+  LC2436: "F1_SINGLE_DOOR",
+  LC2442: "F1_SINGLE_DOOR",
 };
 
 export const pilotModules: ModuleSpec[] = MODULE_DEFS.map(([code, type, w, h, d]) => {
@@ -314,6 +370,15 @@ export const demoAccounts: CustomerAccount[] = [
     id: "ca_demo_trade", accountType: "trade",
     email: "builder@example.com", displayName: "Riverside Builders", province: "ON",
     companyName: "Riverside Builders Ltd", subscriptionStatus: "active",
+    consentRecords: [{ termsVersion: "2026-01", consentedAt: NOW, channel: "web_signup" }],
+  },
+  {
+    id: "ca_demo_admin",
+    accountType: "consumer",
+    email: "ops@example.com",
+    displayName: "Platform Ops",
+    province: "ON",
+    platformRoles: ["platform_admin"],
     consentRecords: [{ termsVersion: "2026-01", consentedAt: NOW, channel: "web_signup" }],
   },
 ];

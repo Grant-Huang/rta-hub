@@ -5,9 +5,15 @@
  * 洗碗机离水槽太远意味着每次都要滴一路水。它们与「省钱好装」是不同维度的要求，
  * 不能靠目标函数里的权重来平衡——权重再低也可能被便宜方案压过去。
  *
- * ⚠️ **数值来源**：以下净空取自北美 NKBA（National Kitchen & Bath Association）
- * 厨房规划指南的常见表述。与税率同样处理：**这是种子数据，上线前必须核对
- * 现行版本**（见 PRE_LAUNCH_CHECKLIST）。数值集中在此处，改数值不用改逻辑。
+ * ⚠️ **数值来源**：北美 NKBA *Kitchen Planning Guidelines with Access Standards*
+ * （公开 PDF：https://kb.nkba.org/uploads/2022/05/Kitchen-Planning-Guidelines.pdf ）。
+ * 台账与核实记录见 `docs/LAUNCH_BLOCKERS.md` A6。数值集中在此处，改数值不用改逻辑。
+ *
+ * 对照摘要（公开版 Recommended；非付费原书页码）：
+ *   - 水槽落台 24"/18" · 灶具落台 15"/12" · 冰箱把手侧 15"
+ *   - 洗碗机距水槽 ≤36" · 洗碗机侧站立 ≥21" · 连续备餐 ≥36"
+ *   - 通行过道 ≥36"（blocking）；工作过道建议 ≥42"（advisory，见 plan-model AISLE）
+ *   - 工作三角单边 4–9 ft、总和 ≤26 ft
  *
  * ## 语言
  *
@@ -22,25 +28,28 @@ import {
   type KitchenPlan, type PlacedRun, type Rect,
 } from "./plan-model.js";
 
-/** NKBA 净空要求（英寸）。 */
+/**
+ * NKBA 净空要求（英寸）。
+ * 核实：2026-08-08 对照公开 Kitchen Planning Guidelines PDF（见 LAUNCH_BLOCKERS A6）。
+ */
 export const CLEARANCE = {
-  /** 水槽两侧台面工作区：一侧 ≥24"，另一侧 ≥18"。 */
+  /** Cleanup/Prep Sink Landing：一侧 ≥24"，另一侧 ≥18"（NKBA Recommended）。 */
   sinkLandingPrimary: 24,
   sinkLandingSecondary: 18,
-  /** 灶具两侧落台区：一侧 ≥15"，另一侧 ≥12"。**安全要求**（放热锅）。 */
+  /** Cooking Surface Landing：一侧 ≥15"，另一侧 ≥12"。**安全项**（放热锅）。 */
   cooktopLandingPrimary: 15,
   cooktopLandingSecondary: 12,
-  /** 冰箱把手侧落台区 ≥15"。 */
+  /** Refrigerator Landing：把手侧 ≥15"（或对开任一侧 15"）。 */
   refrigeratorLanding: 15,
-  /** 微波炉落台区 ≥15"。 */
+  /** Microwave Landing ≥15"（advisory）。 */
   microwaveLanding: 15,
-  /** 洗碗机边缘距水槽最近边 ≤36"。 */
+  /** Dishwasher Placement：主洗碗最近边距水槽最近边 ≤36"。 */
   dishwasherToSinkMax: 36,
   /** 洗碗机一侧站立空间 ≥21"。 */
   dishwasherStanding: 21,
-  /** 连续备餐台面至少一段 ≥36"。 */
+  /** Preparation/Work Area：连续备餐台面至少一段 ≥36"。 */
   continuousPrepSurface: 36,
-  /** 工作三角单边范围与总和（英尺 → 英寸）。 */
+  /** Work Triangle：单边 4–9 ft、总和 ≤26 ft（advisory）。 */
   workTriangleLegMin: 4 * 12,
   workTriangleLegMax: 9 * 12,
   workTriangleTotalMax: 26 * 12,
@@ -56,7 +65,8 @@ export type ErgonomicCode =
   | "WORK_TRIANGLE"
   | "UNREACHABLE_BLIND_CORNER"
   /** 岛台/半岛与对面柜列之间的过道太窄。 */
-  | "AISLE_TOO_NARROW";
+  | "AISLE_TOO_NARROW"
+  | "AISLE_TOO_WIDE";
 
 export interface ErgonomicViolation {
   code: ErgonomicCode;
@@ -257,7 +267,9 @@ export function checkErgonomics(input: ErgonomicsInput): ErgonomicViolation[] {
   // ── 盲角可达性 ──
   for (const p of mine) {
     const code = p.moduleCode?.toUpperCase() ?? "";
-    if (code.startsWith("BBC") || code.startsWith("WBC") || code.startsWith("WBBC")) {
+    const isBlind = code.startsWith("BBC") || code.startsWith("WBC") || code.startsWith("WBBC")
+      || p.faceTemplateId === "F10_BLIND_CORNER";
+    if (isBlind) {
       violations.push({
         code: "UNREACHABLE_BLIND_CORNER", severity: "advisory", wallRunId: run.id,
         message: msg(lang,
@@ -401,6 +413,15 @@ export function checkAisles(
               ` (recommended ≥${AISLE.work}") — opposite doors will bump when you bend to open them.`,
             `${island.run.label}与${other.run.label}之间的过道 ${round(gap)}"，` +
               `低于建议的 ${AISLE.work}"——弯腰开下面的柜门时会顶到对面。`),
+        });
+      } else if (gap > AISLE.maxComfort) {
+        violations.push({
+          code: "AISLE_TOO_WIDE", severity: "advisory", wallRunId: island.run.id,
+          message: msg(language,
+            `Aisle between ${island.run.label} and ${other.run.label} is ${round(gap)}"` +
+              ` (comfort max ~${AISLE.maxComfort}") — island feels too far from the run; enlarge the island or pull it closer.`,
+            `${island.run.label}与${other.run.label}之间的过道 ${round(gap)}"，` +
+              `超过舒适上限约 ${AISLE.maxComfort}"——岛台离主柜列太远，建议加大岛台或拉近。`),
         });
       }
     }

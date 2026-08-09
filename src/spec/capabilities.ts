@@ -68,6 +68,38 @@ export interface ModuleCapabilities {
    * 多一包连接件，而这家根本不卖那两个 SKU。
    */
   monolithic?: boolean;
+  /**
+   * 转角做法。与 `domain/types.ModuleSpec.capabilities` 同源。
+   */
+  cornerStyle?: "lazySusan" | "blind" | "diagonal" | "lShape";
+  /** 沿墙占用（盲角虚位）；缺省为箱体宽。 */
+  cornerOccupyInches?: number;
+}
+
+export type CornerStyle = NonNullable<ModuleCapabilities["cornerStyle"]>;
+
+/** 读取转角做法：声明优先，再按脸型兜底。 */
+export function cornerStyleOf(spec: ModuleSpec): CornerStyle | undefined {
+  const declared = capabilitiesFor(spec).capabilities.cornerStyle;
+  if (declared) return declared;
+  const face = spec.faceTemplateId;
+  if (face === "F10_BLIND_CORNER") return "blind";
+  if (face === "F9_DIAGONAL_CORNER") {
+    // 同斜切脸：LSB 懒人转盘、DC 钻石地柜、CW 钻石吊柜
+    if (/^DC/i.test(spec.code)) return "diagonal";
+    if (/^LSB/i.test(spec.code)) return "lazySusan";
+    if (/^(CW|WDC|EWC|LWC)/i.test(spec.code)) return "diagonal";
+    const d = spec.depthOptions[0] ?? 24;
+    return d >= 18 ? "lazySusan" : "diagonal";
+  }
+  return undefined;
+}
+
+/** 沿墙装箱占用宽（盲角用虚拟尺寸）。 */
+export function cornerOccupyWidth(spec: ModuleSpec, boxWidth: number): number {
+  const occ = capabilitiesFor(spec).capabilities.cornerOccupyInches;
+  if (occ !== undefined && occ >= boxWidth) return occ;
+  return boxWidth;
 }
 
 /**

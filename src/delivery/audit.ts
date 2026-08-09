@@ -65,12 +65,14 @@ export type AuditCode =
   | "GEOMETRY"              // 柜体超墙 / 同一段墙内重叠
   | "INTERFERENCE"          // 跨墙段干涉：两段墙的柜子占同一块地方
   | "DOOR_CLEARANCE"        // 门洞旁没留出台面外伸的距离
+  | "TALL_OPENING"          // 高柜家电压进门洞/窗洞
   | "PLAN_NOTE"             // 平面连不起来却没有如实标注
   | "UNDISCLOSED_ASSUMPTION"// 推定值没有在交付物里披露
   | "UNDISCLOSED_PRODUCT_SCOPE" // 报价单没写明这份价对应的是什么产品
   | "STAGE"                 // 这个阶段不该出这份东西
   | "UNAPPLIED_PREFERENCE"  // 客户的选择没能全部落实
-  | "AESTHETICS";           // 美观分偏低
+  | "AESTHETICS"           // 美观分偏低
+  | "APPLIANCE_FIT";       // 家电在现有墙长上放不下
 
 export interface AuditFinding {
   code: AuditCode;
@@ -157,6 +159,7 @@ const RULE_BY_ERGONOMIC: Record<ErgonomicCode, SanityRuleId> = {
   DISHWASHER_TOO_FAR: "SR-E4",
   DISHWASHER_STANDING: "SR-E4",
   AISLE_TOO_NARROW: "SR-E5",
+  AISLE_TOO_WIDE: "SR-E5",
   WORK_TRIANGLE: "SR-E6",
   UNREACHABLE_BLIND_CORNER: "SR-E7",
   NO_CONTINUOUS_PREP: "SR-E8",
@@ -223,9 +226,26 @@ export function auditDeliverable(input: AuditInput): AuditReport {
       ran("DOOR_CLEARANCE", "SR-G4");
       for (const g of doorClearanceProblems(input.layout.placements, input.wallRuns, lang)) add(g);
 
+      // ── 高柜家电不得压门洞/窗洞（SR-G6）──
+      ran("TALL_OPENING", "SR-G6");
+      for (const g of tallApplianceOpeningProblems(input.layout.placements, input.wallRuns, lang)) add(g);
+
       // ── 平面连不起来时要标注（SR-V4）──
       ran("PLAN_NOTE", "SR-V4");
       for (const g of planNoteProblems(input.wallRuns, input.customerFacingText ?? "", lang)) add(g);
+    }
+
+    // ── 家电放不下：不得交付俯视图/四视图/报价 ──
+    ran("APPLIANCE_FIT", "SR-G1");
+    for (const w of input.layout.warnings) {
+      if (w.code !== "APPLIANCE_NO_ROOM") continue;
+      add({
+        code: "APPLIANCE_FIT",
+        rule: "SR-G1",
+        severity: "blocking",
+        message: w.message,
+        ...(w.wallRunId ? { wallRunId: w.wallRunId } : {}),
+      });
     }
 
     // ── 美观：不拦，但低到一定程度要让客户知道 ──
@@ -551,6 +571,60 @@ function doorClearanceProblems(
 }
 
 /**
+ * 高柜家电不得压进门洞净空或窗洞（SR-G6）。
+ *
+ * SR-G4 刻意跳过 `kind === "appliance"`（客户自带的洞口没有我们的台面外伸语义）；
+ * 但冰箱/壁炉式烤箱是满高箱体——压窗或卡门洞在现场装不进去。排布层应已避开，
+ * 这里是 regenerate / 手工改位后的出口复核。
+ */
+function tallApplianceOpeningProblems(
+  placements: readonly Placement[],
+  runs: readonly WallRun[],
+  lang: UiLanguage,
+): AuditFinding[] {
+  const out: AuditFinding[] = [];
+  const EPS = 0.01;
+  const tallKinds = new Set(["refrigerator", "wallOven"]);
+
+  for (const run of runs) {
+    const openings = run.features.filter((f) => f.kind === "door" || f.kind === "window");
+    if (openings.length === 0) continue;
+
+    for (const p of placements) {
+      if (p.wallRunId !== run.id) continue;
+      if (p.kind !== "appliance" || !p.applianceKind || !tallKinds.has(p.applianceKind)) continue;
+
+      const left = p.x;
+      const right = p.x + p.width;
+
+      for (const f of openings) {
+        const span = f.kind === "door"
+          ? doorSpan(f, "base")
+          : { x: f.offset, width: Math.max(f.width, 1) };
+        const openLeft = span.x;
+        const openRight = span.x + span.width;
+        if (right <= openLeft + EPS || left >= openRight - EPS) continue;
+        const what = f.kind === "door"
+          ? msg(lang, "doorway", "门洞")
+          : msg(lang, "window", "窗洞");
+        out.push({
+          code: "TALL_OPENING", rule: "SR-G6", severity: "blocking", wallRunId: run.id,
+          message: msg(lang,
+            `${run.label}'s ${nameOf(p, lang)} overlaps the ${what} ` +
+              `(appliance ${round(left)}"–${round(right)}", opening ${round(openLeft)}"–${round(openRight)}"). ` +
+              `Move the tall appliance clear of the opening.`,
+            `${run.label}上的${nameOf(p, lang)}与${what}干涉` +
+              `（家电 ${round(left)}"–${round(right)}"，洞口 ${round(openLeft)}"–${round(openRight)}"）。` +
+              `请把高柜家电移出洞口范围。`),
+        });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * 平面拼不起来时必须如实标注（SR-V4）。
  *
  * 推不出方位就不假装知道——但也不能不说。图上那句「示意排列」必须真的出现在
@@ -710,5 +784,7 @@ export function codeLabel(
     STAGE: msg(lang, "Stage match", "阶段匹配"),
     UNAPPLIED_PREFERENCE: msg(lang, "Preference applied", "偏好落实"),
     AESTHETICS: msg(lang, "Layout score", "排布评分"),
+    TALL_OPENING: msg(lang, "Tall appliance vs openings", "高柜与洞口"),
+    APPLIANCE_FIT: msg(lang, "Appliance fit on walls", "家电墙长适配"),
   }[code];
 }

@@ -22,6 +22,10 @@ import { sortBoxMaterials } from "./carcass.js";
 import { parseCsvRows, parseNumberList, type CsvRow } from "./csv.js";
 import { matchWithOverrides, type CompanyOverrides } from "../render/templates.js";
 import { emptyBundle, type SpecBundle } from "./bundle.js";
+import {
+  priceGroupLooksLikeBoxDoorSuffix, resolveSellUnit,
+} from "./sku-semantics.js";
+import type { SellUnit } from "../domain/types.js";
 
 export interface ImportSources {
   modules: string;
@@ -143,6 +147,14 @@ export function importSpecTemplates(
       displayName: pick(row, "displayName", "name") || code,
       rank: Number(pick(row, "rank")) || pgByCode.size + 1,
     };
+    if (priceGroupLooksLikeBoxDoorSuffix(code)) {
+      unresolved.push({
+        sheet: "priceGroups", rowNumber: i + 2, field: "code",
+        reason: `PriceGroup "${code}" masquerades as BOX/DOOR sell-unit suffix (FR-16); ` +
+          `use real module SKUs instead`,
+        raw: code,
+      });
+    }
     pgByCode.set(code.toUpperCase(), pg);
     bundle.priceGroups.push(pg);
   });
@@ -285,9 +297,33 @@ export function importSpecTemplates(
       ? (assemblyRaw.split(/[|;,]/).map((s) => s.trim()).filter((s) => s === "RTA" || s === "assembled") as ModuleSpec["assemblyOptions"])
       : (["RTA"] as ModuleSpec["assemblyOptions"]);
 
+    const sellRaw = pick(row, "sellUnit", "sell_unit").toLowerCase();
+    const declaredSell = (["box", "door", "combo", "standalone"] as const)
+      .find((s) => s === sellRaw) as SellUnit | undefined;
+    if (sellRaw && !declaredSell) {
+      unresolved.push({
+        sheet: "modules", rowNumber, field: "sellUnit",
+        reason: `Unrecognized sellUnit "${sellRaw}"`, raw: sellRaw,
+      });
+    }
+    const sellResolved = resolveSellUnit({
+      code, type, declared: declaredSell ?? previous?.sellUnit,
+    });
+    // 推断结果写入规格；非声明的 box/door/组合件启发式进待确认，默认 combo / trim standalone 不挡发布
+    if (!declaredSell && !previous?.sellUnit
+      && (sellResolved.sellUnit === "box" || sellResolved.sellUnit === "door"
+        || sellResolved.reason.includes("material + finish"))) {
+      unresolved.push({
+        sheet: "modules", rowNumber, field: "sellUnit",
+        reason: `sellUnit inferred as ${sellResolved.sellUnit} (${sellResolved.reason}); confirm or declare`,
+        raw: code,
+      });
+    }
+
     const mod: ModuleSpec = {
       ...base, id: `m_${slug(code)}`, code: code.toUpperCase(), type,
       widthOptions: widths, heightOptions: heights, depthOptions: depths,
+      sellUnit: sellResolved.sellUnit,
       // 判不出来就留空，别塞一个占位值——空是"还不知道"，占位值是"我们猜了一个"，
       // 而占位值会一路画到正视图上，谁也看不出那是猜的
       ...(faceTemplateId ? { faceTemplateId } : {}),

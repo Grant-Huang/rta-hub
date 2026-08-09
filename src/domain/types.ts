@@ -30,6 +30,9 @@ export type Modifier =
 
 export type AccountType = "consumer" | "trade";
 
+/** 平台侧角色（与 accountType 正交）；用于主 UI /me 运营入口显隐。 */
+export type PlatformRole = "platform_admin";
+
 export interface ConsentRecord {
   termsVersion: string;
   consentedAt: Timestamp;
@@ -45,6 +48,8 @@ export interface CustomerAccount {
   province: Province;
   companyName?: string;
   subscriptionStatus?: "none" | "trial" | "active";
+  /** 平台运营角色；缺省无。含 platform_admin 时可进管理台/训练入口。 */
+  platformRoles?: PlatformRole[];
   consentRecords: ConsentRecord[];
 }
 
@@ -56,6 +61,114 @@ export interface ChatMessage {
   at: Timestamp;
 }
 
+/** FR-23：厂商协作子线程消息（与主轨 ChatMessage 分栏）。 */
+export type EngagementMessageRole = "user" | "assistant" | "company_human" | "system";
+
+/**
+ * 子轨说话人（与 role 兼容层）：
+ * - platform = 系统助手（流程/交接）
+ * - company_agent = 厂商 Agent
+ * - company_human = 厂商员工
+ * - user = 客户
+ */
+export type EngagementSpeaker =
+  | "user"
+  | "platform"
+  | "company_agent"
+  | "company_human";
+
+export interface EngagementMessage {
+  role: EngagementMessageRole;
+  content: string;
+  at: Timestamp;
+  /** 可选；缺省时由 role 推断（assistant→company_agent，system→platform）。 */
+  speaker?: EngagementSpeaker;
+}
+
+export type CompanyEngagementStatus = "active" | "closed";
+
+/** 交接包中的一条已确认事实（供 Agent 注入与开线复述）。 */
+export interface HandoffConfirmedFact {
+  key: string;
+  scope: "shared" | "company";
+  label: string;
+  value: string;
+  display: string;
+  source: "main_confirmed" | "pulled" | "user_corrected";
+}
+
+/** 开线时写入的项目快照；厂商可见，不是主轨回放。 */
+export interface CompanyEngagementHandoff {
+  at: Timestamp;
+  /** 交接修订号；开线=1，每次 pull 共享态 +1。 */
+  revision: number;
+  sharedSummary: string;
+  /**
+   * 与父会话对齐的需求原文（供 promote/pull 同步比较）。
+   * **不要**直接展示给客户或整段塞进 Agent——展示/复述用 confirmedFacts + requirementsDigest。
+   */
+  designRequirements: string;
+  /** 从 Design Basis brief 提炼的短摘要（给人与 Agent 看）。 */
+  requirementsDigest?: string;
+  sharedPreferences?: SharedPreferences;
+  /** 开线时从父 byCompany[本厂] 冻结的厂专用选型。 */
+  companyPreferences?: CompanyPreferences;
+  /** 结构化确认清单（与主轨 brief 关键项对齐；Agent 必读）。 */
+  confirmedFacts?: HandoffConfirmedFact[];
+  floorPlanId?: string;
+}
+
+/**
+ * 客户项目下的厂商协作永久分支（FR-23）。
+ * 同一 conversationId+companyId 至多一条 active。
+ */
+export interface CompanyEngagement {
+  id: string;
+  conversationId: string;
+  companyId: string;
+  status: CompanyEngagementStatus;
+  createdAt: Timestamp;
+  closedAt?: Timestamp;
+  /** 客户左栏二级标题，如 "@Oppein Canada"。 */
+  customerTitle: string;
+  handoff: CompanyEngagementHandoff;
+  /** 子轨共享工作副本；可与父 preferences.shared 不一致。 */
+  sharedWorking?: {
+    designRequirements?: string;
+    preferences?: SharedPreferences;
+  };
+  /**
+   * 厂商员工接管后为 true：客户发言不再自动调厂商 Agent。
+   * 员工明确交还或客户侧重置时可清。
+   */
+  agentPaused?: boolean;
+  /** 客户对开线/ pull 复述的确认时间（可选）。 */
+  handoffAckAt?: Timestamp;
+  messages: EngagementMessage[];
+}
+
+/** 会话来源——生产 / 端到端模拟 / 集成测试（FR-21）。 */
+export type SessionOrigin = "production" | "simulate" | "test";
+
+/** 客户会话生命周期；缺省按 active（兼容旧数据）。 */
+export type ConversationStatus = "active" | "archived";
+
+/**
+ * 一次可回放的系统运行（生产长驻、simulate 一次、test 一次）。
+ * 索引落在各 dataDir 的 `session-runs.json`，供运营跨会话发现。
+ */
+export interface SessionRun {
+  id: string;
+  origin: SessionOrigin;
+  dataDir: string;
+  startedAt: Timestamp;
+  endedAt?: Timestamp;
+  conversationIds: string[];
+  exitCode?: number;
+  scenarioSource?: string;
+  note?: string;
+}
+
 export interface Conversation {
   id: string;
   customerAccountId: string;
@@ -63,6 +176,19 @@ export interface Conversation {
   designRequirements: string;
   perCompanyThreads: { companyId: string; messages: ChatMessage[] }[];
   createdAt: Timestamp;
+  /** 会话来源；缺省按 production 对待（兼容旧数据）。 */
+  origin?: SessionOrigin;
+  /** 所属 SessionRun.id */
+  runId?: string;
+  /** 如场景名、测试用例名 */
+  tags?: string[];
+  /**
+   * active = 可聊；archived = 只读，需恢复后才能写。
+   * 缺省视为 active。
+   */
+  status?: ConversationStatus;
+  /** 最近一次进入 archived 的时间；恢复后清除。 */
+  archivedAt?: Timestamp;
   /**
    * 客户对价格与偏好的选择结果（`preferences/questions.ts`）。
    *
@@ -75,6 +201,74 @@ export interface Conversation {
     shared?: SharedPreferences;
     byCompany?: Record<string, CompanyPreferences>;
   };
+  /** FR-23：按厂协作永久分支（与 perCompanyThreads Agent 旁路分轨）。 */
+  companyEngagements?: CompanyEngagement[];
+}
+
+/** 运营侧专家评审气泡——不进客户 Conversation.messages（FR-21 / 1A）。 */
+export interface CritiqueMessage {
+  role: "critic" | "operator";
+  content: string;
+  at: Timestamp;
+}
+
+export type CritiqueSeverity = "major" | "minor" | "nit";
+export type CritiqueCategory =
+  | "process"
+  | "design_output"
+  | "dialogue"
+  | "ergonomics"
+  | "completeness"
+  | "explain";
+
+export interface CritiqueFinding {
+  id: string;
+  severity: CritiqueSeverity;
+  category: CritiqueCategory;
+  target: {
+    kind: "message" | "floorPlan" | "layout" | "quote" | "stage" | "session";
+    ref?: string;
+  };
+  title: string;
+  body: string;
+  suggestedFix?: string;
+}
+
+export type CritiqueTrigger =
+  | "planView"
+  | "fourViews"
+  | "quote"
+  | "stageAdvance"
+  | "sessionEnd"
+  | "manual";
+
+export type CritiqueStatus = "open" | "acked" | "promoted_to_trainer";
+
+/** DesignCritic 一轮评审；只写此集合，不改客户数据。 */
+export interface CritiqueReview {
+  id: string;
+  conversationId: string;
+  runId?: string;
+  trigger: CritiqueTrigger;
+  summary: string;
+  findings: CritiqueFinding[];
+  messages: CritiqueMessage[];
+  auditSnapshotIds?: string[];
+  createdAt: Timestamp;
+  status: CritiqueStatus;
+}
+
+/** FR-14 交付审核结果旁路落盘，供 Critic 引用（不替代闸门响应）。 */
+export interface DeliveryAuditRecord {
+  id: string;
+  conversationId: string;
+  deliverable: "planView" | "fourViews" | "quoteList";
+  ok: boolean;
+  findings: { code: string; severity: string; message: string; rule?: string }[];
+  checked: string[];
+  at: Timestamp;
+  designLayoutId?: string;
+  quoteId?: string;
 }
 
 /** 跨公司通用的偏好——换公司不失效。 */
@@ -84,10 +278,33 @@ export interface SharedPreferences {
   tradeoff?: "price" | "quality" | "lookAndFeel";
   assembly?: AssemblyOption;
   /**
-   * 客户语言偏好。默认英文；只有客户明确要求才切到中文。
+   * 客户语言偏好。默认英文；客户用中文交流或明确要求时切中文。
    * 图纸上的文字一律英文，不受此字段影响。
    */
   language?: "en" | "zh";
+  /**
+   * 排布层提示（修订话术落地）。不进价格矩阵，只影响装箱/岛台尺寸。
+   */
+  layoutHints?: {
+    /** 尽量排进调料拉篮（窄功能柜） */
+    includeSpicePullout?: boolean;
+    /** 尽量排进垃圾桶拉出柜 */
+    includeTrashPullout?: boolean;
+    /** 岛台加长（英寸），受过道净空约束 */
+    enlargeIslandInches?: number;
+    /** 客户点名的柜号（如「把 #12 和 #13 改成一样宽」） */
+    matchCabinetNos?: number[];
+    /** 「把 #N 改成双抽」 */
+    doubleDrawerNos?: number[];
+    /** 调料拉篮优先落在柜号（意图化修订，优先于 near） */
+    spiceCabinetNo?: number;
+    /** 调料拉篮靠近的家电/水槽（无柜号时按空间关系选 base 柜） */
+    spiceNear?: "range" | "cooktop" | "sink";
+    /** 垃圾桶柜优先落在柜号 */
+    trashCabinetNo?: number;
+    /** 垃圾桶柜靠近的参照 */
+    trashNear?: "range" | "cooktop" | "sink";
+  };
 }
 
 /** 绑定到某家公司规格库的偏好——实体 id 只在该公司下有意义。 */
@@ -138,6 +355,38 @@ export interface CabinetCompany {
 
 export type SpecVersionStatus = "draft" | "published" | "archived";
 
+/**
+ * 售卖单元（FR-16 / L0）——「卖的是什么」，与柜型前缀无关。
+ * 详见 docs/KNOWLEDGE_LAYERS.md、docs/product-codes.md。
+ */
+export type SellUnit = "box" | "door" | "combo" | "standalone";
+
+/**
+ * 厂商柜型编码规则（FR-16 / L1）——按 companyId 隔离，禁止写入总控。
+ */
+export interface CompanyCodingRules {
+  /** 人类可读：本公司柜型前缀怎么读 */
+  prefixGuide: {
+    pattern: string;
+    meaning: string;
+    /** 可选：导入时建议的能力角色，仍须确认 */
+    mapsToRoles?: (
+      | "doorStorage" | "drawerStorage" | "sinkBase" | "cooktopBase"
+      | "applianceHousing" | "cornerAccess" | "openDisplay" | "trim"
+    )[];
+  }[];
+  /** 本公司是否使用系统后缀拆分（-BOX / -DOOR） */
+  usesBoxDoorSuffixes: boolean;
+  /** 材质段 / 花色段 token 表（本公司字典） */
+  materialTokens?: Record<string, string>;
+  finishTokens?: Record<string, string>;
+}
+
+/** 可选公司手册——仅注入本公司 Agent，不能覆盖矩阵价格。 */
+export interface CompanyHandbook {
+  text: string;
+}
+
 export interface ProductSpecVersion {
   id: string;
   companyId: string;
@@ -155,6 +404,10 @@ export interface ProductSpecVersion {
    * 这是两份不同的清单，不是同一份清单的两种叫法。
    */
   toeKickSystem?: ToeKickSystem;
+  /** FR-16：本公司柜型前缀 / 后缀策略 / token 表 */
+  codingRules?: CompanyCodingRules;
+  /** FR-16：可选，仅注入本公司 Agent */
+  handbook?: CompanyHandbook;
   effectiveFrom: Timestamp;
   effectiveTo?: Timestamp;
   publishedAt?: Timestamp;
@@ -187,9 +440,14 @@ export interface ModuleSpec {
   id: string;
   specVersionId: string;
   companyId: string;
-  /** 型号码，如 B12 / W2430 / SB36。 */
+  /** 型号码，如 B12 / W2430 / SB36 / B12-PLY-BOX。 */
   code: string;
   type: ModuleType;
+  /**
+   * FR-16 售卖单元。缺省由系统启发式推断（见 `spec/sku-semantics.ts`）。
+   * 规格声明优先于启发式。
+   */
+  sellUnit?: SellUnit;
   /** 离散尺寸候选集，单位英寸。FR-8 校验 2 会拒绝不在集合内的尺寸。 */
   widthOptions: number[];
   heightOptions: number[];
@@ -234,6 +492,20 @@ export interface ModuleSpec {
       | "rangeHood" | "microwave" | "dishwasher";
     stacking?: { asLower: boolean; asUpper: boolean };
     monolithic?: boolean;
+    /**
+     * 转角柜做法（角上选型用，不靠码前缀猜）。
+     * - blind：盲角（BBC42 / BBC45，左右通装，码宽=占墙宽）
+     * - lazySusan：懒人转盘（LSB）
+     * - diagonal：钻石/斜切（地柜 DC、吊柜 CW）；与同尺寸 LSB / LC 可互换
+     * - lShape：L 形转角迎面（LC）；与同尺寸 CW 可互换
+     * - lazySusan：懒人转盘（LSB）；与同尺寸 DC 可互换
+     */
+    cornerStyle?: "lazySusan" | "blind" | "diagonal" | "lShape";
+    /**
+     * 沿墙占用（英寸）。缺省等于选用的 widthOptions 箱体宽。
+     * 仅当占墙与箱体不一致时才声明（本试点 BBC 码宽即占墙宽，无需另写）。
+     */
+    cornerOccupyInches?: number;
   };
 }
 

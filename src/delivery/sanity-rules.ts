@@ -33,7 +33,7 @@
 /** 规则编号。与 `docs/SANITY_RULES.md` 的小节号一一对应。 */
 export type SanityRuleId =
   // 几何与干涉
-  | "SR-G1" | "SR-G2" | "SR-G3" | "SR-G4" | "SR-G5"
+  | "SR-G1" | "SR-G2" | "SR-G3" | "SR-G4" | "SR-G5" | "SR-G6"
   // 人体工程与安全
   | "SR-E1" | "SR-E2" | "SR-E3" | "SR-E4" | "SR-E5" | "SR-E6" | "SR-E7" | "SR-E8"
   // 物料与规格
@@ -109,6 +109,13 @@ export const SANITY_RULES: readonly SanityRule[] = [
     why: "Without a corner filler, doors and drawers on the yielding side hit the adjacent run's doors and pulls as soon as they open—"
       + "each cabinet \"stays within its wall,\" but together they cannot open.",
     enforcedBy: "layout", implementedIn: "layout/plan-model.ts buildKitchenPlan",
+  },
+  {
+    id: "SR-G6", title: "Tall appliances clear door and window openings", severity: "blocking",
+    criterion: "Refrigerator and wall-oven openings must not overlap a door clear span (same as SR-G4) or a window opening on the same wall run.",
+    why: "A fridge under a window or into a doorway looks fine in a 2D base-only sketch but is unbuildable: "
+      + "the box blocks the sash or the door swing. Layout placement must refuse the spot; audit is the exit check.",
+    enforcedBy: "audit", implementedIn: "delivery/audit.ts tallApplianceOpeningProblems",
   },
 
   // ── 人体工程与安全（NKBA）──────────────────────────────────────────────

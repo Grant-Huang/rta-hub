@@ -153,14 +153,23 @@ export function renderPlanView(
           { double: p.width >= 30 }));
       }
 
-      // 开门方向弧线——客户判断"冰箱门开了会不会打到抽屉"靠的就是这个
+      // 开门弧线：铰链在柜面左右角，门扇朝室内扫。
+      // ≥24" 按双门各画半宽弧，避免整柜宽虚线与单扇门对不上。
       if (p.kind === "cabinet" && p.width >= 9) {
-        const radius = Math.min(p.width, depth) * 0.85;
-        const hinge = at(p.x, depth);
+        const leaf = p.width >= 24 ? p.width / 2 : p.width;
+        const radius = Math.min(leaf, depth) * 0.85;
+        const leftHinge = at(p.x, depth);
         canvas.add(swingArc(
-          { x: px(hinge.x), y: py(hinge.y) },
+          { x: px(leftHinge.x), y: py(leftHinge.y) },
           { dx: d.dx, dy: d.dy }, { dx: n.dx, dy: n.dy },
           canvas.len(radius)));
+        if (p.width >= 24) {
+          const rightHinge = at(p.x + p.width, depth);
+          canvas.add(swingArc(
+            { x: px(rightHinge.x), y: py(rightHinge.y) },
+            { dx: -d.dx, dy: -d.dy }, { dx: n.dx, dy: n.dy },
+            canvas.len(radius)));
+        }
       }
 
       if (style.showLabels) drawLabel(canvas, p, at, depth, px, py);

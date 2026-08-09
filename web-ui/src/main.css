@@ -1,0 +1,23 @@
+@import "tailwindcss";
+@import "@openai/apps-sdk-ui/css";
+/* Required for Tailwind to find class references in Apps SDK UI components. */
+@source "../node_modules/@openai/apps-sdk-ui";
+
+/* Bridge mounts into legacy shell — keep icon buttons sized by host CSS. */
+[data-sdk-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+[data-sdk-icon] svg {
+  width: 1.15em;
+  height: 1.15em;
+  display: block;
+}
+
+.icon-btn[data-sdk-icon],
+.conv-act[data-sdk-icon] {
+  font-size: 18px;
+}

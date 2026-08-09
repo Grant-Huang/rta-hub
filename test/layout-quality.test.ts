@@ -293,7 +293,7 @@ test("洗碗机紧邻水槽 → 通过", () => {
 
 test("盲角柜给出可达性提醒（advisory，不否决）", () => {
   const v = checkErgonomics({
-    run: run(), placements: [cab(0, 36, { moduleCode: "BBC36" }), cab(36, 36), cab(72, 36)],
+    run: run(), placements: [cab(0, 42, { moduleCode: "BBC42" }), cab(42, 36), cab(78, 36)],
   });
   const hit = v.find((x) => x.code === "UNREACHABLE_BLIND_CORNER");
   assert.ok(hit);
@@ -330,7 +330,7 @@ test("工作三角过长/过短给出提醒", () => {
 
 test("硬约束与软约束是不同维度：advisory 不阻止出图", () => {
   const advisoryOnly = checkErgonomics({
-    run: run(), placements: [cab(0, 36, { moduleCode: "BBC36" }), cab(36, 36), cab(72, 36)],
+    run: run(), placements: [cab(0, 42, { moduleCode: "BBC42" }), cab(42, 36), cab(78, 36)],
   });
   assert.equal(hasBlockingViolation(advisoryOnly), false);
 });

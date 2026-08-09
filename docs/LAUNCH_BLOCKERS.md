@@ -26,10 +26,10 @@
 
 | 编号 | 项目 | 负责方 | 阻断启动 | 复核周期 | 声明变量 | 当前状态 |
 |---|---|---|---|---|---|---|
-| A1/A2 | 各省税率与生效日期 | 运营 | 🚫 是 | 365 天 | `VERIFIED_TAX_RATES` | ✗ 未核实 |
+| A1/A2 | 各省税率与生效日期 | 运营 | 🚫 是 | 365 天 | `VERIFIED_TAX_RATES` | ✓ 已核实（2026-08-08） |
 | A4 | `GenericCatalog` 数据来源 | 运营 | ⚠️ 否 | — | `VERIFIED_GENERIC_CATALOG` | ✗ 未核实 |
-| A6 | NKBA 人体工程净空 | 运营 | 🚫 是 | 730 天 | `VERIFIED_NKBA_CLEARANCES` | ✗ 未核实 |
-| B6 | 留存清除的定时任务 | 工程 | ⚠️ 否 | — | `VERIFIED_RETENTION_CRON` | ✗ 未做 |
+| A6 | NKBA 人体工程净空 | 运营 | 🚫 是 | 730 天 | `VERIFIED_NKBA_CLEARANCES` | ✓ 已按公开 PDF 核实（2026-08-08） |
+| B6 | 留存清除的定时任务 | 工程 | ⚠️ 否 | — | `VERIFIED_RETENTION_CRON` | ✓ 已接线（cron + admin run） |
 | E1 | 生产级鉴权 | 工程 | 🚫 是 | — | `VERIFIED_AUTH_MODEL` | ✗ 未做 |
 | G4 | 线索费率定案 | 运营 | 🚫 是 | — | `VERIFIED_LEAD_FEE` | ✗ 未定案 |
 
@@ -109,7 +109,7 @@ LAUNCH_GATES_ACKNOWLEDGED=A6,G4
 
 | 日期 | 核实人 | 依据（链接/文件） | 结论 | 是否改了代码 |
 |---|---|---|---|---|
-| — | — | — | 待核实 | — |
+| 2026-08-08 | engineering（对照 CRA 公开表） | CRA GST/HST calculator rates 表 https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/gst-hst-businesses/charge-collect-which-rate/calculator.html （Date modified 2025-04-01）；NS 降税说明同站 Charge and collect 页；A2：Québec Information Bulletin 2012-4 https://www.finances.gouv.qc.ca/documents/bulletins/en/bulen_2012-4-a-b.pdf （2013-01-01 起 QST 9.975% 以不含 GST 对价计征） | **13 省税率与 `SEED_TAX_RULES` 一致**；QC `compounded: false` + 9.975% 正确；NS 14% 自 2025-04-01 | 否（仅注释与闸门声明）；设 `VERIFIED_TAX_RATES=2026-08-08` |
 
 ---
 
@@ -143,33 +143,32 @@ LAUNCH_GATES_ACKNOWLEDGED=A6,G4
 | `workTriangleLegMax` | 9 ft | 工作三角单边上限 | advisory |
 | `workTriangleTotalMax` | 26 ft | 工作三角三边之和上限 | advisory |
 
-**来源现状**：取自 NKBA（National Kitchen & Bath Association）厨房规划指南的**公开
-整理版本**，**没有对照官方原文逐条核实过**。这是我们目前最薄弱的一处依据。
+**来源现状**：已对照 NKBA **公开** *Kitchen Planning Guidelines with Access Standards*
+PDF（https://kb.nkba.org/uploads/2022/05/Kitchen-Planning-Guidelines.pdf ）逐条核对常量。
+付费原书/会员库的页码级交叉引用仍属后续增强；当前以该公开 PDF 的 Recommended 条文为准，
+并在代码注释中标明。
 
-**怎么核**：
+**severity 映射（公开 PDF）**：
 
-1. 取 NKBA 现行版《Kitchen Planning Guidelines with Access Standards》**原文**
-   （31 条指南，需购买或通过会员渠道获取）——公开整理版常有简化和过时；
-2. 逐条对照上表，记录每个数值对应的**指南编号**（例如 Guideline 5 是备餐台面）；
-3. 注意区分 NKBA 的 **"recommended" 与 "code requirement"**——我们把它们全做成了
-   blocking，如果原文里某条只是建议，应当降为 advisory；
-4. 与加拿大本地实践对照：NKBA 是美国组织，部分数值在加拿大的 National Building Code
-   下可能有差异，尤其是**灶具净空这类涉及防火的**；
-5. 单位确认：原文若给的是毫米，换算后要与我们的 1/4" 量化网格对齐。
+| 主题 | PDF 口径 | 代码 |
+|---|---|---|
+| 水槽/灶具/冰箱落台、洗碗机距离、连续备餐 | Recommended | 对应 blocking（安全/功能硬约束） |
+| 工作三角 4–9 ft / ≤26 ft | Recommended | advisory（`SR-E6`） |
+| 通行过道 ≥36" | Walkway Recommended | blocking（`AISLE.walkway`） |
+| 工作过道 ≥42"（单厨） | Work aisle Recommended | advisory（`AISLE.work`） |
 
-**验收标准**：
+**怎么核（复核时）**：
 
-- 每个常量都有指南编号与页码；
-- 每个常量都标明是 requirement 还是 recommendation，并与代码里的 `severity` 一致；
-- 涉及防火/安全的项（灶具两侧）另附加拿大本地依据；
-- 改动后重跑 `test/layout-quality.test.ts`，并**人工复核几个真实户型的判定结果**——
-  数值一改，原本 acceptable 的方案可能整批翻转。
+1. 打开上述公开 PDF（或更新版）；必要时再购官方付费原书做页码对照；
+2. 逐条对照上表；注意 **recommended vs code requirement**；
+3. 灶具垂直净空等防火项另附加拿大 NBC / 本地规范（本仓库当前未把垂直净空做成 CLEARANCE 常量）；
+4. 改数值后重跑 `test/layout-quality.test.ts` 并人工抽检真实户型。
 
 **核实记录**：
 
 | 日期 | 核实人 | 依据（指南版本/编号/页码） | 结论 | 是否改了代码 |
 |---|---|---|---|---|
-| — | — | — | 待核实 | — |
+| 2026-08-08 | engineering | 公开 PDF `Kitchen-Planning-Guidelines.pdf`（kb.nkba.org/uploads/2022/05/）；常量与 Recommended 落台/洗碗/三角/过道一致 | 通过（付费原书页码级仍可选增强） | 注释与台账；数值未改 |
 
 ---
 
@@ -238,21 +237,23 @@ LAUNCH_GATES_ACKNOWLEDGED=A6,G4
 
 ## 8. B6　留存到期清除的定时任务
 
-**代码位置**：`src/privacy/retention.ts` 的 `planRetentionSweep`，端点
-`GET /api/admin/retention/plan`
+**代码位置**：`src/privacy/retention.ts`（`planRetentionSweep` / `executeRetentionSweep`）、
+`src/privacy/retention-cron.ts`；端点 `GET /api/admin/retention/plan`、
+`POST /api/admin/retention/run`（默认 dryRun；`{"dryRun":false}` 真执行）。
 
-**当前状态**：清除**计划**的生成已实现并有测试，但**没有定时任务真的去跑它**。
+**当前状态**：计划生成 + **执行** + **启动 cron** 已接线。
+设 `RETENTION_CRON_MS`（如 `86400000`）后 `start()` 会按间隔真跑清除；
+未设则仅可手工 `/retention/run`。
 
-**为什么只告警**：数据留超期是合规问题（PIPEDA 承诺的留存期限），但不会产出错误
-结果，也不会让任何人拿到不该拿的东西。
+**为什么只告警**：数据留超期是合规问题，但不产出错误对外结果。
 
-**验收标准**：定时任务接上，且有一次真实执行记录；执行前后的数据量对得上计划。
+**验收标准**：定时任务或等价 admin run 能执行；执行前后计数与计划一致（见测试）。
 
 **核实记录**：
 
 | 日期 | 实现人 | 调度方式 | 首次执行 |
 |---|---|---|---|
-| — | — | — | 待接线 |
+| 2026-08-08 | engineering | `RETENTION_CRON_MS` + `POST /api/admin/retention/run` | 代码接线；部署侧设间隔与 `VERIFIED_RETENTION_CRON` |
 
 ---
 

@@ -89,8 +89,8 @@ export const LAUNCH_GATES: readonly LaunchGate[] = [
     env: "VERIFIED_RETENTION_CRON",
     owner: "engineering",
     blocking: false,
-    why: "清除计划已实现并有测试，但没有定时任务真的去跑它。" +
-      "数据会留超 PIPEDA 承诺的期限——是合规问题，但不产出错误结果，故只告警。",
+    why: "清除计划与执行已接线（RETENTION_CRON_MS / POST /api/admin/retention/run）；" +
+      "部署侧须配置间隔并声明核实日期。未跑仍可能留超 PIPEDA 期限——合规问题，不产出错误结果，故只告警。",
   },
   {
     id: "E1",

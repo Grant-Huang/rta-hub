@@ -154,3 +154,65 @@ test("推定值一路带到 placement 上，渲染与解释都读得到", () => 
   const fridge = layout.placements.find((p) => p.applianceKind === "refrigerator")!;
   assert.equal(fridge.applianceSpec?.provenance, "assumed");
 });
+
+test("冰箱不得压在窗洞上——同墙有窗时落位避开", () => {
+  // 强电在窗中心：改造前会把冰箱锚在强电上并压窗；现在窗对高柜是硬挡
+  const w = wall({
+    id: "north",
+    length: 180,
+    features: [
+      feat("win", "window", 48, 36),
+      feat("e", "electrical", 60, 0),
+    ],
+  });
+  const plan = planAppliances(geo(w), [appl("refrigerator", { width: 33 })]);
+  const fridge = plan.placed.find((p) => p.spec.kind === "refrigerator");
+  assert.ok(fridge, "应另找位置放下冰箱");
+  assert.ok(
+    fridge.x + fridge.width <= 48 || fridge.x >= 84,
+    `冰箱 ${fridge.x}–${fridge.x + fridge.width} 压到了窗 48–84`,
+  );
+});
+
+test("冰箱不得压进门洞净空（含门套让位）", () => {
+  const w = wall({
+    id: "a",
+    length: 200,
+    features: [feat("d", "door", 52.75, 32)],
+  });
+  const plan = planAppliances(geo(w), [appl("refrigerator", { width: 33 })]);
+  const fridge = plan.placed.find((p) => p.spec.kind === "refrigerator");
+  if (!fridge) return; // 整墙放不下时如实不放也行
+  const doorLeft = 52.75 - 2.5; // doorSpan base pad
+  const doorRight = 52.75 + 32 + 2.5;
+  assert.ok(
+    fridge.x + fridge.width <= doorLeft + 0.01 || fridge.x >= doorRight - 0.01,
+    `冰箱 ${fridge.x}–${fridge.x + fridge.width} 压进门洞净空 ${doorLeft}–${doorRight}`,
+  );
+});
+
+test("同墙窗+门占满时冰箱放不下就报警告，不静默压洞", () => {
+  // 132" 北墙：窗 36@48 + 门 32@52.75 几乎挤满中段，再加冰箱 33 易干涉
+  const w = wall({
+    id: "north",
+    length: 132,
+    features: [
+      feat("win", "window", 48, 36),
+      feat("d", "door", 52.75, 32),
+    ],
+  });
+  const plan = planAppliances(geo(w), [appl("refrigerator", { width: 33 })]);
+  const fridge = plan.placed.find((p) => p.spec.kind === "refrigerator");
+  if (fridge) {
+    assert.ok(fridge.x + fridge.width <= 48 || fridge.x >= 84,
+      `冰箱压窗 ${fridge.x}`);
+    const doorLeft = 52.75 - 2.5;
+    const doorRight = 52.75 + 32 + 2.5;
+    assert.ok(
+      fridge.x + fridge.width <= doorLeft + 0.01 || fridge.x >= doorRight - 0.01,
+      `冰箱压门 ${fridge.x}`,
+    );
+  } else {
+    assert.ok(plan.warnings.some((x) => x.kind === "refrigerator"));
+  }
+});

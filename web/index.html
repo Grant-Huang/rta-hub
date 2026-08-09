@@ -27,15 +27,41 @@
                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .rail-head .ghost { flex:0 0 auto; }
   .rail-list { flex:1; min-height:0; overflow-x:hidden; overflow-y:auto; padding:6px; }
-  .conv { display:block; width:100%; max-width:100%; text-align:left; background:none;
-          border:1px solid transparent; border-radius:8px; padding:8px 10px; margin-bottom:3px;
-          cursor:pointer; color:inherit; overflow:hidden; min-width:0; }
+  .conv-row { display:flex; gap:4px; align-items:stretch; margin-bottom:3px; min-width:0; }
+  .conv { display:block; flex:1; min-width:0; text-align:left; background:none;
+          border:1px solid transparent; border-radius:8px; padding:8px 10px;
+          cursor:pointer; color:inherit; overflow:hidden; }
   .conv:hover { background:#1c2129; }
   .conv.active { background:#1e3566; border-color:#4d7bd7; }
+  .conv.archived { opacity:.72; }
   .conv .ct { display:block; font-size:12.5px; line-height:1.45; overflow:hidden;
               text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
   .conv .cm { display:block; font-size:11px; color:#6a7382; margin-top:2px; overflow:hidden;
               text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  .conv .arch-tag { display:inline-block; margin-top:3px; font-size:10px; color:#d8c37b;
+                    background:#2b2416; padding:1px 6px; border-radius:8px; }
+  .conv-act { flex:0 0 auto; width:28px; padding:0; border:none; border-radius:8px;
+              background:transparent; color:#8b94a3; font-size:14px; cursor:pointer; }
+  .conv-act:hover { background:#262b33; color:#e6e8eb; }
+  .conv-children { margin:0 0 4px 12px; border-left:2px solid #2a3140; padding-left:6px; }
+  .conv.eng { padding:6px 8px; }
+  .conv.eng .ct { font-size:12px; color:#9ec0ff; }
+  .offer-bar { margin:0 12px 8px; padding:8px 10px; background:#1a2a4a; border:1px solid #3d6fd8;
+               border-radius:8px; font-size:12.5px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .offer-bar[hidden] { display:none; }
+  .confirmed-block { margin:0 0 16px; }
+  .confirmed-block h3 { margin:0 0 8px; font-size:12.5px; color:#9aa4b2; font-weight:600; }
+  .confirmed-block .sync-row { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .rail-user { flex:0 0 auto; border-top:1px solid #262b33; padding:8px; }
+  .rail-user a { display:flex; align-items:center; gap:8px; padding:8px; border-radius:8px;
+                 color:inherit; text-decoration:none; min-width:0; }
+  .rail-user a:hover { background:#1c2129; }
+  .rail-user .avatar { flex:0 0 auto; width:32px; height:32px; border-radius:50%;
+                       background:#2a5bd7; color:#fff; display:flex; align-items:center;
+                       justify-content:center; font-size:12px; font-weight:600; }
+  .rail-user .uname { flex:1; min-width:0; font-size:12.5px; overflow:hidden;
+                      text-overflow:ellipsis; white-space:nowrap; }
+  .rail-user .uhint { display:block; font-size:10.5px; color:#6a7382; }
 
   /* 中栏：主会话。输入区带 + / @ / 补全，无顶部硬按钮栏。 */
   .chat { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
@@ -47,6 +73,19 @@
   .msg.system { align-self:center; background:#2b2416; color:#d8c37b; font-size:12px; }
   .msg.interactive { max-width:100%; white-space:normal; align-self:flex-start; background:#1c2129; }
   .chat-input { padding:10px 12px; border-top:1px solid #262b33; background:#0f1216; flex:0 0 auto; }
+  .restore-bar { padding:12px 14px; border-top:1px solid #262b33; background:#151a22;
+                 display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .restore-bar[hidden] { display:none; }
+  .restore-bar .hint { flex:1; margin:0; }
+  .attach-tray { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 8px; padding:8px;
+                 background:#151a22; border:1px solid #262b33; border-radius:8px; }
+  .attach-tray[hidden] { display:none; }
+  .attach-chip { display:flex; align-items:center; gap:6px; max-width:100%;
+                 background:#1c2129; border:1px solid #3a4250; border-radius:8px; padding:4px 8px;
+                 font-size:11.5px; color:#c6cdd6; }
+  .attach-chip img { width:36px; height:36px; object-fit:cover; border-radius:4px; }
+  .attach-chip .aname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:140px; }
+  .attach-chip .arm { background:none; border:none; color:#8b94a3; cursor:pointer; padding:0 2px; font-size:14px; }
   .composer { display:flex; gap:8px; align-items:flex-end; position:relative; }
   .composer .icon-btn { flex:0 0 auto; width:36px; height:36px; padding:0; border-radius:8px;
                         background:#262b33; font-size:20px; line-height:1; color:#e6e8eb; }
@@ -67,6 +106,8 @@
   .suggest-item .si-main { font-weight:500; }
   .suggest-item .si-sub { font-size:11px; color:#8b94a3; }
   .composer button[type=submit] { flex:0 0 auto; height:36px; }
+  .composer.sending { opacity:0.72; pointer-events:none; }
+  .msg.pending { opacity:0.75; font-style:italic; color:#8b94a3; }
   button { background:#2a5bd7; border:none; color:#fff; padding:7px 13px; border-radius:8px;
            font-size:13px; cursor:pointer; }
   button:disabled { opacity:.45; cursor:not-allowed; }
@@ -95,6 +136,12 @@
   .brief-card.status-untouched .brief-status { color:#6a7382; }
   .brief-card.status-locked .brief-status { color:#7bd88f; }
   .brief-body { font-size:12.5px; line-height:1.55; color:#c6cdd6; white-space:pre-wrap; }
+  .fact-list { margin:0 0 14px; padding:0; list-style:none; }
+  .fact-list li { display:grid; grid-template-columns:minmax(72px,38%) 1fr; gap:6px 10px; padding:5px 0; border-bottom:1px solid #1c2129; font-size:12.5px; }
+  .fact-list .fact-label { color:#8b93a0; }
+  .fact-list .fact-value { color:#e6ebf2; white-space:pre-wrap; }
+  .fact-list li.fact-missing .fact-value { color:#6a7382; }
+  .fact-list li.fact-clarify .fact-value { color:#d8c37b; }
   .steps { display:flex; gap:6px; padding:10px 16px; border-bottom:1px solid #262b33; flex-wrap:wrap; align-items:center; }
   .step { font-size:11px; padding:3px 9px; border-radius:10px; background:#1c2129; color:#6a7382; }
   .step.done { background:#1c3a2b; color:#7bd88f; }
@@ -105,8 +152,18 @@
   /* 产出物下载条 */
   .downloads { display:flex; flex-wrap:wrap; gap:6px; padding:8px 16px; border-bottom:1px solid #262b33; }
   .dl { font-size:11.5px; padding:3px 9px; border-radius:8px; background:#262b33; color:#9aa4b2;
-        text-decoration:none; border:1px solid #3a4250; cursor:pointer; }
+        text-decoration:none; border:1px solid #3a4250; cursor:pointer; display:inline-flex;
+        align-items:center; gap:6px; }
   .dl:hover { border-color:#4d7bd7; color:#e6e8eb; }
+  .dl.active { border-color:#4d7bd7; color:#e6e8eb; background:#1e3566; }
+  .dl .dl-dl { opacity:0.7; font-size:10px; }
+  .artifact-preview { margin:0 0 14px; }
+  .artifact-preview .ap-head { display:flex; justify-content:space-between; align-items:center;
+    gap:8px; margin-bottom:8px; font-size:12.5px; color:#9aa4b2; }
+  .artifact-preview .ap-body { background:#0f1318; border:1px solid #262b33; border-radius:8px;
+    padding:10px; overflow:auto; max-height:min(70vh, 640px); }
+  .artifact-preview .ap-body img, .artifact-preview .ap-body svg { max-width:100%; display:block; background:#fff; }
+  .artifact-preview pre { margin:0; white-space:pre-wrap; font-size:12px; color:#c6cdd6; }
   /* 会话里的快捷回答 chip */
   .quick { align-self:flex-start; max-width:92%; white-space:normal; }
   .quick .qh { font-size:11.5px; color:#8b94a3; margin:2px 0 5px; }
@@ -115,6 +172,8 @@
   .chip:hover { border-color:#4d7bd7; }
   .chip.alt { background:none; border-style:dashed; color:#8b94a3;
               display:inline-block; max-width:100%; white-space:normal; text-align:left; line-height:1.45; }
+  .intake-samples { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0; }
+  .sample-preview img { max-width:min(100%,420px); margin-top:8px; border-radius:8px; border:1px solid #3a4250; display:block; }
   select, input[type=number] { background:#1c2129; border:1px solid #262b33; color:inherit;
            padding:6px 8px; border-radius:8px; font-size:13px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -175,45 +234,73 @@
   .x-guide p { color:#8b94a3; }
   details.x-more { margin-top:10px; }
   details.x-more > summary { cursor:pointer; font-size:12px; color:#7bc0d8; }
+  /* @openai/apps-sdk-ui icon bridge (web-ui) */
+  .sdk-btn-label { display:inline-flex; align-items:center; gap:6px; }
+  .composer .icon-btn.sdk { font-size:18px; }
+  .composer button[type=submit].sdk-send { display:inline-flex; align-items:center; gap:6px; padding:7px 12px; }
 </style>
+<link rel="stylesheet" href="/vendor/apps-sdk-ui/assets/bridge.css" />
 </head>
 <body>
 <header>
-  <h1 data-i18n="title">RTA-Hub · Cabinet design & quotes</h1>
-  <select id="acctSel" data-i18n-title="acctTitle" title="Demo account switch">
-    <option value="ca_demo_consumer" data-i18n="acctConsumer">Consumer account</option>
-    <option value="ca_demo_trade" data-i18n="acctTrade">Trade account (builder)</option>
-  </select>
+  <h1 class="sdk-btn-label"><span data-sdk-icon="Cabinet" aria-hidden="true"></span>
+    <span data-i18n="title">RTA-Hub · Cabinet design & quotes</span></h1>
   <span class="badge" id="acctBadge">consumer</span>
   <span style="flex:1"></span>
-  <button class="ghost" id="projBtn" style="display:none" data-i18n="myProjects">My projects</button>
   <span class="badge" id="sendBadge" data-i18n="previewMode">Preview mode</span>
 </header>
 <main>
   <aside class="rail">
     <div class="rail-head">
       <h2 data-i18n="history">Conversations</h2>
-      <button class="ghost" id="newConvBtn" data-i18n="newChat" data-i18n-title="newChatTitle" title="Start a new conversation">＋ New</button>
+      <button class="ghost sdk-btn-label" id="newConvBtn" data-i18n-title="newChatTitle" title="Start a new conversation">
+        <span data-sdk-icon="ChatCompose" aria-hidden="true"></span>
+        <span data-i18n="newChat">New</span>
+      </button>
     </div>
     <div class="rail-list" id="convList"><p class="hint" style="padding:8px" data-i18n="noConversations">No conversations yet.</p></div>
+    <div class="rail-user">
+      <a href="/me" id="userChip" title="Account" data-i18n-title="accountFallback">
+        <span class="avatar" id="userAvatar">?</span>
+        <span class="uname"><span id="userName" data-i18n="accountFallback">Account</span>
+          <span class="uhint" data-i18n="userChipHint">Profile & settings</span></span>
+      </a>
+    </div>
   </aside>
-  <div class="gutter" id="gutterL" title="Drag to resize"></div>
+  <div class="gutter" id="gutterL" title="Drag to resize" data-i18n-title="dragResize"></div>
 
   <section class="chat">
     <div class="chat-log" id="chatLog"></div>
+    <div class="offer-bar" id="engagementOfferBar" hidden>
+      <span id="engagementOfferText"></span>
+      <button type="button" id="engagementOfferYes" data-i18n="engOfferYes">Create collaboration</button>
+      <button type="button" class="ghost" id="engagementOfferNo" data-i18n="engOfferNo">Not now</button>
+    </div>
+    <div class="restore-bar" id="restoreBar" hidden>
+      <p class="hint" data-i18n="archivedHint">This conversation is archived. Restore it to continue chatting.</p>
+      <button type="button" id="restoreBtn" class="sdk-btn-label" data-i18n-title="restoreChat">
+        <span data-sdk-icon="RestoreUntrash" aria-hidden="true"></span>
+        <span data-i18n="restoreChat">Restore conversation</span>
+      </button>
+    </div>
     <form class="chat-input" id="chatForm" autocomplete="off">
+      <div class="attach-tray" id="attachTray" hidden></div>
       <div class="composer">
-        <button type="button" class="icon-btn" id="attachBtn" title="Upload file" data-i18n-title="attachTitle">+</button>
+        <button type="button" class="icon-btn sdk" id="attachBtn" title="Upload file" data-i18n-title="attachTitle"
+                data-sdk-icon="PlusComposer" data-sdk-title="Upload file"></button>
         <div class="composer-field">
           <div id="suggestPop" class="suggest-pop" hidden></div>
-          <input id="chatInput" placeholder="Tell us your needs — @company · /doorStyle · +" autocomplete="off" />
+          <input id="chatInput" placeholder="Tell us your needs — @company · /doorStyle · +" data-i18n-placeholder="chatPlaceholder" autocomplete="off" />
         </div>
-        <button type="submit">Send</button>
+        <button type="submit" class="sdk-send" data-i18n-title="send">
+          <span data-sdk-icon="ArrowUp" aria-hidden="true"></span>
+          <span data-i18n="send">Send</span>
+        </button>
         <span class="status-pill" id="quoteStatus" style="display:none;align-self:center"></span>
       </div>
     </form>
   </section>
-  <div class="gutter" id="gutterR" title="Drag to resize"></div>
+  <div class="gutter" id="gutterR" title="Drag to resize" data-i18n-title="dragResize"></div>
 
   <section class="panel">
     <div class="panel-tabs" role="tablist">
@@ -237,13 +324,32 @@
   </section>
 </main>
 
+<link rel="modulepreload" href="/vendor/apps-sdk-ui/bridge.js" />
+<script type="module" src="/vendor/apps-sdk-ui/bridge.js"></script>
 <script src="/ui-i18n.js"></script>
 <script>
-let ACCOUNT = 'ca_demo_consumer';
+let ACCOUNT = localStorage.getItem('rtaAccountId') || 'ca_demo_consumer';
 const $ = (id) => document.getElementById(id);
+/** 挂载 @openai/apps-sdk-ui 图标（列表重绘后需再调）。 */
+function remountSdkIcons(root) {
+  if (window.AppsSdkUI && typeof window.AppsSdkUI.mountIcons === 'function') {
+    window.AppsSdkUI.mountIcons(root || document);
+  }
+}
+function setAccount(id) {
+  ACCOUNT = id;
+  localStorage.setItem('rtaAccountId', id);
+}
 let conversationId = null, floorPlanId = null, layout = null, currentQuote = null, spec = null;
 let profile = null;
-let uiLang = 'en';
+/** 当前打开会话是否 archived（只读，底栏恢复）。 */
+let conversationArchived = false;
+/** FR-23：当前打开的协作子线程 id；null = 主轨。 */
+let activeEngagementId = null;
+let pendingEngagementOffer = null;
+/** 附件区待提交文件：{ file, dataUrl? }[] */
+let pendingAttachments = [];
+let uiLang = (typeof window.RTA_UI?.resolveLang === 'function' ? window.RTA_UI.resolveLang() : 'en');
 /** 当前选中的公司 / 门板（不再用顶部下拉硬编码）。 */
 let companiesList = [];
 let selectedCompanyId = null;
@@ -260,6 +366,7 @@ let confirmed = {
   requirements: '',
   missingFields: [],
   briefSections: null,
+  confirmedFacts: [],
   openItems: [],
   readyToAskDesign: false,
   confirmationText: '',
@@ -275,7 +382,11 @@ function setUiLang(lang) {
   const next = lang === 'zh' ? 'zh' : 'en';
   if (next === uiLang && document.documentElement.lang === (next === 'zh' ? 'zh-CN' : 'en')) return;
   uiLang = next;
-  document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
+  if (window.RTA_UI?.setLang) window.RTA_UI.setLang(next);
+  else {
+    document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
+    try { localStorage.setItem('rtaUiLang', next); } catch (_) { /* ignore */ }
+  }
   applyChrome();
   renderSteps();
   refreshGates();
@@ -299,12 +410,11 @@ function applyChrome() {
     if (!key) return;
     el.title = t(key);
   });
-  const input = $('chatInput');
-  if (input) input.placeholder = uiLang === 'zh'
-    ? '说说需求 — @厂商 · /doorStyle · +上传'
-    : 'Tell us your needs — @company · /doorStyle · +';
-  const sendBtn = document.querySelector('#chatForm button[type="submit"]');
-  if (sendBtn) sendBtn.textContent = uiLang === 'zh' ? '发送' : 'Send';
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+    const key = el.getAttribute('data-i18n-placeholder');
+    if (!key) return;
+    el.setAttribute('placeholder', t(key));
+  });
   const attach = $('attachBtn');
   if (attach) attach.title = t('attachTitle');
 }
@@ -332,7 +442,8 @@ function resetConfirmed() {
     doorStyleId: null, doorStyleName: null,
     prefs: null, floorPlan: null, layoutNote: null,
     requirements: '', missingFields: [],
-    briefSections: null, openItems: [], readyToAskDesign: false, confirmationText: '',
+    briefSections: null, confirmedFacts: [], openItems: [],
+    readyToAskDesign: false, confirmationText: '',
   };
   renderConfirmed();
 }
@@ -365,12 +476,195 @@ function intakeSnippet(field) {
   return t('recorded');
 }
 
+function hideEngagementOffer() {
+  pendingEngagementOffer = null;
+  const bar = $('engagementOfferBar');
+  if (bar) bar.hidden = true;
+}
+
+function showEngagementOffer(offer) {
+  if (!offer?.companyId) return;
+  pendingEngagementOffer = offer;
+  const bar = $('engagementOfferBar');
+  const text = $('engagementOfferText');
+  if (text) text.textContent = t('engOfferText', offer.companyName || offer.companyId);
+  if (bar) bar.hidden = false;
+}
+
+async function acceptEngagementOffer() {
+  if (!pendingEngagementOffer || !conversationId) return;
+  const companyId = pendingEngagementOffer.companyId;
+  hideEngagementOffer();
+  const { ok, body } = await api(`/api/conversations/${conversationId}/engagements`, {
+    method: 'POST', body: JSON.stringify({ companyId }),
+  });
+  if (!ok) {
+    addMsg('system', body.error || t('submitFail'));
+    return;
+  }
+  await refreshConversations();
+  await openEngagement(body.engagement.id);
+}
+
+async function openEngagement(eid) {
+  if (!conversationId || !eid) return;
+  const { ok, body } = await api(`/api/conversations/${conversationId}/engagements/${eid}`);
+  if (!ok) {
+    addMsg('system', body.error || t('noResponse'));
+    return;
+  }
+  activeEngagementId = eid;
+  if (body.conversationId) conversationId = body.conversationId;
+  hideEngagementOffer();
+  $('chatLog').innerHTML = '';
+  addMsg('system', t('engOpened', body.companyName || body.engagement?.customerTitle || ''));
+  for (const m of body.engagement?.messages || []) {
+    const speaker = m.speaker
+      || (m.role === 'company_human' ? 'company_human'
+        : m.role === 'system' ? 'platform'
+          : m.role === 'user' ? 'user' : 'company_agent');
+    const role = m.role === 'company_human' ? 'assistant'
+      : m.role === 'system' ? 'system' : m.role;
+    let prefix = '';
+    if (speaker === 'company_human') prefix = `[${body.companyName || 'Seller'}] `;
+    else if (speaker === 'company_agent') prefix = `[${body.companyName || 'Seller'} · Agent] `;
+    else if (speaker === 'platform') prefix = '';
+    addMsg(role, prefix + m.content);
+  }
+  renderEngagementConfirmed(body.confirmed, body.companyName);
+  await refreshConversations();
+  scrollChatToBottom();
+  switchPanelTab('confirmed');
+}
+
+function renderEngagementConfirmed(confirmedBody, companyName) {
+  const el = $('confirmedPane');
+  if (!el || !confirmedBody) return;
+  const brief = confirmedBody.designBrief || {};
+  const sections = brief.sections || [];
+  const company = confirmedBody.companySpecific || {};
+  const doorId = confirmedBody.doorStyleId || company.doorStyleId;
+  const doorName = confirmedBody.doorStyleName
+    || (doorId && (spec?.doorStyles || []).find((d) => d.id === doorId)?.name)
+    || doorId;
+  const statusLabel = {
+    locked: t('briefLocked'),
+    provisional: t('briefProvisional'),
+    untouched: t('briefUntouched'),
+    clarify: t('briefClarify'),
+  };
+  const companyLines = Object.entries(company)
+    .filter(([k, v]) => v != null && v !== '' && !(Array.isArray(v) && !v.length) && k !== 'doorStyleId')
+    .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
+  if (doorId) companyLines.unshift(`doorStyle: ${doorName || doorId}`);
+
+  const facts = brief.confirmedFacts || [];
+  const factClass = (st) =>
+    st === 'missing' ? 'fact-missing'
+      : (st === 'needs_confirm' || st === 'deferred') ? 'fact-clarify' : '';
+  const factsHtml = facts.length
+    ? `<h3>${t('confirmedFactsTitle')}</h3>
+      <ul class="fact-list">${facts.map((f) => `
+        <li class="${factClass(f.status)}">
+          <span class="fact-label">${esc(f.label)}</span>
+          <span class="fact-value">${esc(f.value)}</span>
+        </li>`).join('')}</ul>`
+    : '';
+  const briefHtml = sections.length
+    ? `<h3>${t('confirmedBasis')}</h3>
+      ${sections.map((s) => `
+        <div class="brief-card status-${esc(s.status)}">
+          <div class="brief-head">
+            <span class="brief-title">${esc(s.title)}</span>
+            <span class="brief-status">${esc(statusLabel[s.status] || s.status)}</span>
+          </div>
+          <div class="brief-body">${esc(s.body)}</div>
+        </div>`).join('')}`
+    : (factsHtml ? '' : `<p class="hint">${t('confirmedEmpty')}</p>`);
+
+  el.innerHTML = `
+    <div class="confirmed-block">
+      ${factsHtml}
+      ${briefHtml}
+      <div class="sync-row" style="margin-top:12px">
+        ${confirmedBody.shared?.differsFromParent
+          ? `<button type="button" id="engPromoteBtn">${t('engPromote')}</button>
+             <span class="hint">${t('engPromoteHint')}</span>`
+          : `<span class="hint">${t('engInSync')}</span>`}
+        <button type="button" class="ghost" id="engPullBtn"
+          data-eid="${esc(activeEngagementId || '')}">${t('engPull')}</button>
+      </div>
+    </div>
+    <div class="confirmed-block">
+      <h3>${t('engCompanyConfirmed', companyName || '')}</h3>
+      ${companyLines.length
+        ? `<dl class="kv">${companyLines.map((line) => {
+            const i = line.indexOf(': ');
+            return `<dt>${esc(line.slice(0, i))}</dt><dd>${esc(line.slice(i + 2))}</dd>`;
+          }).join('')}</dl>`
+        : `<p class="hint">${t('engCompanyEmpty')}</p>`}
+    </div>`;
+  $('engPromoteBtn')?.addEventListener('click', promoteEngagementShared);
+  $('engPullBtn')?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const eid = ev.currentTarget?.dataset?.eid || activeEngagementId;
+    pullEngagementShared(eid);
+  });
+}
+
+async function promoteEngagementShared() {
+  if (!conversationId || !activeEngagementId) return;
+  if (!confirm(t('engPromoteConfirm'))) return;
+  const { ok, body } = await api(
+    `/api/conversations/${conversationId}/engagements/${activeEngagementId}/promote`,
+    { method: 'POST' },
+  );
+  if (!ok) { addMsg('system', body.error || t('submitFail')); return; }
+  if (body.conversationId) conversationId = body.conversationId;
+  if (body.systemSummary) addMsg('assistant', body.systemSummary);
+  if (body.conversation?.designRequirements != null) {
+    confirmed.requirements = body.conversation.designRequirements;
+  }
+  if (body.conversation?.preferences) confirmed.prefs = body.conversation.preferences;
+  renderEngagementConfirmed(body.confirmed, body.engagement?.customerTitle);
+}
+
+async function pullEngagementShared(eidOverride) {
+  const eid = eidOverride || activeEngagementId;
+  if (!conversationId || !eid) {
+    addMsg('system', t('submitFail'));
+    return;
+  }
+  activeEngagementId = eid;
+  const { ok, body } = await api(
+    `/api/conversations/${conversationId}/engagements/${eid}/pull`,
+    { method: 'POST' },
+  );
+  if (!ok) { addMsg('system', body.error || t('submitFail')); return; }
+  if (body.conversationId && body.conversationId !== conversationId) {
+    conversationId = body.conversationId;
+  }
+  const msgs = body.engagement?.messages || [];
+  for (const m of msgs.slice(-2)) {
+    if (m.role === 'system') addMsg('system', m.content);
+    else if (m.role === 'assistant') {
+      const prefix = `[${body.engagement?.customerTitle || 'Seller'} · Agent] `;
+      addMsg('assistant', prefix + m.content);
+    }
+  }
+  renderEngagementConfirmed(body.confirmed, body.engagement?.customerTitle);
+}
+
+$('engagementOfferYes')?.addEventListener('click', acceptEngagementOffer);
+$('engagementOfferNo')?.addEventListener('click', hideEngagementOffer);
+
 function renderConfirmed() {
   const el = $('confirmedPane');
   if (!el) return;
+  if (activeEngagementId) return; // 子轨用 renderEngagementConfirmed
 
-  // 优先用服务端 designBrief 叙事（FR-15）；否则本地拼一版简报
-  if (confirmed.briefSections?.length) {
+  // 优先用服务端 designBrief 叙事（FR-15）；事实行明确列出尺寸/位置
+  if (confirmed.briefSections?.length || (confirmed.confirmedFacts || []).length) {
     const open = (confirmed.openItems || [])
       .filter((i) => i.status === 'missing' || i.status === 'needs_confirm');
     const openHint = open.length
@@ -384,17 +678,30 @@ function renderConfirmed() {
       untouched: t('briefUntouched'),
       clarify: t('briefClarify'),
     };
-    el.innerHTML = `
-      ${openHint}
-      <h3>${t('confirmedBasis')}</h3>
-      ${confirmed.briefSections.map((s) => `
+    const facts = confirmed.confirmedFacts || [];
+    const factClass = (st) =>
+      st === 'missing' ? 'fact-missing'
+        : (st === 'needs_confirm' || st === 'deferred') ? 'fact-clarify' : '';
+    const factsHtml = facts.length
+      ? `<h3>${t('confirmedFactsTitle')}</h3>
+        <ul class="fact-list">${facts.map((f) => `
+          <li class="${factClass(f.status)}">
+            <span class="fact-label">${esc(f.label)}</span>
+            <span class="fact-value">${esc(f.value)}</span>
+          </li>`).join('')}</ul>`
+      : '';
+    const sectionsHtml = (confirmed.briefSections || []).map((s) => `
         <div class="brief-card status-${esc(s.status)}">
           <div class="brief-head">
             <span class="brief-title">${esc(s.title)}</span>
             <span class="brief-status">${esc(statusLabel[s.status] || s.status)}</span>
           </div>
           <div class="brief-body">${esc(s.body)}</div>
-        </div>`).join('')}
+        </div>`).join('');
+    el.innerHTML = `
+      ${openHint}
+      ${factsHtml}
+      ${sectionsHtml ? `<h3>${t('confirmedBasis')}</h3>${sectionsHtml}` : ''}
       ${confirmed.layoutNote ? `<div class="brief-card"><div class="brief-head"><span class="brief-title">${t('layoutResult')}</span></div><div class="brief-body">${esc(confirmed.layoutNote)}</div></div>` : ''}
     `;
     return;
@@ -407,6 +714,7 @@ function renderConfirmed() {
 function applyDesignBrief(brief) {
   if (!brief) return;
   confirmed.briefSections = brief.sections || [];
+  confirmed.confirmedFacts = brief.confirmedFacts || [];
   confirmed.openItems = brief.openItems || [];
   confirmed.readyToAskDesign = !!brief.readyToAskDesign;
   confirmed.confirmationText = brief.confirmationText || '';
@@ -414,7 +722,8 @@ function applyDesignBrief(brief) {
 }
 
 function currentCompanyId() {
-  return confirmed.companyId || selectedCompanyId || companiesList[0]?.id || null;
+  // FR-18：禁止回落到列表第一家
+  return confirmed.companyId || selectedCompanyId || null;
 }
 
 function currentCompanyName() {
@@ -438,12 +747,18 @@ function syncCompanyConfirmed() {
   if (id) {
     confirmed.companyId = id;
     confirmed.companyName = currentCompanyName();
+  } else {
+    confirmed.companyId = null;
+    confirmed.companyName = null;
   }
-  const doorId = currentDoorStyleId();
+  const doorId = id ? currentDoorStyleId() : null;
   if (doorId) {
     confirmed.doorStyleId = doorId;
     confirmed.doorStyleName =
       (spec?.doorStyles || []).find((d) => d.id === doorId)?.name || doorId;
+  } else if (!id) {
+    confirmed.doorStyleId = null;
+    confirmed.doorStyleName = null;
   }
   renderConfirmed();
 }
@@ -520,13 +835,18 @@ function scrollChatToBottom() {
 
 let quickBlock = null;
 
-function renderQuickReplies(quick) {
+function renderQuickReplies(quick, { suppressGeometry = false } = {}) {
   if (quickBlock) { quickBlock.remove(); quickBlock = null; }
-  if (!quick || quick.length === 0) return;
+  let list = quick || [];
+  // FR-17：户型解读可用后绝不再甩尺寸/形状 chip
+  if (suppressGeometry || confirmed.floorPlan?.geometryUsable) {
+    list = list.filter((q) => q.field !== 'kitchen size' && q.field !== 'layout');
+  }
+  if (list.length === 0) return;
 
   const box = document.createElement('div');
   box.className = 'quick';
-  box.innerHTML = quick.map((q) => `
+  box.innerHTML = list.map((q) => `
     <div class="qh">${esc(q.hint)}</div>
     <div>${q.options.map((o) => `<button class="chip" data-send="${esc(o)}">${esc(o)}</button>`).join('')}
       ${q.alternative ? `<span class="chip alt" data-upload="1">${esc(q.alternative)}</span>` : ''}</div>`).join('');
@@ -540,12 +860,21 @@ function renderQuickReplies(quick) {
   scrollChatToBottom();
 }
 
+/** FR-17.3：已答字段显示反馈，而不是再甩同一组按钮。 */
+function renderAnsweredFeedback(items) {
+  if (!items || !items.length) return;
+  for (const it of items) {
+    addMsg('system', it.note || it.field);
+  }
+}
+
 // ── 产出物下载 ────────────────────────────────────────────────────────────
 //
 // 右栏是产出物栏：图纸、报价单、PDF。每一样都要能**单独拿走**——
 // 客户要把图发给装修队、把报价单发给业主，靠截屏是不行的。
 
 const artifacts = [];
+let previewArtifactIdx = -1;
 
 /**
  * 登记一件产出物。
@@ -554,11 +883,29 @@ const artifacts = [];
  * （报价单 PDF）走 url。**url 不能直接 window.open**：账号是靠请求头带的，
  * 新开标签页没有那个头，服务端会 401。所以统一走 fetch。
  */
-function registerArtifact(name, mime, source) {
+function registerArtifact(name, mime, source, opts = {}) {
   const i = artifacts.findIndex((a) => a.name === name);
   const entry = { name, mime, source };
   if (i >= 0) artifacts[i] = entry; else artifacts.push(entry);
   renderDownloads();
+  // 新登记的可预览物自动在「输出物」面板内预览（FR-15.2b）
+  // restore 路径 silent：避免冲掉刚画好的多视图卡片
+  if (opts.silent) return;
+  const idx = i >= 0 ? i : artifacts.length - 1;
+  if (canInlinePreview(entry)) {
+    previewArtifactIdx = idx;
+    void showArtifactPreview(idx);
+  }
+}
+
+function canInlinePreview(a) {
+  if (!a) return false;
+  if (typeof a.source === 'object' && a.source.url) {
+    return /^(image\/|application\/pdf|text\/)/.test(a.mime) || /\.svg$/i.test(a.name);
+  }
+  return /^(image\/|text\/|application\/pdf)/.test(a.mime)
+    || a.mime === 'image/svg+xml'
+    || typeof a.source === 'string';
 }
 
 function renderDownloads() {
@@ -568,36 +915,124 @@ function renderDownloads() {
     return;
   }
   box.innerHTML = artifacts
-    .map((a, i) => `<span class="dl" data-dl="${i}">⤓ ${esc(a.name)}</span>`).join('');
+    .map((a, i) =>
+      `<span class="dl${i === previewArtifactIdx ? ' active' : ''}" data-preview="${i}" title="${esc(a.name)}">` +
+      `${esc(a.name)}` +
+      `<span class="dl-dl" data-dl="${i}" title="Download">⤓</span></span>`)
+    .join('');
 }
 
-$('downloads').addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-dl]');
-  if (!el) return;
-  const a = artifacts[Number(el.dataset.dl)];
-  if (!a) return;
-
-  let blob;
+async function resolveArtifactBlob(a) {
   if (typeof a.source === 'object' && a.source.url) {
     const res = await fetch(a.source.url, { headers: { 'x-account-id': ACCOUNT } });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      $('content').insertAdjacentHTML('afterbegin',
-        `<div class="err">${esc(body.error || t('downloadFail'))}</div>`);
-      return;
+      throw new Error(body.error || t('downloadFail'));
     }
-    blob = await res.blob();
-  } else {
-    blob = new Blob([typeof a.source === 'function' ? a.source() : a.source], { type: a.mime });
+    return res.blob();
   }
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url; link.download = a.name;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const raw = typeof a.source === 'function' ? a.source() : a.source;
+  return new Blob([raw], { type: a.mime });
+}
+
+async function showArtifactPreview(idx) {
+  const a = artifacts[idx];
+  if (!a) return;
+  previewArtifactIdx = idx;
+  renderDownloads();
+  // 切到输出物 Tab
+  document.querySelectorAll('.panel-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === 'outputs');
+  });
+  $('paneConfirmed')?.classList.remove('active');
+  $('paneOutputs')?.classList.add('active');
+
+  const host = $('content');
+  const slotId = 'artifactPreviewSlot';
+  let slot = $(slotId);
+  if (!slot) {
+    slot = document.createElement('div');
+    slot.id = slotId;
+    slot.className = 'artifact-preview';
+    host.prepend(slot);
+  }
+  slot.innerHTML = `<div class="ap-head"><span>${esc(a.name)}</span>` +
+    `<button type="button" class="ghost" data-dl="${idx}">${t('download') || 'Download'}</button></div>` +
+    `<div class="ap-body"><p class="hint">…</p></div>`;
+
+  try {
+    const blob = await resolveArtifactBlob(a);
+    const body = slot.querySelector('.ap-body');
+    if (a.mime === 'image/svg+xml' || /\.svg$/i.test(a.name)) {
+      const text = await blob.text();
+      body.innerHTML = text.includes('<svg') ? text : `<pre>${esc(text)}</pre>`;
+    } else if (a.mime.startsWith('image/')) {
+      const url = URL.createObjectURL(blob);
+      body.innerHTML = `<img alt="${esc(a.name)}" src="${url}" />`;
+    } else if (a.mime === 'application/pdf') {
+      const url = URL.createObjectURL(blob);
+      body.innerHTML = `<iframe title="${esc(a.name)}" src="${url}" style="width:100%;height:560px;border:0;background:#fff"></iframe>`;
+    } else if (a.mime.startsWith('text/') || typeof a.source === 'string') {
+      const text = await blob.text();
+      body.innerHTML = `<pre>${esc(text)}</pre>`;
+    } else {
+      body.innerHTML = `<p class="hint">${esc(a.mime)} — use download</p>`;
+    }
+  } catch (err) {
+    slot.querySelector('.ap-body').innerHTML =
+      `<div class="err">${esc(err.message || t('downloadFail'))}</div>`;
+  }
+}
+
+$('downloads').addEventListener('click', async (e) => {
+  const dl = e.target.closest('[data-dl]');
+  if (dl) {
+    e.stopPropagation();
+    const a = artifacts[Number(dl.dataset.dl)];
+    if (!a) return;
+    try {
+      const blob = await resolveArtifactBlob(a);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = a.name;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      $('content').insertAdjacentHTML('afterbegin',
+        `<div class="err">${esc(err.message || t('downloadFail'))}</div>`);
+    }
+    return;
+  }
+  const prev = e.target.closest('[data-preview]');
+  if (prev) {
+    await showArtifactPreview(Number(prev.dataset.preview));
+  }
 });
 
-function clearArtifacts() { artifacts.length = 0; renderDownloads(); }
+$('content').addEventListener('click', async (e) => {
+  const dl = e.target.closest('#artifactPreviewSlot [data-dl]');
+  if (!dl) return;
+  const a = artifacts[Number(dl.dataset.dl)];
+  if (!a) return;
+  try {
+    const blob = await resolveArtifactBlob(a);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = a.name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    $('content').insertAdjacentHTML('afterbegin',
+      `<div class="err">${esc(err.message || t('downloadFail'))}</div>`);
+  }
+});
+
+function clearArtifacts() {
+  artifacts.length = 0;
+  previewArtifactIdx = -1;
+  $('artifactPreviewSlot')?.remove();
+  renderDownloads();
+}
 
 // ── 分栏拖动 ──────────────────────────────────────────────────────────────
 //
@@ -641,39 +1076,137 @@ async function refreshConversations() {
     $('convList').innerHTML = `<p class="hint" style="padding:8px">${t('noConversations')}</p>`;
     return;
   }
-  $('convList').innerHTML = list.map((v) => `
-    <button class="conv ${v.id === conversationId ? 'active' : ''}" data-conv="${esc(v.id)}">
-      <span class="ct">${esc(v.title)}</span>
-      <span class="cm">${t('msgCount', v.messageCount, v.quoteCount || 0)}</span>
-    </button>`).join('');
+  $('convList').innerHTML = list.map((v) => {
+    const archived = v.status === 'archived';
+    const full = v.fullTitle || v.title || '';
+    const actTitle = archived ? t('restoreChat') : t('archiveChat');
+    const actIcon = archived ? 'RestoreUntrash' : 'Archive';
+    const actAttr = archived ? 'data-unarchive' : 'data-archive';
+    const parentActive = v.id === conversationId && !activeEngagementId;
+    const kids = (v.engagements || []).map((e) => `
+      <button type="button" class="conv eng ${e.id === activeEngagementId ? 'active' : ''}"
+              data-engagement="${esc(e.id)}" data-parent-conv="${esc(v.id)}"
+              title="${esc(e.customerTitle)}">
+        <span class="ct">${esc(e.customerTitle)}</span>
+      </button>`).join('');
+    return `<div class="conv-row">
+      <button type="button" class="conv ${parentActive ? 'active' : ''} ${archived ? 'archived' : ''}"
+              data-conv="${esc(v.id)}" title="${esc(full)}">
+        <span class="ct">${esc(v.title)}</span>
+        <span class="cm">${t('msgCount', v.messageCount, v.quoteCount || 0)}</span>
+        ${archived ? `<span class="arch-tag">${t('archivedTag')}</span>` : ''}
+      </button>
+      <button type="button" class="conv-act" ${actAttr}="${esc(v.id)}" title="${esc(actTitle)}"
+              data-sdk-icon="${actIcon}" data-sdk-title="${esc(actTitle)}"></button>
+    </div>
+    ${kids ? `<div class="conv-children">${kids}</div>` : ''}`;
+  }).join('');
+  remountSdkIcons($('convList'));
 }
 
 $('convList').addEventListener('click', async (e) => {
+  const archBtn = e.target.closest('[data-archive]');
+  if (archBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    await archiveConversation(archBtn.dataset.archive);
+    return;
+  }
+  const unBtn = e.target.closest('[data-unarchive]');
+  if (unBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    await unarchiveConversation(unBtn.dataset.unarchive);
+    return;
+  }
+  const engEl = e.target.closest('[data-engagement]');
+  if (engEl) {
+    e.preventDefault();
+    const parentId = engEl.dataset.parentConv;
+    if (parentId && parentId !== conversationId) await openConversation(parentId);
+    await openEngagement(engEl.dataset.engagement);
+    return;
+  }
   const el = e.target.closest('[data-conv]');
-  if (!el || el.dataset.conv === conversationId) return;
+  if (!el) return;
+  if (el.dataset.conv === conversationId && !activeEngagementId) return;
   await openConversation(el.dataset.conv);
+});
+
+async function archiveConversation(id) {
+  if (!id) return;
+  const { ok } = await api(`/api/conversations/${id}/archive`, { method: 'POST' });
+  if (!ok) return;
+  if (id === conversationId) {
+    conversationArchived = true;
+    setComposerArchived(true);
+  }
+  await refreshConversations();
+}
+
+async function unarchiveConversation(id) {
+  if (!id) return;
+  const { ok } = await api(`/api/conversations/${id}/unarchive`, { method: 'POST' });
+  if (!ok) return;
+  if (id === conversationId) {
+    conversationArchived = false;
+    setComposerArchived(false);
+  }
+  await refreshConversations();
+}
+
+function setComposerArchived(archived) {
+  const form = $('chatForm');
+  const bar = $('restoreBar');
+  if (form) form.hidden = !!archived;
+  if (bar) bar.hidden = !archived;
+  if (archived) clearPendingAttachments();
+}
+
+$('restoreBtn')?.addEventListener('click', async () => {
+  if (conversationId) await unarchiveConversation(conversationId);
 });
 
 /** 切到另一段会话：重放它的消息，产出物栏清空（那是上一段会话的东西）。 */
 async function openConversation(id) {
-  const companyQ = currentCompanyId()
-    ? `?companyId=${encodeURIComponent(currentCompanyId())}` : '';
-  const { ok, body } = await api(`/api/conversations/${id}${companyQ}`);
+  // 先清空上一会话的厂商，避免 brief / 出图串公司
+  selectedCompanyId = null;
+  confirmed.companyId = null;
+  const { ok, body } = await api(`/api/conversations/${id}`);
   if (!ok) return;
   conversationId = id;
-  floorPlanId = null; layout = null; currentQuote = null;
+  activeEngagementId = null;
+  hideEngagementOffer();
+  conversationArchived = (body.conversation?.status === 'archived');
+  setComposerArchived(conversationArchived);
+  clearPendingAttachments();
+  layout = null; currentQuote = null;
+  // 恢复本会话户型；禁止恒置 null，否则同意出图会卡在「需要户型」
+  floorPlanId = body.floorPlanId || null;
   stepIndex = 0; renderSteps();
   clearArtifacts();
   quickBlock = null;
   if (fpBlock) { fpBlock.remove(); fpBlock = null; }
-  gates.fpReady = false; gates.layoutOk = false; gates.layoutBlocked = false; refreshGates();
+  gates.fpReady = !!body.floorPlanReady;
+  gates.layoutOk = false; gates.layoutBlocked = false; refreshGates();
   const history = body.conversation.messages || [];
   setUiLang(body.language || body.conversation?.preferences?.shared?.language || 'en');
   resetConfirmed();
   confirmed.prefs = body.conversation.preferences || null;
   confirmed.requirements = body.conversation.designRequirements || '';
+  const threads = body.conversation.perCompanyThreads || [];
+  if (threads.length) {
+    selectedCompanyId = threads[threads.length - 1].companyId;
+  }
   syncCompanyConfirmed();
   if (body.designBrief) applyDesignBrief(body.designBrief);
+  if (floorPlanId) {
+    confirmed.floorPlan = {
+      ...(confirmed.floorPlan || {}),
+      ready: !!body.floorPlanReady,
+      geometryUsable: true,
+    };
+  }
   if (designConsentBlock) { designConsentBlock.remove(); designConsentBlock = null; }
   $('content').innerHTML = history.length
     ? `<p class="hint">${t('switchedConv')}</p>`
@@ -684,15 +1217,115 @@ async function openConversation(id) {
   if (body.rtaIntro) addMsg('system', body.rtaIntro);
   else if (profile?.rtaIntroByLang?.[uiLang]) addMsg('system', profile.rtaIntroByLang[uiLang]);
   else if (profile?.rtaIntro) addMsg('system', profile.rtaIntro);
-  if (history.length === 0) {
-    addMsg('assistant', body.welcome ||
-      "Hi — I'm your cabinet design assistant. To get started: roughly how big is the kitchen, what style do you like, what's your budget range, and which province are you in?\n\nFor a specific seller, @ the company name (e.g. @MapleRidgeCabinets).");
+  if (history.length === 0 && !conversationArchived) {
+    addMsg('assistant', body.welcome || t('welcomeFallback'));
+    renderIntakeSamples(body.intakeSamples || []);
   }
   for (const m of history) addMsg(m.role, m.content);
   await refreshConversations();
   scrollChatToBottom();
-  switchPanelTab('confirmed');
-  await maybeOfferDesign({ allowWithoutFloor: true });
+  // 有已存设计图则还原输出物；否则回到「已确认」
+  if (body.deliverables) restoreDeliverables(body.deliverables);
+  else switchPanelTab('confirmed');
+  if (!conversationArchived) await maybeOfferDesign({ allowWithoutFloor: true });
+}
+
+/**
+ * 从服务端快照还原输出物 Tab（刷新 / 切回会话）。
+ * SVG 不落盘，靠 storedLayouts.placements 重渲染。
+ */
+function restoreDeliverables(d) {
+  if (!d) return;
+  if (d.companyId && !currentCompanyId()) {
+    selectedCompanyId = d.companyId;
+    syncCompanyConfirmed();
+  }
+  if (d.kind === 'fourViews' && Array.isArray(d.views) && d.views.length) {
+    layout = d;
+    gates.layoutBlocked = d.acceptable === false;
+    gates.layoutOk = d.acceptable !== false;
+    refreshGates();
+    renderLayout(d, { restore: true });
+    return;
+  }
+  if (d.planViews?.base || d.planViews?.wall) {
+    renderRestoredPlanViews(d);
+  }
+}
+
+function renderRestoredPlanViews(d) {
+  const companyId = d.companyId || currentCompanyId();
+  const generic = !!d.generic || !companyId;
+  const title = generic ? t('genericPlanViewTitle') : t('planViewTitle');
+  const hint = generic ? t('genericPlanViewHint') : t('planViewHint');
+  const canApprove = !generic && !conversationArchived && d.stage === 'planReview';
+  $('content').innerHTML = `
+    <div class="card">
+      <h3>${title}</h3>
+      <div class="views">
+        <div class="view">${d.planViews?.base || ''}<div class="cap">${t('viewTopBase')}</div></div>
+        <div class="view">${d.planViews?.wall || ''}<div class="cap">${t('viewTopWall')}</div></div>
+      </div>
+      <p class="hint" style="margin-top:8px" id="restoredPlanHint"></p>
+      ${canApprove ? `
+        <button type="button" id="approvePlanBtn">${t('approvePlan')}</button>
+        <button type="button" class="ghost" id="fullLayoutBtn">${t('genLayout')}</button>` : ''}
+    </div>`;
+  const hintEl = $('restoredPlanHint');
+  if (hintEl) hintEl.textContent = hint;
+  if (d.planViews?.base) {
+    registerArtifact(`${t('viewTopBase')}.svg`, 'image/svg+xml', d.planViews.base, { silent: true });
+  }
+  if (d.planViews?.wall) {
+    registerArtifact(`${t('viewTopWall')}.svg`, 'image/svg+xml', d.planViews.wall, { silent: true });
+  }
+  showOutputs();
+  if (canApprove && companyId) {
+    $('approvePlanBtn')?.addEventListener('click', async () => {
+      await api(`/api/conversations/${conversationId}/design/advance`, {
+        method: 'POST', body: JSON.stringify({ companyId, action: 'approvePlan' }),
+      });
+      addMsg('assistant', t('planApproved'));
+      await runGenerateLayout();
+    });
+    $('fullLayoutBtn')?.addEventListener('click', () => runGenerateLayout());
+  }
+}
+
+/**
+ * 开场示例：户型极简图 / 设计想法草图。
+ * 点 chip → 在会话里展示示例图 + 提示；用户再按示例手绘后用 + 上传。
+ */
+function renderIntakeSamples(samples) {
+  if (!samples?.length || conversationArchived) return;
+  const prev = document.getElementById('intakeSamples');
+  if (prev) prev.remove();
+  const box = document.createElement('div');
+  box.id = 'intakeSamples';
+  box.className = 'msg assistant';
+  box.innerHTML = `<div class="intake-samples">${samples.map((s) =>
+    `<button type="button" class="chip" data-sample="${esc(s.file)}" data-hint="${esc(s.hint)}" data-label="${esc(s.label)}">${esc(s.label)}</button>`,
+  ).join('')}
+  <span class="chip alt" data-upload-hint="1">${esc(t('intakeUploadHint'))}</span></div>`;
+  box.addEventListener('click', (e) => {
+    const upload = e.target.closest('[data-upload-hint]');
+    if (upload) { $('attachBtn')?.click(); return; }
+    const btn = e.target.closest('[data-sample]');
+    if (!btn) return;
+    showSamplePreview(btn.dataset.sample, btn.dataset.label, btn.dataset.hint);
+  });
+  $('chatLog').appendChild(box);
+  scrollChatToBottom();
+}
+
+function showSamplePreview(file, label, hint) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg assistant sample-preview';
+  wrap.innerHTML = `<div><strong>${esc(label || '')}</strong></div>`
+    + `<div style="margin-top:4px;color:#8b94a3;font-size:13px">${esc(hint || '')}</div>`
+    + `<img src="/samples/${encodeURIComponent(file)}" alt=""/>`;
+  $('chatLog').appendChild(wrap);
+  scrollChatToBottom();
 }
 
 /**
@@ -711,6 +1344,7 @@ async function startNewConversation() {
 $('newConvBtn').addEventListener('click', startNewConversation);
 
 async function boot() {
+  setUiLang(uiLang);
   applyChrome();
   renderSteps();
   refreshGates();
@@ -718,8 +1352,9 @@ async function boot() {
   await loadProfile();
   const { body } = await api('/api/companies');
   companiesList = body.companies || [];
-  if (companiesList.length) await selectCompany(companiesList[0].id, { announce: false });
-  else syncCompanyConfirmed();
+  // FR-18：不自动选第一家厂商；未 @ 时走通用规格
+  selectedCompanyId = null;
+  syncCompanyConfirmed();
   setupComposer();
   await resumeOrCreateConversation();
 }
@@ -733,7 +1368,9 @@ async function boot() {
  */
 async function resumeOrCreateConversation() {
   const { body } = await api('/api/conversations');
-  const latest = (body.conversations || [])[0];
+  const list = body.conversations || [];
+  // 优先恢复未存档会话；若全部已存档则打开最近一条（只读）
+  const latest = list.find((c) => c.status !== 'archived') || list[0];
   if (latest) { await openConversation(latest.id); return; }
   await startNewConversation();
 }
@@ -750,25 +1387,19 @@ async function loadProfile() {
   profile = body;
   const eff = body.effectiveAccountType || 'consumer';
   $('acctBadge').textContent = body.accountType === eff ? eff : t('pricingAs', body.accountType, eff);
-  $('projBtn').style.display = body.accountType === 'trade' ? '' : 'none';
+  const name = body.displayName || body.email || t('accountFallback');
+  const avatar = $('userAvatar');
+  const uname = $('userName');
+  if (uname) uname.textContent = name;
+  if (avatar) {
+    const initials = String(name).trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+    avatar.textContent = initials || '?';
+  }
+  const chip = $('userChip');
+  if (chip) chip.title = name;
 }
 
-$('acctSel').addEventListener('change', async (e) => {
-  ACCOUNT = e.target.value;
-  conversationId = null; floorPlanId = null; layout = null; currentQuote = null;
-  stepIndex = 0; renderSteps();
-  $('quoteStatus').style.display = 'none';
-  gates.fpReady = false; gates.layoutOk = false; gates.layoutBlocked = false; refreshGates();
-  resetConfirmed();
-  $('content').innerHTML = `<p class="hint">${t('switchedAcct')}</p>`;
-  await loadProfile();
-  clearArtifacts();
-  $('chatLog').innerHTML = '';
-  await resumeOrCreateConversation();
-});
-
-// ── 建商：项目列表与资质核实 ──
-$('projBtn').addEventListener('click', renderProjects);
+// ── 建商：项目列表与资质核实（入口迁到 /me；保留函数供调试/复用）──
 
 function projectStatusLabel(s) {
   const map = {
@@ -852,19 +1483,60 @@ async function loadSpec(companyId) {
 $('chatForm').addEventListener('submit', (e) => {
   e.preventDefault();
   hideSuggest();
+  if (conversationArchived) return;
   const text = $('chatInput').value.trim();
   $('chatInput').value = '';
   sendChat(text);
 });
 
-/** 发一句话。输入框与快捷回答 chip 走的是同一条路——chip 就是替客户打了那句话。 */
+let chatSending = false;
+
+/** 发一句话。子轨走 engagement API；主轨可附带 engagementOffer。 */
 async function sendChat(text) {
-  if (!text || !conversationId) return;
+  if (!conversationId || conversationArchived || chatSending) return;
+  if (activeEngagementId) {
+    await sendEngagementChat(text);
+    return;
+  }
+  if (pendingAttachments.length) {
+    await sendWithAttachments(text || '');
+    return;
+  }
+  if (!text) return;
+  chatSending = true;
+  const form = $('chatForm');
+  form?.classList.add('sending');
   if (quickBlock) { quickBlock.remove(); quickBlock = null; }
   addMsg('user', text);
-  const { body } = await api(`/api/conversations/${conversationId}/messages`, {
-    method: 'POST', body: JSON.stringify({ text }),
-  });
+  const pending = addMsg('assistant', t('thinking'));
+  pending.classList.add('pending');
+  let ok, body;
+  try {
+    ({ ok, body } = await api(`/api/conversations/${conversationId}/messages`, {
+      method: 'POST', body: JSON.stringify({ text }),
+    }));
+  } catch (err) {
+    pending.remove();
+    addMsg('system', t('networkFail', err.message || err));
+    chatSending = false;
+    form?.classList.remove('sending');
+    return;
+  }
+  pending.remove();
+  if (body.code === 'CONVERSATION_ARCHIVED') {
+    conversationArchived = true;
+    setComposerArchived(true);
+    addMsg('system', body.error || t('archivedHint'));
+    chatSending = false;
+    form?.classList.remove('sending');
+    return;
+  }
+  if (!ok) {
+    addMsg('assistant', body.error || t('noResponse'));
+    chatSending = false;
+    form?.classList.remove('sending');
+    return;
+  }
   if (body.language) setUiLang(body.language);
   for (const r of body.replies || []) addMsg('assistant', r.content);
   if (!body.replies?.length) addMsg('assistant', body.error || t('noResponse'));
@@ -872,11 +1544,107 @@ async function sendChat(text) {
   if (body.missingFields) confirmed.missingFields = body.missingFields;
   if (body.designBrief) applyDesignBrief(body.designBrief);
   else renderConfirmed();
-  renderQuickReplies(body.quickReplies || []);
+  if (body.geometryUsable) {
+    confirmed.floorPlan = { ...(confirmed.floorPlan || {}), geometryUsable: true };
+  }
+  if (body.floorPlanId) floorPlanId = body.floorPlanId;
+  // FR-18：仅在真正路由到公司时写入
+  if (body.questionCompanyId) {
+    selectedCompanyId = body.questionCompanyId;
+    confirmed.companyId = body.questionCompanyId;
+    await loadSpec(body.questionCompanyId);
+    syncCompanyConfirmed();
+  }
+  if (body.engagementOffer) showEngagementOffer(body.engagementOffer);
+  else hideEngagementOffer();
+  renderAnsweredFeedback(body.answeredFeedback || []);
+  renderQuickReplies(body.quickReplies || [], {
+    suppressGeometry: !!body.geometryUsable || !!body.suppressGeometryIntake,
+  });
+  // 提问改纯文字：消息轮次不再把户型草图贴进会话（避免每轮重复显示）
+  if (body.siteQuestions?.length) renderSiteQuestionsText(body.siteQuestions);
   renderQuestions(body.questions || [], body.questionCompanyId || currentCompanyId());
-  if (body.designPrompt) renderDesignConsent(body.designPrompt);
-  else await maybeOfferDesign();
+  if (body.applianceQuestions?.length) renderApplianceQuestions(body.applianceQuestions);
+  if (body.designConsentGranted) {
+    if (designConsentBlock) {
+      designConsentBlock.remove();
+      designConsentBlock = null;
+    }
+    await generatePlanAfterConsent();
+  } else if (body.designPrompt) {
+    renderDesignConsent(body.designPrompt);
+  } else {
+    await maybeOfferDesign();
+  }
   refreshConversations();
+  chatSending = false;
+  form?.classList.remove('sending');
+}
+
+async function sendEngagementChat(text) {
+  if (!text || !conversationId || !activeEngagementId || chatSending) return;
+  chatSending = true;
+  const form = $('chatForm');
+  form?.classList.add('sending');
+  addMsg('user', text);
+  const pending = addMsg('assistant', t('thinking'));
+  pending.classList.add('pending');
+  let ok, body;
+  try {
+    ({ ok, body } = await api(
+      `/api/conversations/${conversationId}/engagements/${activeEngagementId}/messages`,
+      { method: 'POST', body: JSON.stringify({ text }) },
+    ));
+  } catch (err) {
+    pending.remove();
+    addMsg('system', t('networkFail', err.message || err));
+    chatSending = false;
+    form?.classList.remove('sending');
+    return;
+  }
+  pending.remove();
+  if (!ok) {
+    addMsg('assistant', body.error || t('noResponse'));
+    chatSending = false;
+    form?.classList.remove('sending');
+    return;
+  }
+  for (const r of body.replies || []) {
+    if (r.role === 'system') addMsg('system', r.content);
+    else {
+      const speaker = r.speaker || 'company_agent';
+      const prefix = speaker === 'company_human'
+        ? `[${body.engagement?.customerTitle || 'Seller'}] `
+        : speaker === 'company_agent'
+          ? `[${body.engagement?.customerTitle || 'Seller'} · Agent] `
+          : '';
+      addMsg('assistant', prefix + r.content);
+    }
+  }
+  if (body.confirmed) renderEngagementConfirmed(body.confirmed, body.engagement?.customerTitle);
+  refreshConversations();
+  chatSending = false;
+  form?.classList.remove('sending');
+}
+
+function showSiteDiagramInChat(svg) {
+  // 仅注册到 Outputs，不在会话气泡里反复贴图（提问用文字 Q#）
+  if (svg) registerArtifact(t('siteDiagramName'), 'image/svg+xml', svg);
+}
+
+/** 现场/家电 Q#：纯文字列表，不生成提问用草图。 */
+let lastSiteQKey = '';
+function renderSiteQuestionsText(siteQuestions) {
+  if (!siteQuestions?.length) return;
+  const key = siteQuestions.map((q) => `${q.q}:${q.id}`).join('|');
+  if (key === lastSiteQKey) return; // 同一组题不重复刷屏
+  lastSiteQKey = key;
+  const box = document.createElement('div');
+  box.className = 'msg assistant';
+  const lines = siteQuestions.map((q) => `· ${esc(q.prompt)}`).join('<br/>');
+  box.innerHTML = `<div class="qp">${lines}</div>`;
+  $('chatLog').appendChild(box);
+  scrollChatToBottom();
 }
 
 /** 出图确认卡：资料齐后主动问「要不要根据需求出设计」。 */
@@ -910,12 +1678,13 @@ function renderDesignConsent(prompt) {
 }
 
 async function maybeOfferDesign(opts = {}) {
-  const companyId = currentCompanyId();
-  if (!conversationId || !companyId) return;
+  // FR-18：无厂商也可问「要不要出图」→ 通用示意；有厂商仍绑该公司 DesignSession
+  if (!conversationId) return;
   // 户型未齐也可拉 designBrief 刷新 Tab1；出图确认仍要等几何就绪
   if (!gates.fpReady && !opts.allowWithoutFloor) return;
-  const { ok, body } = await api(
-    `/api/conversations/${conversationId}/design?companyId=${encodeURIComponent(companyId)}`);
+  const companyId = currentCompanyId();
+  const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
+  const { ok, body } = await api(`/api/conversations/${conversationId}/design${qs}`);
   if (!ok) return;
   if (body.missingFields) {
     confirmed.missingFields = body.missingFields;
@@ -931,7 +1700,7 @@ async function acceptDesignConsent() {
   const companyId = currentCompanyId();
   const { ok, body } = await api(`/api/conversations/${conversationId}/design/advance`, {
     method: 'POST',
-    body: JSON.stringify({ companyId, action: 'consent' }),
+    body: JSON.stringify({ action: 'consent', ...(companyId ? { companyId } : {}) }),
   });
   if (!ok) {
     addMsg('system', body.error || t('submitFail'));
@@ -942,11 +1711,50 @@ async function acceptDesignConsent() {
     designConsentBlock = null;
   }
   addMsg('assistant', body.prompt?.message || t('designStarting'));
+  await generatePlanAfterConsent();
+}
 
+/** 已授权后出俯视图（聊天同意与按钮同意共用；不再次 POST consent）。 */
+async function generatePlanAfterConsent() {
+  if (!floorPlanId) {
+    const snap = await api(`/api/conversations/${conversationId}`);
+    if (snap.ok && snap.body.floorPlanId) floorPlanId = snap.body.floorPlanId;
+    else if (snap.ok && snap.body.conversation?.floorPlanId) {
+      floorPlanId = snap.body.conversation.floorPlanId;
+    }
+  }
   if (!floorPlanId) {
     addMsg('system', t('gateNeedFloor').replace(/<[^>]+>/g, ''));
     return;
   }
+
+  const companyId = currentCompanyId();
+  if (!companyId) {
+    const pv = await api(`/api/floorplans/${floorPlanId}/generic-plan-view`, {
+      method: 'POST', body: '{}',
+    });
+    if (!pv.ok) {
+      addMsg('system', pv.body.error || t('submitFail'));
+      return;
+    }
+    $('content').innerHTML = `
+      <div class="card">
+        <h3>${t('genericPlanViewTitle')}</h3>
+        <div class="views">
+          <div class="view">${pv.body.planViews?.base || ''}<div class="cap">${t('viewTopBase')}</div></div>
+          <div class="view">${pv.body.planViews?.wall || ''}<div class="cap">${t('viewTopWall')}</div></div>
+        </div>
+        <p class="hint" style="margin-top:8px" id="genericViewsDisclaimer"></p>
+        <pre class="hint" id="genericEstimateText" style="white-space:pre-wrap;margin-top:8px"></pre>
+      </div>`;
+    const disc = $('genericViewsDisclaimer');
+    if (disc) disc.textContent = pv.body.viewsDisclaimer || t('genericPlanViewHint');
+    const est = $('genericEstimateText');
+    if (est && pv.body.estimateText) est.textContent = pv.body.estimateText;
+    showOutputs();
+    return;
+  }
+
   const pv = await api(`/api/floorplans/${floorPlanId}/plan-view`, {
     method: 'POST', body: JSON.stringify({ companyId }),
   });
@@ -980,7 +1788,7 @@ async function deferDesignConsent() {
   const companyId = currentCompanyId();
   await api(`/api/conversations/${conversationId}/design/advance`, {
     method: 'POST',
-    body: JSON.stringify({ companyId, action: 'defer' }),
+    body: JSON.stringify({ action: 'defer', ...(companyId ? { companyId } : {}) }),
   });
   if (designConsentBlock) {
     designConsentBlock.innerHTML = `<div class="qw">${t('designDeferred')}</div>`;
@@ -1063,14 +1871,92 @@ function onOptionClick(btn, card) {
   // 单选：立即提交并把这一题收起来
   btn.closest('.opts').querySelectorAll('.opt').forEach((b) => b.classList.remove('sel'));
   btn.classList.add('sel');
+  if (q.key === 'applianceWidths' || q.key === 'appliances') {
+    submitApplianceAnswer(q, opt, card);
+    return;
+  }
   savePreference(q.key, opt.id, card._companyId, card, opt.label);
+}
+
+/** 家电种类/宽度走 resolve（状态在 FloorPlan 上，不是 preferences）。 */
+async function submitApplianceAnswer(q, opt, card) {
+  if (!floorPlanId) {
+    card.insertAdjacentHTML('beforeend', `<div class="err">${esc(t('gateNeedFloor').replace(/<[^>]+>/g, ''))}</div>`);
+    return;
+  }
+  let patch;
+  if (q.key === 'appliances') {
+    // multi 题走 submitMulti；单选时 id 即 kind
+    patch = { appliances: [{ kind: opt.id }] };
+  } else {
+    // id 形如 refrigerator:36 或 refrigerator:unsure
+    const [kind, widthTok] = String(opt.id).split(':');
+    if (!kind) return;
+    if (widthTok === 'unsure') {
+      patch = { appliances: [{ kind }] }; // 无 width → 服务端推定常见宽
+    } else {
+      const width = Number(widthTok);
+      patch = { appliances: [{ kind, width }] };
+    }
+  }
+  card.innerHTML = `<div class="qw">${esc(t('savedApplianceWidth'))} <b style="color:#e6e8eb">${esc(opt.label)}</b></div>`;
+  try {
+    const { ok, body } = await api(`/api/floorplans/${floorPlanId}/resolve`, {
+      method: 'POST', body: JSON.stringify(patch),
+    });
+    if (!ok) {
+      card.insertAdjacentHTML('beforeend', `<div class="err">${esc(body.error || t('submitFail'))}</div>`);
+      return;
+    }
+    if (body.designBrief) applyDesignBrief(body.designBrief);
+    if (body.applianceQuestions?.length) renderApplianceQuestions(body.applianceQuestions);
+    await renderFloorPlan(body);
+  } catch (err) {
+    card.insertAdjacentHTML('beforeend',
+      `<div class="err">${esc(t('networkFail', err.message || err))}</div>`);
+  }
+}
+
+/** 家电宽度快捷选项（COMMON_WIDTHS）——接上后端已有的 applianceQuestions。 */
+function renderApplianceQuestions(questions) {
+  if (!questions || !questions.length || !floorPlanId) return;
+  renderQuestions(questions, currentCompanyId());
 }
 
 function submitMulti(card) {
   const q = card._q;
   const picked = [...card.querySelectorAll('.opt.sel')].map((b) => q.options[Number(b.dataset.o)]);
+  if (q.key === 'appliances') {
+    submitAppliancesMulti(picked, card);
+    return;
+  }
   savePreference(q.key, picked.map((o) => o.id), card._companyId, card,
-    picked.length ? picked.map((o) => o.label).join(', ') : 'None needed');
+    picked.length ? picked.map((o) => o.label).join(', ') : t('noneNeeded'));
+}
+
+async function submitAppliancesMulti(picked, card) {
+  if (!floorPlanId) {
+    card.insertAdjacentHTML('beforeend', `<div class="err">${esc(t('gateNeedFloor').replace(/<[^>]+>/g, ''))}</div>`);
+    return;
+  }
+  const label = picked.length ? picked.map((o) => o.label).join(', ') : t('noneSelected');
+  card.innerHTML = `<div class="qw">${esc(t('saved'))} <b style="color:#e6e8eb">${esc(label)}</b></div>`;
+  const appliances = picked.map((o) => ({ kind: o.id }));
+  try {
+    const { ok, body } = await api(`/api/floorplans/${floorPlanId}/resolve`, {
+      method: 'POST', body: JSON.stringify({ appliances }),
+    });
+    if (!ok) {
+      card.insertAdjacentHTML('beforeend', `<div class="err">${esc(body.error || t('submitFail'))}</div>`);
+      return;
+    }
+    if (body.designBrief) applyDesignBrief(body.designBrief);
+    if (body.applianceQuestions?.length) renderApplianceQuestions(body.applianceQuestions);
+    await renderFloorPlan(body);
+  } catch (err) {
+    card.insertAdjacentHTML('beforeend',
+      `<div class="err">${esc(t('networkFail', err.message || err))}</div>`);
+  }
 }
 
 /** 偏好 key → 请求体字段。多选题传数组。 */
@@ -1107,15 +1993,20 @@ async function savePreference(key, value, companyId, card, label) {
     card.insertAdjacentHTML('beforeend', `<div class="err">${esc(body.error || t('submitFail'))}</div>`);
     return;
   }
-  card.innerHTML = `<div class="qw">${t('saved')} <b style="color:#e6e8eb">${esc(label)}</b>` +
+  const kindLabel = key === 'doorStyle' ? t('savedDoorStyle')
+    : key === 'budgetBand' ? t('savedBudget')
+    : key === 'boxMaterial' ? t('savedBox')
+    : t('saved');
+  card.innerHTML = `<div class="qw">${esc(kindLabel)} <b style="color:#e6e8eb">${esc(body.savedLabel || label)}</b>` +
     (body.layoutAffected ? `　<span style="color:#d8c37b">${t('layoutAffected')}</span>` : '') +
     '</div>';
   // 门板一旦选定，下游的报价就用它——顺手同步到下拉框，免得两处不一致
   if (key === 'doorStyle') {
     selectedDoorStyleId = value;
     confirmed.doorStyleId = value;
-    confirmed.doorStyleName = label;
+    confirmed.doorStyleName = body.savedLabel || label;
   }
+  if (body.requirements != null) confirmed.requirements = body.requirements;
   // 服务端返回的是展平的 prefsFor，本地维护嵌套结构供右栏汇总
   const cid = companyId || currentCompanyId();
   const prefs = confirmed.prefs || { shared: {}, byCompany: {} };
@@ -1129,9 +2020,16 @@ async function savePreference(key, value, companyId, card, label) {
   confirmed.prefs = prefs;
   renderConfirmed();
   switchPanelTab('confirmed');
+  // 拉下一题，避免用户以为还要再点一次同一选项
+  if (cid) {
+    try {
+      const q = await api(`/api/conversations/${conversationId}/questions?companyId=${encodeURIComponent(cid)}`);
+      if (q.ok) renderQuestions(q.body.questions || [], cid);
+    } catch { /* ignore */ }
+  }
 }
 
-// ── ① 上传户型图（输入框 +）──
+// ── ① 上传户型图：点 + 展开附件区，可打字后与文件一并提交 ──
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 const readAsDataUrl = (file) => new Promise((resolve, reject) => {
@@ -1141,52 +2039,162 @@ const readAsDataUrl = (file) => new Promise((resolve, reject) => {
   r.readAsDataURL(file);
 });
 
+function clearPendingAttachments() {
+  pendingAttachments = [];
+  renderAttachTray();
+}
+
+function renderAttachTray() {
+  const tray = $('attachTray');
+  if (!tray) return;
+  if (!pendingAttachments.length) {
+    tray.hidden = true;
+    tray.innerHTML = '';
+    return;
+  }
+  tray.hidden = false;
+  tray.innerHTML = pendingAttachments.map((p, i) => {
+    const isImg = (p.file.type || '').startsWith('image/') && p.dataUrl;
+    const fileIcon = isImg ? '' : `<span data-sdk-icon="FileDocument" aria-hidden="true"></span>`;
+    return `<div class="attach-chip">
+      ${isImg ? `<img src="${p.dataUrl}" alt="" />` : fileIcon}
+      <span class="aname" title="${esc(p.file.name)}">${esc(p.file.name)}</span>
+      <button type="button" class="arm" data-rm-att="${i}" title="${esc(t('removeAttach'))}"
+              data-sdk-icon="X" data-sdk-title="${esc(t('removeAttach'))}"></button>
+    </div>`;
+  }).join('');
+  remountSdkIcons(tray);
+}
+
+$('attachTray')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-rm-att]');
+  if (!btn) return;
+  const idx = Number(btn.dataset.rmAtt);
+  if (Number.isNaN(idx)) return;
+  pendingAttachments.splice(idx, 1);
+  renderAttachTray();
+});
+
+/** 点 +：展开附件区并选文件（可多选）；不立即上传。 */
 function triggerUpload() {
+  if (!conversationId || conversationArchived) return;
+  const tray = $('attachTray');
+  if (tray) tray.hidden = false;
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = 'image/*,.pdf';
+  input.accept = 'image/*,.pdf,application/pdf';
+  input.multiple = true;
   input.addEventListener('change', async () => {
-    const file = input.files?.[0];
-    if (!file || !conversationId) return;
-
-    let image;
-    if (file.size > MAX_UPLOAD_BYTES) {
-      addMsg('system', t('tooBig', (file.size / 1048576).toFixed(1)));
-    } else {
-      try { image = await readAsDataUrl(file); }
+    const files = [...(input.files || [])];
+    for (const file of files) {
+      const mime = (file.type || '').toLowerCase();
+      if (mime && !mime.startsWith('image/') && mime !== 'application/pdf') {
+        addMsg('system', t('badMime', file.name));
+        continue;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        addMsg('system', t('tooBig', (file.size / 1048576).toFixed(1)));
+        continue;
+      }
+      let dataUrl;
+      try { dataUrl = await readAsDataUrl(file); }
       catch (err) {
         addMsg('system', t('readFailHint', err.message || err));
+        continue;
       }
+      pendingAttachments.push({ file, dataUrl });
     }
-
-    addMsg('user', t('uploadedFile', file.name));
-    const { body } = await api(`/api/conversations/${conversationId}/floorplan`, {
-      method: 'POST',
-      body: JSON.stringify({
-        fileName: file.name,
-        mimeType: file.type || 'image/png',
-        sizeBytes: file.size,
-        ...(image ? { image } : {}),
-      }),
-    });
-    floorPlanId = body.floorPlan?.id;
-    stepIndex = 1; renderSteps();
-    if (body.extractionNote) addMsg('system', body.extractionNote);
-    await renderFloorPlan(body);
+    renderAttachTray();
+    $('chatInput')?.focus();
   });
   input.click();
+}
+
+/** 文字 + 多文件一次 POST /floorplan。 */
+async function sendWithAttachments(text) {
+  if (!conversationId || !pendingAttachments.length) return;
+  if (quickBlock) { quickBlock.remove(); quickBlock = null; }
+  const batch = pendingAttachments.slice();
+  clearPendingAttachments();
+
+  const filesPayload = [];
+  const wrap = document.createElement('div');
+  wrap.className = 'msg user';
+  let html = text ? `<div>${esc(text)}</div>` : '';
+  for (const p of batch) {
+    html += `<div style="margin-top:6px">${esc(t('uploadedFile', p.file.name))}</div>`;
+    if (p.dataUrl && (p.file.type || '').startsWith('image/')) {
+      html += `<img src="${p.dataUrl}" alt="" style="max-width:min(100%,320px);margin-top:6px;border-radius:6px;display:block"/>`;
+    }
+    filesPayload.push({
+      fileName: p.file.name,
+      mimeType: p.file.type || 'image/png',
+      sizeBytes: p.file.size,
+      ...(p.dataUrl ? { image: p.dataUrl } : {}),
+    });
+  }
+  wrap.innerHTML = html;
+  $('chatLog').appendChild(wrap);
+  scrollChatToBottom();
+
+  const { ok, body } = await api(`/api/conversations/${conversationId}/floorplan`, {
+    method: 'POST',
+    body: JSON.stringify({ text: text || undefined, files: filesPayload }),
+  });
+  if (!ok || body.code === 'CONVERSATION_ARCHIVED') {
+    if (body.code === 'CONVERSATION_ARCHIVED') {
+      conversationArchived = true;
+      setComposerArchived(true);
+    }
+    addMsg('system', body.error || t('submitFail'));
+    return;
+  }
+  floorPlanId = body.floorPlan?.id;
+  stepIndex = 1; renderSteps();
+  if (body.interpretation) addMsg('assistant', body.interpretation);
+  else if (body.extractionNote) addMsg('system', body.extractionNote);
+  for (const r of body.replies || []) {
+    if (r.content && r.content !== body.interpretation) addMsg('assistant', r.content);
+  }
+  if (body.designBrief) applyDesignBrief(body.designBrief);
+  if (body.geometryUsable || body.suppressGeometryIntake) {
+    confirmed.floorPlan = { ...(confirmed.floorPlan || {}), geometryUsable: true };
+  }
+  // 上传后：草图只进 Outputs；会话里用文字 Q#
+  if (body.siteDiagram?.svg) showSiteDiagramInChat(body.siteDiagram.svg);
+  if (body.siteQuestions?.length) renderSiteQuestionsText(body.siteQuestions);
+  if (body.suggestReupload) {
+    addMsg('system', t('suggestReuploadTitle'));
+    renderIntakeSamples(body.intakeSamples?.length
+      ? body.intakeSamples
+      : [
+        { file: 'sample-floorplan-minimal.png', label: t('intakeSampleBtn'), hint: '' },
+        { file: 'sample-design-sketch.jpg', label: t('intakeSampleBtn'), hint: '' },
+      ]);
+  }
+  renderQuickReplies([], { suppressGeometry: true });
+  await renderFloorPlan(body);
+  for (const p of batch) {
+    registerArtifact(p.file.name || 'floorplan', p.file.type || 'image/png', p.dataUrl || '');
+  }
+  refreshConversations();
 }
 
 /** 户型尺寸补录：交互在主会话，右栏 Outputs 只读摘要。 */
 async function renderFloorPlan(body) {
   const questions = body.questions || [];
+  const siteQuestions = body.siteQuestions || [];
   const runs = body.floorPlan?.parsedGeometry?.wallRuns || [];
   const ceilingHeight = body.floorPlan?.parsedGeometry?.ceilingHeight;
+  const geometryUsable = !!(body.geometryUsable || body.suppressGeometryIntake
+    || runs.some((r) => r.length > 0));
+  const needsManualWalls = body.needsManualWalls ?? runs.length === 0;
 
   confirmed.floorPlan = {
     ready: !!body.ready,
     wallRuns: runs,
     ceilingHeight: body.floorPlan?.parsedGeometry?.ceilingHeight,
+    geometryUsable,
   };
   renderConfirmed();
 
@@ -1204,31 +2212,32 @@ async function renderFloorPlan(body) {
       ${!body.ready ? `<p class="hint" style="margin-top:8px">${t('fpAskInChat')}</p>` : ''}
     </div>`;
 
-  // 主会话：需要确认/录入时弹出交互卡
+  // 主会话：解读不可用才给「加墙」表单；文字 Q# 已由 renderSiteQuestionsText 发出，这里不重复罗列
   if (fpBlock) { fpBlock.remove(); fpBlock = null; }
-  if (!body.ready || questions.length) {
+  const showCard = needsManualWalls || questions.length || (!body.ready && ceilingHeight == null);
+  if (showCard) {
     const box = document.createElement('div');
     box.className = 'msg interactive';
+    const qLines = questions.map((q) => `· ${esc(q.question)}`).join('');
     box.innerHTML = `
       <div class="qcard">
         <div class="qp">${t('fpHeading')} ${body.ready
           ? `<span class="status-pill sent">${t('ready')}</span>`
           : `<span class="status-pill">${t('pending')}</span>`}</div>
-        ${questions.length ? `
-          <div class="qw">${t('askHint')}</div>
-          ${questions.map((q) => `<div class="hint">· ${esc(q.question)}</div>`).join('')}
-        ` : `<div class="qw">${t('askHint')}</div>`}
+        ${qLines ? `<div class="qw">${t('askHint')}</div>${qLines}` : ''}
+        ${needsManualWalls ? `
         <div class="q" style="margin-top:10px;flex-wrap:wrap">
           <span>${t('addWall')}</span>
           <input id="runLabel" placeholder="${t('phWall')}" style="width:110px" />
           <input id="runLen" type="number" placeholder="${t('phInches')}" />
           <button type="button" id="addRunBtn">${t('add')}</button>
-        </div>
+        </div>` : ''}
+        ${!geometryUsable || ceilingHeight == null ? `
         <div class="q" style="flex-wrap:wrap">
           <span>${t('ceiling')}</span>
           <input id="ceil" type="number" value="${ceilingHeight != null ? ceilingHeight : 96}" />
           <button type="button" id="ceilBtn">${t('confirm')}</button>
-        </div>
+        </div>` : ''}
       </div>`;
     $('chatLog').appendChild(box);
     fpBlock = box;
@@ -1251,6 +2260,8 @@ async function resolveFp(patch) {
   const { body } = await api(`/api/floorplans/${floorPlanId}/resolve`, {
     method: 'POST', body: JSON.stringify(patch),
   });
+  if (body.designBrief) applyDesignBrief(body.designBrief);
+  if (body.applianceQuestions?.length) renderApplianceQuestions(body.applianceQuestions);
   await renderFloorPlan(body);
   if (body.ready) switchPanelTab('confirmed');
 }
@@ -1366,12 +2377,12 @@ async function pullPreferenceQuestions() {
 
 const VIEW_NAMES = () => ({ front: t('viewFront'), topBase: t('viewTopBase'), topWall: t('viewTopWall'), side: t('viewSide') });
 
-const SCORE_LABELS = {
+const SCORE_LABELS = () => ({
   widthRhythm: t('scoreRhythm'), narrowPenalty: t('scoreNarrow'),
   seamAlignment: t('scoreSeam'), symmetry: t('scoreSym'), fillerPlacement: t('scoreFiller'),
-};
+});
 
-function renderLayout(body) {
+function renderLayout(body, opts = {}) {
   const counts = body.moduleCounts.map((m) =>
     `<tr><td>${esc(m.moduleCode)}</td><td class="hint">${m.width}"×${m.height}"×${m.depth}"</td><td class="num">${m.qty}</td></tr>`).join('');
   const warns = (body.warnings || []).map((w) => `<div class="err">· ${esc(w.message)}</div>`).join('');
@@ -1393,7 +2404,7 @@ function renderLayout(body) {
 
   const scoreBlock = (body.aesthetics || []).map((a) => {
     const b = a.score.breakdown;
-    const bars = Object.entries(SCORE_LABELS).map(([k, label]) => {
+    const bars = Object.entries(SCORE_LABELS()).map(([k, label]) => {
       const pct = Math.round((b[k] ?? 0) * 100);
       return `<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0">
         <span style="width:70px;color:#9aa4b2">${label}</span>
@@ -1420,7 +2431,14 @@ function renderLayout(body) {
   for (const r of body.views) {
     for (const k of ['front', 'topBase', 'topWall', 'side']) {
       const svg = r.views[k];
-      if (svg) registerArtifact(`${r.runLabel}-${VIEW_NAMES()[k]}.svg`, 'image/svg+xml', svg);
+      if (svg) {
+        registerArtifact(
+          `${r.runLabel}-${VIEW_NAMES()[k]}.svg`,
+          'image/svg+xml',
+          svg,
+          opts.restore ? { silent: true } : {},
+        );
+      }
     }
   }
 
@@ -1466,6 +2484,9 @@ function renderLayout(body) {
   confirmed.layoutNote = t('layoutSummary', totalCabinets, (body.views || []).length);
   renderConfirmed();
   showOutputs();
+
+  // 恢复会话时不要再插一条「去报价」互动卡
+  if (opts.restore) return;
 
   if (gates.layoutOk) {
     const box = document.createElement('div');

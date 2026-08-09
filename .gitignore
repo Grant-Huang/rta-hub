@@ -10,5 +10,11 @@ data/
 sim-out/
 ci-sim-out/
 sim-supply-out/
+# 集成测试会话落盘（FR-21；KEEP_TEST_SESSIONS=1 可全留）
+.tmp/
+# 临时探针脚本（勿入库）
+probe*.ts
+# apps-sdk-ui 桥接构建产物（npm run build:ui 再生）
+web/vendor/
 # Cloudflare 隧道配置（包含凭证）
 .cloudflared/

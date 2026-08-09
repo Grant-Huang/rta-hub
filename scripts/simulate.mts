@@ -15,12 +15,16 @@
  *
  * 用法：npx tsx scripts/simulate.mts [输出目录] [场景数]
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUILTIN_SCENARIO_COUNT, generateScenarios, type Scenario, type ScenarioSet,
 } from "./scenarios.mts";
+import { userAgentTurn, type UserAgentSource, type ConversationTurn } from "./user-agent.mts";
+import {
+  assertNoteMatchesLayout, resolveRevisionIntent, type CabinetIndexEntry,
+} from "../src/layout/revision-intents.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SOURCES_DIR = path.join(SCRIPT_DIR, "..", "test", "sources");
@@ -36,11 +40,31 @@ process.env.SITE_PASSWORD_DISABLED = "true";
 import {
   formatTokenSummary, resetTokenMeter, tokenSnapshot, type TokenSnapshot,
 } from "../src/agents/token-meter.js";
+import { simulateSessionDataDir } from "../src/session/runs.js";
+import { createTestLlmClient } from "../src/agents/llm-client.js";
+import { resolveTestModelTiers, testTierReport } from "../src/agents/model-tiers.js";
+import { createVisionExtractorFromTestEnv } from "../src/floorplan/ollama-vision.js";
 
-const OUT = process.argv[2] ?? "sim-out";
+/** 报告根目录参数；实际落盘为 `<OUT>/<YYYY-MM-DD-NN>/`（含完整 data/，FR-21）。 */
+const OUT_ROOT = process.argv[2] ?? "sim-out";
 /** 默认跑**全部**内置场景。少跑几个的报告和跑全了的报告长得一模一样。 */
 const COUNT = Number(process.argv[3] ?? BUILTIN_SCENARIO_COUNT);
 const ACCOUNTS = { consumer: "ca_demo_consumer", trade: "ca_demo_trade" } as const;
+
+/** `sim-out/YYYY-MM-DD-NN` 递增编号。 */
+function nextDatedRunId(outRoot: string, cwd = process.cwd()): string {
+  const day = new Date().toISOString().slice(0, 10);
+  const root = path.join(cwd, outRoot);
+  let max = 0;
+  if (existsSync(root)) {
+    const re = new RegExp(`^${day}-(\\d{2})$`);
+    for (const name of readdirSync(root)) {
+      const m = name.match(re);
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+  }
+  return `${day}-${String(max + 1).padStart(2, "0")}`;
+}
 
 // ── 跑一遍 ────────────────────────────────────────────────────────────────
 
@@ -86,10 +110,25 @@ type Beat =
 
 async function main(): Promise<void> {
   const mod = await import("../src/server.js");
-  const ctxMod = await import("../src/app/context.js");
-  const app = await mod.createApp({ ephemeral: true });
-  // 场景生成用同一个 LLM 客户端（没配 key 时为 undefined → 走确定性回退）
-  const appCtx = { llm: (await ctxMod.createAppContext({ ephemeral: true })).llm };
+  const datedId = nextDatedRunId(OUT_ROOT);
+  const { runId, dataDir, runRoot } = simulateSessionDataDir(OUT_ROOT, datedId);
+  const OUT = runRoot;
+  // 测试用户 / 场景生成：独立 Ollama 客户端（LLM_MODEL_TEST_*），不碰生产 OPENAI_*
+  const testLlm = createTestLlmClient();
+  const testVision = createVisionExtractorFromTestEnv();
+  for (const line of testTierReport(resolveTestModelTiers())) console.log(`[simulate] ${line}`);
+  console.log(`[simulate] 用户 agent LLM：${testLlm ? "测试端点已接入" : "未配置 —— 确定性回退"}`);
+  console.log(`[simulate] 测试户型视觉：${testVision ? "已接入 LLM_MODEL_TEST_VISION" : "未配置 —— 沿用生产 vision 或手动"}`);
+
+  // 完整 repos 落在 runRoot/data —— 不再用 ephemeral（FR-21）
+  // 系统侧仍用生产 LLM（createApp 默认）；仅户型视觉在配了 TEST 时改用本地 qwen2.5vl
+  const app = await mod.createApp({
+    dataDir,
+    origin: "simulate",
+    runId,
+    ...(testVision ? { vision: testVision } : {}),
+  });
+  const appCtx = { llm: testLlm };
 
   const call = async (p: string, init: RequestInit & { acct?: string } = {}): Promise<Json> => {
     const headers = new Headers(init.headers);
@@ -105,6 +144,7 @@ async function main(): Promise<void> {
   const results: Json[] = [];
   /** 冒烟断言的失败项。非空时进程以非 0 退出，CI 才拦得住。 */
   const failures: string[] = [];
+  const conversationIds: string[] = [];
 
   // 场景由 LLM 生成（没有 key 时回退到确定性生成器，并如实标注）
   const bundle = await call("/api/companies/co_pilot/spec");
@@ -115,7 +155,8 @@ async function main(): Promise<void> {
     hardwareIds: (bundle.hardwareOptions ?? []).map((h: Json) => h.id),
     accessoryIds: (bundle.accessoryOptions ?? []).map((a: Json) => a.id),
   });
-  console.log(`\n场景来源：${scenarioSet.source}　${scenarioSet.note}\n`);
+  console.log(`\n场景来源：${scenarioSet.source}　${scenarioSet.note}`);
+  console.log(`会话持久化：${dataDir}（runId=${runId}）\n`);
 
   /** 每个场景的模型用量。上线定线索费要靠它——见 agents/token-meter.ts。 */
   const tokenByScenario: { id: string; name: string; snapshot: TokenSnapshot }[] = [];
@@ -128,26 +169,98 @@ async function main(): Promise<void> {
     // 「一个客户烧多少」才是要回答的问题
     resetTokenMeter();
 
-    // 1. 建会话 + 多轮对话
-    const { conversation } = await call("/api/conversations", { method: "POST", acct });
+    // 1. 建会话 + 用户 LLM 多轮对话（FR-20：客户不知检查表，由系统引导）
+    const { conversation } = await call("/api/conversations", {
+      method: "POST",
+      acct,
+      body: JSON.stringify({ tags: [k.id, k.name].filter(Boolean) }),
+    });
+    if (conversation?.id) conversationIds.push(conversation.id);
     /** 这一单从头到尾发生的事，按发生顺序。渲染只按这条线走。 */
     const timeline: Beat[] = [];
     const said = (role: "user" | "assistant", text: string) =>
       timeline.push({ kind: "say", role, text });
     let lastQuestions: Json[] = [];
+    let userAgentSource: UserAgentSource = "deterministic";
+    const conversationHistory: ConversationTurn[] = [];
+    const facts = k.customerFacts ?? {
+      intent: k.turns[0] ?? "Want kitchen cabinets",
+      mentionCompany: "枫岭橱柜",
+      province: "Ontario ON",
+      style: "Modern",
+      budget: "Budget CAD $10–20k",
+    };
 
-    for (const turn of k.turns) {
-      const r = await call(`/api/conversations/${conversation.id}/messages`, {
-        method: "POST", acct, body: JSON.stringify({ text: turn }),
+    // 开场：user agent 含糊开口（不倾倒全部 facts）
+    {
+      const open = await userAgentTurn({
+        client: appCtx?.llm,
+        facts,
+        persona: "familiar",
+        mission: {
+          brief: `Simulate scenario ${k.id}: ${k.name}`,
+          softGoals: ["Follow assistant guidance; share facts when asked."],
+        },
+        conversationHistory,
+        opening: true,
       });
-      said("user", turn);
-      for (const reply of r.replies ?? []) said("assistant", reply.content);
+      userAgentSource = open.source;
+      const r = await call(`/api/conversations/${conversation.id}/messages`, {
+        method: "POST", acct, body: JSON.stringify({ text: open.text }),
+      });
+      said("user", open.text);
+      conversationHistory.push({ role: "user", content: open.text });
+      for (const reply of r.replies ?? []) {
+        said("assistant", reply.content);
+        conversationHistory.push({ role: "assistant", content: String(reply.content ?? "") });
+      }
       lastQuestions = r.questions ?? [];
-      console.log(`  客户：${turn}`);
+      console.log(`  客户[user-agent/${open.source}]：${open.text}`);
       console.log(`  助手：${(r.replies?.[0]?.content ?? "（无）").slice(0, 76)}`);
     }
 
-    // 2. 上传户型 + 补齐尺寸与特征
+    // 引导式追问：最多 6 轮，直到 readyToAskDesign 或助手不再追关键缺口
+    for (let i = 0; i < 6; i++) {
+      const lastAsk = [...conversationHistory].reverse().find((t) => t.role === "assistant")?.content ?? "";
+      if (/shall i generate|需要我帮你生成设计/i.test(lastAsk)) break;
+      const next = await userAgentTurn({
+        client: appCtx?.llm,
+        facts,
+        persona: "familiar",
+        mission: {
+          brief: `Simulate scenario ${k.id}: ${k.name}`,
+          softGoals: ["Follow assistant guidance; share facts when asked."],
+        },
+        conversationHistory,
+      });
+      userAgentSource = next.source;
+      // 避免空转：同一句连发两次就停
+      if (timeline.filter((b) => b.kind === "say" && b.role === "user" && b.text === next.text).length >= 2) {
+        break;
+      }
+      const r = await call(`/api/conversations/${conversation.id}/messages`, {
+        method: "POST", acct, body: JSON.stringify({ text: next.text }),
+      });
+      said("user", next.text);
+      conversationHistory.push({ role: "user", content: next.text });
+      for (const reply of r.replies ?? []) {
+        said("assistant", reply.content);
+        conversationHistory.push({ role: "assistant", content: String(reply.content ?? "") });
+      }
+      lastQuestions = r.questions ?? [];
+      console.log(`  客户[user-agent/${next.source}]：${next.text}`);
+      console.log(`  助手：${(r.replies?.[0]?.content ?? "（无）").slice(0, 76)}`);
+      if (r.designBrief?.readyToAskDesign && (r.missingFields ?? []).length === 0) break;
+    }
+    timeline.push({
+      kind: "note", level: "info",
+      text: `userAgent=${userAgentSource} (FR-20; facts not injected into system LLM)`,
+    });
+
+    // 2. 上传户型
+    // 注意：下面用 `/resolve` 补几何是 **simulate 烟测捷径**（已知场景 walls），
+    // 不是 FR-20 测试用户 agent 路径。`pnpm test:user` / `run-case.ts` 已禁止 harness
+    // 直写库——尺寸只进用户 agent 私有世界，由系统追问后经聊天落库。
     // 有 sourceImage 时上传真实样例图（覆盖「用户上传户型图」路径）；否则仍用占位元数据。
     let floorplanBody: Record<string, unknown> = {
       fileName: `kitchen-${k.id}.png`, mimeType: "image/png", sizeBytes: 204800,
@@ -250,13 +363,24 @@ async function main(): Promise<void> {
         method: "POST", acct, body: JSON.stringify({ appliances: k.appliances }),
       });
       const known = k.appliances.filter((a) => a.width !== undefined).length;
+      const unsure = k.appliances.length - known;
       console.log(`  家电：${k.appliances.length} 件（${known} 件给了尺寸，` +
-        `${k.appliances.length - known} 件按常见款推定）`);
+        `${unsure} 件按常见款推定）`);
       timeline.push({
         kind: "note", level: "info",
         text: `家电已录入：${k.appliances.length} 件，其中 ` +
-          `${k.appliances.length - known} 件尺寸不确定、按常见款推定`,
+          `${unsure} 件尺寸不确定、按常见款推定`,
       });
+      // FR-15：推定宽度须客户明确接受后才能出图（不可静默 defer）
+      if (unsure > 0) {
+        const confirm = "assumed widths are fine";
+        const confRes = await call(`/api/conversations/${conversation.id}/messages`, {
+          method: "POST", acct, body: JSON.stringify({ text: confirm }),
+        });
+        said("user", confirm);
+        for (const reply of confRes.replies ?? []) said("assistant", reply.content);
+        console.log("  客户确认推定家电宽度");
+      }
     }
 
     const runs = runsAfterGeom.length
@@ -286,7 +410,19 @@ async function main(): Promise<void> {
     });
     console.log(`  户型：${k.walls.length} 段墙，${featureCount} 个特征，层高 ${k.ceilingHeight}"`);
 
-    // 3. 选择题 → 答偏好
+    // 3. FR-18：客户主动 @ 厂商后才绑公司（模拟不默认第一家）
+    {
+      const mention = facts.mentionCompany ?? "枫岭橱柜";
+      const atText = `@${mention} 想按你们的规格看看`;
+      const atRes = await call(`/api/conversations/${conversation.id}/messages`, {
+        method: "POST", acct, body: JSON.stringify({ text: atText }),
+      });
+      said("user", atText);
+      for (const reply of atRes.replies ?? []) said("assistant", reply.content);
+      console.log(`  客户 @ 厂商：${mention}`);
+    }
+
+    // 3b. 选择题 → 答偏好
     const qs = await call(
       `/api/conversations/${conversation.id}/questions?companyId=co_pilot`, { acct });
     timeline.push({ kind: "questions", questions: qs.questions ?? [] });
@@ -296,7 +432,7 @@ async function main(): Promise<void> {
     timeline.push({ kind: "answered", note: prefNote(k) });
     console.log(`  选择题 ${(qs.questions ?? []).length} 道　偏好已记录`);
 
-    // 3b. FR-15：出图前用白话补齐检查表关键项（风格/省份；无窗/无家电则明示推迟）
+    // 3b. FR-15：仅补 user-agent 引导未覆盖的缺口（风格/省/无窗/家电推迟）
     // 预算可由 preferences.budgetBand 满足；不能猜上下水——场景 walls.features 必须带 plumbing。
     {
       const hasWindows = k.walls.some((w) => w.features.some((f) => f.kind === "window"));
@@ -304,13 +440,33 @@ async function main(): Promise<void> {
       if (!hasPlumbing) {
         failures.push(`${k.id}. ${k.name}：场景未声明上下水，违反 FR-15（不能猜）`);
       }
+      // 以会话里已说过的用户话 + facts 为准，避免引导后再叠一段重复 seal
+      const saidUser = timeline
+        .filter((b) => b.kind === "say" && b.role === "user")
+        .map((b) => (b.kind === "say" ? b.text : ""))
+        .join("\n");
+      const covered = [saidUser, facts.style ?? "", facts.province ?? "", facts.budget ?? ""].join("\n");
+      const planSnap = await call(`/api/floorplans/${floorPlanId}`, { acct });
+      const planApps = (planSnap.floorPlan?.appliances ?? []) as { provenance?: string }[];
+      const appsConfirmed = planApps.length > 0
+        && planApps.every((a) => a.provenance === "customer");
+      const seedApps = (k.appliances?.length
+        ? k.appliances
+        : [
+            { kind: "refrigerator" as const, width: 36 },
+            { kind: "range" as const, width: 30 },
+            { kind: "dishwasher" as const, width: 24 },
+          ]);
+      const appsSeal = seedApps
+        .map((a) => `${a.kind} ${a.width ?? "?"}\"`)
+        .join(", ");
       const sealParts = [
-        /modern|shaker|style|风格|现代|北欧|简约/i.test(k.turns.join("\n"))
-          ? "" : "Modern style.",
-        /ontario|\bon\b|安大略|bc|alberta|province/i.test(k.turns.join("\n"))
-          ? "" : "Ontario ON.",
-        hasWindows ? "" : "No windows.",
-        k.appliances?.length ? "" : "Appliances later.",
+        /modern|shaker|style|风格|现代|北欧|简约|白色/i.test(covered)
+          ? "" : (facts.style ? `${facts.style}。` : "现代简约风格。"),
+        /ontario|\bon\b|安大略|bc|alberta|province|省/i.test(covered)
+          ? "" : (facts.province ?? "安大略省 ON。"),
+        hasWindows || /no windows?|没有窗|无窗/i.test(covered) ? "" : "没有窗户。",
+        appsConfirmed ? "" : (facts.appliances ?? appsSeal),
       ].filter(Boolean);
       if (sealParts.length) {
         const seal = sealParts.join(" ");
@@ -319,7 +475,44 @@ async function main(): Promise<void> {
         });
         said("user", seal);
         for (const reply of sealRes.replies ?? []) said("assistant", reply.content);
-        console.log(`  FR-15 确认：${seal}`);
+        console.log(`  FR-15 补缺：${seal}`);
+      } else {
+        console.log("  FR-15：引导已覆盖风格/省等，跳过重复封口");
+      }
+      // 出图前家电必须落 plan 且宽度已确认（对话提过不够）
+      const afterSeal = await call(`/api/floorplans/${floorPlanId}`, { acct });
+      let apps = (afterSeal.floorPlan?.appliances ?? []) as { provenance?: string }[];
+      if (!apps.length) {
+        const resolveApps = await call(`/api/floorplans/${floorPlanId}/resolve`, {
+          method: "POST", acct,
+          body: JSON.stringify({
+            appliances: seedApps.map((a) => ({
+              kind: a.kind,
+              ...(a.width !== undefined ? { width: a.width } : {}),
+              ...(a.preferredZone ? { preferredZone: a.preferredZone } : {}),
+            })),
+          }),
+        });
+        if (resolveApps.applianceFitOk === false) {
+          const msgs = (resolveApps.applianceFitWarnings as string[] | undefined) ?? [];
+          console.log(`  ⚠ early-fit（resolve）：${msgs.join("；") || "家电放不下"}`);
+          timeline.push({
+            kind: "note", level: "warn",
+            text: `early-fit：${msgs.join("；") || "家电与墙长不匹配"}`,
+          });
+          for (const m of msgs) said("assistant", m);
+        }
+        console.log("  FR-15：API 补录家电宽度（对话未写入 plan.appliances）");
+        apps = seedApps.map(() => ({ provenance: "customer" }));
+      }
+      if (apps.some((a) => a.provenance === "assumed")) {
+        const confirm = "推定可以";
+        const confRes = await call(`/api/conversations/${conversation.id}/messages`, {
+          method: "POST", acct, body: JSON.stringify({ text: confirm }),
+        });
+        said("user", confirm);
+        for (const reply of confRes.replies ?? []) said("assistant", reply.content);
+        console.log("  FR-15：确认推定家电宽度");
       }
     }
 
@@ -335,6 +528,46 @@ async function main(): Promise<void> {
     }
     said("assistant", askDesign.prompt?.message ?? "");
 
+    const openFit = ((askDesign.designBrief?.openItems ?? []) as { id?: string; status?: string; brief?: string }[])
+      .some((i) => i.id === "appliances_fit" && i.status === "missing");
+    const maxWallLen = Math.max(0, ...k.walls.map((w) => w.length));
+    const earlyFitExpected = openFit && maxWallLen <= 96;
+    if (openFit) {
+      const brief = ((askDesign.designBrief?.openItems ?? []) as { id?: string; brief?: string }[])
+        .find((i) => i.id === "appliances_fit")?.brief ?? "appliances_fit";
+      console.log(`  ⚠ early-fit 闸门：${String(brief).slice(0, 120)}`);
+      timeline.push({ kind: "note", level: "warn", text: `early-fit 闸门：${brief}` });
+    }
+    if (earlyFitExpected || (openFit && !askDesign.designBrief?.readyToAskDesign && maxWallLen <= 96)) {
+      // 场景 A 等小厨房：成功 = 即时拦住，禁止强行出图/报价
+      console.log("  ✓ 小厨房 early-fit 已拦截，跳过出图/报价（预期行为）");
+      timeline.push({
+        kind: "note", level: "info",
+        text: "小厨房空间不足：系统在出图前拦截（early-fit），未交付图纸与报价",
+      });
+      const usage = tokenSnapshot();
+      tokenByScenario.push({ id: k.id, name: k.name, snapshot: usage });
+      results.push({
+        kitchen: k, conversation, timeline, questions: lastQuestions,
+        planRounds: [], layout: {}, quote: {}, designPrompt: askDesign.prompt,
+        usage: usage as unknown as Json,
+        userAgent: userAgentSource,
+      });
+      continue;
+    }
+    if (openFit && !askDesign.designBrief?.readyToAskDesign) {
+      failures.push(`${k.id}. ${k.name}：家电与墙长不匹配且未就绪，却不是预期的小厨房边界场景`);
+      const usage = tokenSnapshot();
+      tokenByScenario.push({ id: k.id, name: k.name, snapshot: usage });
+      results.push({
+        kitchen: k, conversation, timeline, questions: lastQuestions,
+        planRounds: [], layout: {}, quote: {}, designPrompt: askDesign.prompt,
+        usage: usage as unknown as Json,
+        userAgent: userAgentSource,
+      });
+      continue;
+    }
+
     // 5. 客户点头 → 全局俯视图（多轮改）
     await call(`/api/conversations/${conversation.id}/design/advance`, {
       method: "POST", acct, body: JSON.stringify({ companyId: "co_pilot", action: "consent" }),
@@ -348,6 +581,9 @@ async function main(): Promise<void> {
     const mixOf = (v: Json) =>
       (v.moduleCounts ?? []).map((m: Json) => `${m.moduleCode}×${m.qty}`).join(" ");
 
+    let lastCabinetIndex: CabinetIndexEntry[] = [];
+    /** 上一轮客户 note，供本轮俯视图冒烟（含 #N / 型号时必须真有）。 */
+    let pendingSmokeNote: string | undefined;
     for (let round = 0; round <= k.revisions.length; round++) {
       planView = await call(`/api/floorplans/${floorPlanId}/plan-view`, {
         method: "POST", acct, body: JSON.stringify({ companyId: "co_pilot" }),
@@ -356,6 +592,22 @@ async function main(): Promise<void> {
         console.log(`    ⚠ 出俯视图失败：${planView.error}`);
         timeline.push({ kind: "note", level: "warn", text: `出俯视图失败：${planView.error}` });
         break;
+      }
+      if (Array.isArray(planView.cabinetIndex)) {
+        lastCabinetIndex = planView.cabinetIndex as CabinetIndexEntry[];
+      }
+      if (pendingSmokeNote) {
+        const codes = (planView.moduleCounts ?? []).map((m: Json) => String(m.moduleCode ?? ""));
+        const smoke = assertNoteMatchesLayout({
+          note: pendingSmokeNote,
+          cabinetIndex: lastCabinetIndex,
+          moduleCodes: codes,
+        });
+        if (!smoke.ok) {
+          console.log(`    ⚠ 修订冒烟失败：${smoke.detail}`);
+          timeline.push({ kind: "note", level: "warn", text: `修订冒烟：${smoke.detail}` });
+        }
+        pendingSmokeNote = undefined;
       }
       const mix = mixOf(planView);
       const prev = planRounds[planRounds.length - 1];
@@ -366,14 +618,29 @@ async function main(): Promise<void> {
         ...(planView.revision?.unapplied ? { unapplied: planView.revision.unapplied } : {}),
       });
 
-      // 上一轮什么都没改到的话，别说"重排了一版"——那与刚说过的
-      // "这一轮没有可落到排布上的具体改动"自相矛盾
-      const appliedLast: string[] = planView.revision?.applied ?? [];
-      said("assistant", round === 0
-        ? "这是全局俯视图，分地柜层和吊柜层。先看排布——哪个柜子该挪、哪里想换成抽屉，直接说。"
-        : appliedLast.length
-          ? `按你说的重排了一版（${label}）。`
-          : `这是${label}。刚才那条我没法落到排布上，所以和上一版一样——还有别的要改吗？`);
+      // 闸门未过：叙事「发现…正在调整…」，不把空 SVG 当交付预览
+      if (planView.deliverableReady === false || planView.adjusting) {
+        const narrative = String(planView.narrative ?? planView.auditText ?? "正在调整排布");
+        said("assistant", narrative);
+        timeline.push({ kind: "note", level: "warn", text: narrative });
+        console.log(`  全局俯视图 ${label}：未就绪 — ${narrative.slice(0, 120)}`);
+      } else {
+        const appliedLast: string[] = planView.revision?.applied ?? [];
+        said("assistant", round === 0
+          ? "这是全局俯视图，分地柜层和吊柜层。先看排布——哪个柜子该挪、哪里想换成抽屉，直接说。"
+          : appliedLast.length
+            ? `按你说的重排了一版（${label}）。`
+            : `这是${label}。刚才那条我没法落到排布上，所以和上一版一样——还有别的要改吗？`);
+        timeline.push({
+          kind: "planViews", label, mix,
+          changed: prev ? prev.mix !== mix : undefined,
+          applied: planView.revision?.applied ?? [],
+          ...(planView.revision?.unapplied ? { unapplied: planView.revision.unapplied } : {}),
+          views: planView.planViews ?? {},
+        });
+        console.log(`  全局俯视图 ${label}：${mix}` +
+          (prev ? (prev.mix === mix ? "　（与上一版相同）" : "　← 排布已变") : ""));
+      }
       if (planView.audit) {
         timeline.push({
           kind: "audit", on: `全局俯视图 ${label}`,
@@ -381,31 +648,35 @@ async function main(): Promise<void> {
           checked: planView.audit.checked ?? [],
         });
       }
-      timeline.push({
-        kind: "planViews", label, mix,
-        changed: prev ? prev.mix !== mix : undefined,
-        applied: planView.revision?.applied ?? [],
-        ...(planView.revision?.unapplied ? { unapplied: planView.revision.unapplied } : {}),
-        views: planView.planViews ?? {},
-      });
-      console.log(`  全局俯视图 ${label}：${mix}` +
-        (prev ? (prev.mix === mix ? "　（与上一版相同）" : "　← 排布已变") : ""));
 
       const rev = k.revisions[round];
       if (!rev) break;
+      // 见过首版柜号后，把意图落到真实 #N note（禁止场景里写死 B12）
+      const resolved = resolveRevisionIntent({
+        intent: rev.intent,
+        ...(rev.note ? { note: rev.note } : {}),
+        ...(rev.changes ? { changes: rev.changes } : {}),
+        cabinetIndex: lastCabinetIndex,
+        ...(typeof rev.changes?.doorStyleId === "string"
+          ? { doorStyleId: rev.changes.doorStyleId } : {}),
+      });
       const adv = await call(`/api/conversations/${conversation.id}/design/advance`, {
         method: "POST", acct,
         body: JSON.stringify({
-          companyId: "co_pilot", action: "revise", note: rev.note, changes: rev.changes,
+          companyId: "co_pilot",
+          action: "revise",
+          note: resolved.note,
+          changes: resolved.changes,
         }),
       });
-      said("user", rev.note);
+      said("user", resolved.note);
       const applied: string[] = adv.revision?.applied ?? [];
       const line = applied.length
         ? `好的，这就按「${applied.join("、")}」重排一版。`
         : (adv.revision?.unapplied ?? "这条我暂时改不到排布上。");
       said("assistant", line);
-      console.log(`  客户：${rev.note}\n  助手：${line}`);
+      console.log(`  客户（intent=${resolved.intent}）：${resolved.note}\n  助手：${line}`);
+      pendingSmokeNote = resolved.note;
     }
 
     // 6. 认可排布 → 完整四视图
@@ -554,9 +825,12 @@ async function main(): Promise<void> {
       const before = planRounds[i];
       const after = planRounds[i + 1];
       if (!before || !after) continue;
-      const meaningful = Object.keys(rev.changes).length > 0;
+      // 意图化修订：changes 可能在见首版后才由 resolveRevisionIntent 补全
+      const meaningful =
+        Object.keys(rev.changes ?? {}).length > 0
+        || (rev.intent !== undefined && rev.intent !== "unactionable");
       if (meaningful && after.applied.length === 0) {
-        fail(`第 ${i + 1} 轮修改「${rev.note}」没有落到任何偏好项上`);
+        fail(`第 ${i + 1} 轮修改「${rev.note ?? rev.intent}」没有落到任何偏好项上`);
       }
       if (!meaningful && before.mix !== after.mix) {
         fail(`第 ${i + 1} 轮没有任何改动，排布却变了——说明结果不稳定`);
@@ -595,6 +869,7 @@ async function main(): Promise<void> {
       kitchen: k, conversation, timeline, questions: lastQuestions,
       planRounds, layout, quote, designPrompt: askDesign.prompt,
       usage: usage as unknown as Json,
+      userAgent: userAgentSource,
     });
   }
 
@@ -616,7 +891,27 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`\n产出写入 ${OUT}/：designs.html、explanations.txt、以及各视图 SVG`);
+  writeFileSync(path.join(OUT, "run.json"), JSON.stringify({
+    runId, dataDir, origin: "simulate",
+    scenarioSource: scenarioSet.source,
+    conversationIds,
+    createdAt: new Date().toISOString(),
+  }, null, 2), "utf-8");
+  writeFileSync(path.join(path.resolve(OUT_ROOT), "latest-run.txt"), `${runId}\n${OUT}\n`, "utf-8");
+
+  await call(`/api/admin/session-runs/${runId}/end`, {
+    method: "POST",
+    headers: { "x-admin-token": process.env.ADMIN_TOKEN || "sim" },
+    body: JSON.stringify({
+      exitCode: failures.length > 0 ? 1 : 0,
+      scenarioSource: scenarioSet.source,
+      critiqueConversationIds: conversationIds,
+      note: `simulate ${results.length} scenarios`,
+    }),
+  });
+
+  console.log(`\n产出写入 ${OUT}/：designs.html、explanations.txt、SVG、data/（完整会话库）`);
+  console.log(`运营评审：打开 /admin 并筛选 runId=${runId}`);
 
   if (failures.length > 0) {
     console.error(`\n✖ 冒烟检查未通过（${failures.length} 项）：`);
@@ -979,6 +1274,8 @@ function renderHtml(results: Json[], set: ScenarioSet): string {
 <p class="lede">走真实 HTTP 端点。下面是一条<b>时间线</b>——每样东西出现在它真正被产出的那一刻：
 客户先看到全局俯视图、在上面改，<b>改到认可之后</b>才有四视图与报价清单。</p>
 <p class="src"><b>场景来源：</b>${set.source === "llm" ? "LLM 动态生成" : "确定性生成器"}　${esc(set.note)}</p>
+<p class="src"><b>用户 agent：</b>${esc(String(results[0]?.userAgent ?? "deterministic"))}（FR-20；customerFacts 不注入系统 LLM）</p>
+<p class="src"><b>会话库：</b>本目录下 <code>data/</code>（FR-21 全量持久化；运营侧 /admin 可评审）</p>
 ${sections}
 </div></body></html>`;
 }

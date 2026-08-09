@@ -116,34 +116,58 @@ export class ApplianceError extends Error {}
  *
  * 没给宽度就走默认值并标 `assumed`——**不拒绝**，因为"我不确定"是合法答案，
  * 卡在这里等于逼客户先去量尺寸。
+ *
+ * @param overlayDefaults FR-22 平台 overlay 对默认宽度的覆盖（客户明示宽度仍优先）。
  */
 export function applianceFrom(input: {
   kind: ApplianceKind;
   width?: number | undefined;
   clearanceEachSide?: number | undefined;
   preferredZone?: ApplianceSpec["preferredZone"];
-}): ApplianceSpec {
+  language?: "en" | "zh";
+}, overlayDefaults?: Partial<Record<ApplianceKind, number>>): ApplianceSpec {
+  const lang = input.language ?? "en";
   const d = APPLIANCE_DEFAULTS[input.kind];
-  if (!d) throw new ApplianceError(`未知的家电类型 ${String(input.kind)}`);
+  if (!d) {
+    throw new ApplianceError(lang === "zh"
+      ? `未知的家电类型 ${String(input.kind)}`
+      : `Unknown appliance kind ${String(input.kind)}`);
+  }
+
+  const defaultWidth = overlayDefaults?.[input.kind] ?? d.width;
+  const label = applianceLabel(input.kind, lang);
 
   if (input.width !== undefined) {
     if (!Number.isFinite(input.width) || input.width < MIN_WIDTH || input.width > MAX_WIDTH) {
-      throw new ApplianceError(
-        `${APPLIANCE_LABEL[input.kind]}宽度 ${input.width}" 超出合理范围（${MIN_WIDTH}–${MAX_WIDTH}"）`);
+      throw new ApplianceError(lang === "zh"
+        ? `${label}宽度 ${input.width}" 超出合理范围（${MIN_WIDTH}–${MAX_WIDTH}"）`
+        : `${label} width ${input.width}" is outside the allowed range (${MIN_WIDTH}–${MAX_WIDTH}")`);
     }
   }
   const gap = input.clearanceEachSide ?? d.clearanceEachSide;
   if (!Number.isFinite(gap) || gap < 0 || gap > 6) {
-    throw new ApplianceError(`通风间隙 ${gap}" 不合理（0–6"）`);
+    throw new ApplianceError(lang === "zh"
+      ? `通风间隙 ${gap}" 不合理（0–6"）`
+      : `Clearance ${gap}" is unreasonable (0–6")`);
   }
 
   return {
     kind: input.kind,
-    width: input.width ?? d.width,
+    width: input.width ?? defaultWidth,
     clearanceEachSide: gap,
     ...(input.preferredZone ? { preferredZone: input.preferredZone } : {}),
     provenance: input.width === undefined ? "assumed" : "customer",
   };
+}
+
+/** FR-22：按 overlay 生成默认冰箱+灶具（推定）。 */
+export function defaultAssumedAppliances(
+  overlayWidths?: Partial<Record<ApplianceKind, number>>,
+): ApplianceSpec[] {
+  return [
+    applianceFrom({ kind: "refrigerator" }, overlayWidths),
+    applianceFrom({ kind: "range" }, overlayWidths),
+  ];
 }
 
 /**

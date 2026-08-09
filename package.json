@@ -14,7 +14,9 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:ui": "npm --prefix web-ui run dev",
     "build": "tsc -p tsconfig.build.json",
+    "build:ui": "npm --prefix web-ui run build",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
@@ -22,6 +24,7 @@
     "gates": "tsx src/ops/gates-cli.ts",
     "simulate": "tsx scripts/simulate.mts",
     "simulate:supply": "tsx scripts/simulate-supply.mts",
+    "test:user": "tsx scripts/run-test-user.mts",
     "sanity:doc": "tsx scripts/sanity-doc.mts"
   },
   "dependencies": {
