@@ -59,7 +59,7 @@ function mockConversation(requirements = ""): Conversation {
 }
 
 describe("siteDiagramReview", () => {
-  it("should block when walls have no labels", () => {
+  it("should block when walls have no labels", async () => {
     const geometry = mockGeometry([
       { id: "w1", label: "", length: 120 },
       { id: "w2", label: "North", length: 96 },
@@ -73,7 +73,7 @@ describe("siteDiagramReview", () => {
     const questions: SiteQuestion[] = [];
     const conv = mockConversation();
 
-    const result = reviewSiteDiagramDeterministic({
+    const result = await reviewSiteDiagramDeterministic({
       diagram,
       floorPlan: plan,
       siteQuestions: questions,
@@ -86,7 +86,7 @@ describe("siteDiagramReview", () => {
     assert.equal(result.blockers[0]!.code, "UNLABELED_WALLS");
   });
 
-  it("should block when wall label in questions not in diagram", () => {
+  it("should block when wall label in questions not in diagram", async () => {
     const geometry = mockGeometry([
       { id: "w1", label: "South", length: 120 },
       { id: "w2", label: "North", length: 96 },
@@ -110,7 +110,7 @@ describe("siteDiagramReview", () => {
     ];
     const conv = mockConversation();
 
-    const result = reviewSiteDiagramDeterministic({
+    const result = await reviewSiteDiagramDeterministic({
       diagram,
       floorPlan: plan,
       siteQuestions: questions,
@@ -124,7 +124,7 @@ describe("siteDiagramReview", () => {
     assert.ok(mismatch.detail.includes("South"));
   });
 
-  it("should warn when Q# in questions but not in diagram", () => {
+  it("should warn when Q# in questions but not in diagram", async () => {
     const geometry = mockGeometry([
       { id: "w1", label: "North", length: 120 },
     ]);
@@ -145,7 +145,7 @@ describe("siteDiagramReview", () => {
     ];
     const conv = mockConversation();
 
-    const result = reviewSiteDiagramDeterministic({
+    const result = await reviewSiteDiagramDeterministic({
       diagram,
       floorPlan: plan,
       siteQuestions: questions,
@@ -159,7 +159,7 @@ describe("siteDiagramReview", () => {
     assert.equal(result.warnings[0]!.code, "Q_NUMBER_MISMATCH");
   });
 
-  it("should block when no wall lengths available", () => {
+  it("should block when no wall lengths available", async () => {
     const geometry = mockGeometry([
       { id: "w1", label: "North", length: 0 },
       { id: "w2", label: "South", length: 0 },
@@ -173,7 +173,7 @@ describe("siteDiagramReview", () => {
     const questions: SiteQuestion[] = [];
     const conv = mockConversation();
 
-    const result = reviewSiteDiagramDeterministic({
+    const result = await reviewSiteDiagramDeterministic({
       diagram,
       floorPlan: plan,
       siteQuestions: questions,
@@ -186,7 +186,7 @@ describe("siteDiagramReview", () => {
     assert.ok(missing);
   });
 
-  it("should pass when all checks are satisfied", () => {
+  it("should pass when all checks are satisfied", async () => {
     const geometry = mockGeometry([
       { id: "w1", label: "North", length: 120 },
       { id: "w2", label: "South", length: 96 },
@@ -208,7 +208,7 @@ describe("siteDiagramReview", () => {
     ];
     const conv = mockConversation("North wall 120 inches, South wall 96 inches");
 
-    const result = reviewSiteDiagramDeterministic({
+    const result = await reviewSiteDiagramDeterministic({
       diagram,
       floorPlan: plan,
       siteQuestions: questions,
@@ -220,7 +220,7 @@ describe("siteDiagramReview", () => {
     assert.equal(result.blockers.length, 0);
   });
 
-  it("should warn when requirements mention wall not in diagram", () => {
+  it("should warn when requirements mention wall not in diagram", async () => {
     const geometry = mockGeometry([
       { id: "w1", label: "North", length: 120 },
       { id: "w2", label: "East", length: 96 },
@@ -234,7 +234,7 @@ describe("siteDiagramReview", () => {
     const questions: SiteQuestion[] = [];
     const conv = mockConversation("The East wall has a window");
 
-    const result = reviewSiteDiagramDeterministic({
+    const result = await reviewSiteDiagramDeterministic({
       diagram,
       floorPlan: plan,
       siteQuestions: questions,

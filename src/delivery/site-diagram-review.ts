@@ -297,8 +297,8 @@ Respond in JSON:
 /**
  * 确定性（无AI）审查 - 用于测试和无LLM环境。
  */
-export function reviewSiteDiagramDeterministic(
+export async function reviewSiteDiagramDeterministic(
   input: Omit<SiteDiagramReviewInput, "llm">,
-): SiteDiagramReviewResult {
-  return reviewSiteDiagram({ ...input, llm: undefined }) as any;
+): Promise<SiteDiagramReviewResult> {
+  return reviewSiteDiagram({ ...input, llm: undefined });
 }
