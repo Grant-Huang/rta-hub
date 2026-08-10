@@ -26,6 +26,7 @@ function mockGeometry(wallRuns: Array<{ id: string; label: string; length: numbe
       endsAtCorner: false,
     })),
     ceilingHeight: 96,
+    confidence: 0.9,
   };
 }
 
@@ -33,7 +34,9 @@ function mockFloorPlan(geometry: ParsedGeometry): FloorPlan {
   return {
     id: "fp_test",
     conversationId: "conv_test",
+    sourceFile: { name: "test.png", mimeType: "image/png", sizeBytes: 1000 },
     parsedGeometry: geometry,
+    parseConfidence: 0.9,
     unresolvedItems: [],
     appliances: [],
     createdAt: NOW,
@@ -44,13 +47,12 @@ function mockFloorPlan(geometry: ParsedGeometry): FloorPlan {
 function mockConversation(requirements = ""): Conversation {
   return {
     id: "conv_test",
-    accountId: "acc_test",
+    customerAccountId: "acc_test",
     messages: [],
     designRequirements: requirements,
-    selectedCompanyId: null,
-    preferences: undefined,
+    perCompanyThreads: [],
+    status: "active" as const,
     createdAt: NOW,
-    updatedAt: NOW,
     origin: "test" as const,
     runId: "test-run",
   };

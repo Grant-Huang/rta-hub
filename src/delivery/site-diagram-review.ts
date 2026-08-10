@@ -167,7 +167,7 @@ export async function reviewSiteDiagram(
         `${run.label.toLowerCase()}\\s*(?:wall|墙)`,
         "i",
       ).test(req);
-      if (mentioned && !diagramWallLabels.includes(run.label)) {
+      if (mentioned && !Array.from(diagramWallLabels).includes(run.label)) {
         findings.push({
           severity: "warning",
           code: "CONFIRMED_VS_DIAGRAM",
@@ -261,14 +261,13 @@ Respond in JSON:
 }`;
 
   const response = await input.llm.complete({
-    systemPrompt: "You are a quality reviewer for architectural diagrams.",
-    userMessage: prompt,
+    system: "You are a quality reviewer for architectural diagrams.",
+    messages: [{ role: "user", content: prompt }],
     temperature: 0.3,
-    maxTokens: 800,
   });
 
   try {
-    const parsed = JSON.parse(response.content);
+    const parsed = JSON.parse(response);
     
     for (const f of parsed.findings || []) {
       const code: SiteDiagramReviewCode = 
