@@ -107,6 +107,7 @@ import {
   applyChatApplianceAnswers, chatMentionsApplianceKinds, isConfirmAssumedAppliances,
 } from "./design/chat-appliance-answers.js";
 import { renderSiteDiagram } from "./render/site-diagram.js";
+import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
 import {
   floorplanFirstWelcome, intakeSampleCards, reuploadPrompt, shouldSuggestReupload,
@@ -599,8 +600,10 @@ function answeredFieldFeedback(
 /**
  * 打包 designBrief + 现场文字 Q#（默认不附图）。
  * 提问改纯文字：避免每轮把户型草图再贴一遍，造成「机械复述」。
+ * 
+ * **新增（用户需求）：发给客户前AI审查siteDiagram**
  */
-function briefingPayload(
+async function briefingPayload(
   conversationId: string,
   companyId?: string,
   opts?: { includeSiteDiagram?: boolean },
@@ -610,9 +613,48 @@ function briefingPayload(
   const plan = planForConversation(conversationId);
   const lang = conv ? resolveLanguage(conv.preferences?.shared) : DEFAULT_LANGUAGE;
   const site = buildSiteQuestions(plan, conv?.designRequirements ?? "", lang);
-  const diagram = opts?.includeSiteDiagram && plan
-    ? renderSiteDiagram(plan.parsedGeometry, site.questions)
-    : undefined;
+  
+  let diagram: ReturnType<typeof renderSiteDiagram> | undefined;
+  let diagramReview: SiteDiagramReviewResult | undefined;
+  
+  if (opts?.includeSiteDiagram && plan && conv) {
+    diagram = renderSiteDiagram(plan.parsedGeometry, site.questions);
+    
+    // **AI审查 - 发给客户前的质量闸门**
+    try {
+      diagramReview = await reviewSiteDiagram({
+        diagram,
+        floorPlan: plan,
+        siteQuestions: site.questions,
+        conversation: conv,
+        language: lang,
+        llm: appCtx.llm, // 使用配置的LLM客户端
+      });
+      
+      // 如果审查不通过，不发送图，但保留警告信息供前端显示
+      if (!diagramReview.ok) {
+        diagram = undefined;
+      }
+    } catch (err) {
+      // 审查失败时记录但不阻止（避免审查机制本身成为单点故障）
+      console.warn(
+        `[siteDiagram] Review failed for ${conversationId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      // 审查失败时允许发送图，但标记为未审查
+      diagramReview = {
+        ok: true,
+        findings: [{
+          severity: "info",
+          code: "DIAGRAM_GENERATION_FAILED",
+          detail: `Review process failed: ${err instanceof Error ? err.message : String(err)}`,
+        }],
+        blockers: [],
+        warnings: [],
+      };
+    }
+  }
+  
   return {
     designBrief: {
       sections: readiness.sections,
@@ -628,7 +670,25 @@ function briefingPayload(
     needsManualWalls: site.needsManualWalls,
     floorPlanId: plan?.id ?? null,
     floorPlanReady: plan ? isLayoutReady(plan) : false,
-    ...(diagram ? { siteDiagram: { svg: diagram.svg, wallLabels: diagram.wallLabels } } : {}),
+    ...(diagram ? { 
+      siteDiagram: { 
+        svg: diagram.svg, 
+        wallLabels: diagram.wallLabels,
+        // 附带审查结果供前端显示警告
+        reviewPassed: diagramReview?.ok ?? true,
+        reviewWarnings: diagramReview?.warnings.map((w) => w.customerMessage).filter(Boolean),
+      } 
+    } : {}),
+    // 审查阻断时，提供阻断原因
+    ...(diagramReview && !diagramReview.ok ? {
+      siteDiagramBlocked: {
+        reason: diagramReview.blockers.map((b) => b.customerMessage || b.detail).join("; "),
+        blockers: diagramReview.blockers.map((b) => ({
+          code: b.code,
+          message: b.customerMessage || b.detail,
+        })),
+      },
+    } : {}),
   };
 }
 
@@ -1301,11 +1361,11 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
 
   // 缺失字段配一组**可点的快捷回答**（`agents/quick-replies.ts`）。
   //
-  // 「您偏好的厨房风格是什么？」后面跟一串括号里的例子，客户读完还是不知道
+  // 「您偏好的厨房风格是什么？」后面跟一串括号里的例子,客户读完还是不知道
   // 答案该有多长。给可点选项；勿每轮命令式催「回一个词」。
   // FR-17：户型解读可用后去掉 kitchen size / layout。
   const missing = intakeMissing(updated.id);
-  const briefing = briefingPayload(updated.id, questionCompanyId || undefined);
+  const briefing = await briefingPayload(updated.id, questionCompanyId || undefined);
   const readiness = designReadinessFor(updated.id, questionCompanyId || undefined);
   let quickFieldList = missing.length
     ? [...missing]
@@ -2446,7 +2506,7 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
 
   // FR-17：解读 + 纯文字 Q#（不附图提问，避免每轮重贴草图）
   const interpretation = interpretations.join("\n");
-  const briefing = briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
+  const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
   const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
   const assistantBits = [interpretation, ...sitePrompts];
   const suggestReupload = shouldSuggestReupload(plan!, extraction);
@@ -2591,7 +2651,7 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   }
 
   await appCtx.repos.floorPlans.upsert(next);
-  const resolveBriefing = briefingPayload(next.conversationId);
+  const resolveBriefing = await briefingPayload(next.conversationId);
   const fitWarnings = (() => {
     const apps = next.appliances ?? [];
     if (!apps.length || !next.parsedGeometry.wallRuns.some((r) => r.length > 0)) return [];
@@ -2649,7 +2709,7 @@ app.get("/api/conversations/:id/design", requireAccount, async (c) => {
   const plan = planForConversation(conv.id);
   const readiness = designReadinessFor(conv.id, readinessCompanyId);
   const missing = intakeMissing(conv.id);
-  const briefing = briefingPayload(conv.id, readinessCompanyId);
+  const briefing = await briefingPayload(conv.id, readinessCompanyId);
 
   const stored = plan
     ? appCtx.repos.storedLayouts.byId(layoutKey(plan.id, companyId))
