@@ -1361,11 +1361,11 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
 
   // 缺失字段配一组**可点的快捷回答**（`agents/quick-replies.ts`）。
   //
-  // 「您偏好的厨房风格是什么？」后面跟一串括号里的例子，客户读完还是不知道
+  // 「您偏好的厨房风格是什么？」后面跟一串括号里的例子,客户读完还是不知道
   // 答案该有多长。给可点选项；勿每轮命令式催「回一个词」。
   // FR-17：户型解读可用后去掉 kitchen size / layout。
   const missing = intakeMissing(updated.id);
-  const briefing = briefingPayload(updated.id, questionCompanyId || undefined);
+  const briefing = await briefingPayload(updated.id, questionCompanyId || undefined);
   const readiness = designReadinessFor(updated.id, questionCompanyId || undefined);
   let quickFieldList = missing.length
     ? [...missing]
@@ -2506,7 +2506,7 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
 
   // FR-17：解读 + 纯文字 Q#（不附图提问，避免每轮重贴草图）
   const interpretation = interpretations.join("\n");
-  const briefing = briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
+  const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
   const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
   const assistantBits = [interpretation, ...sitePrompts];
   const suggestReupload = shouldSuggestReupload(plan!, extraction);
@@ -2651,7 +2651,7 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   }
 
   await appCtx.repos.floorPlans.upsert(next);
-  const resolveBriefing = briefingPayload(next.conversationId);
+  const resolveBriefing = await briefingPayload(next.conversationId);
   const fitWarnings = (() => {
     const apps = next.appliances ?? [];
     if (!apps.length || !next.parsedGeometry.wallRuns.some((r) => r.length > 0)) return [];
@@ -2709,7 +2709,7 @@ app.get("/api/conversations/:id/design", requireAccount, async (c) => {
   const plan = planForConversation(conv.id);
   const readiness = designReadinessFor(conv.id, readinessCompanyId);
   const missing = intakeMissing(conv.id);
-  const briefing = briefingPayload(conv.id, readinessCompanyId);
+  const briefing = await briefingPayload(conv.id, readinessCompanyId);
 
   const stored = plan
     ? appCtx.repos.storedLayouts.byId(layoutKey(plan.id, companyId))
