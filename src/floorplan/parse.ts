@@ -534,6 +534,41 @@ export function addFeature(
   };
 }
 
+/**
+ * 改一个已存在特征（窗/门/上下水）的位置/宽度——`addFeature` 只会新加一个,
+ * 改"已确认"面板上现有的一条要用这个。找不到墙段/特征时原样返回,不静默创建。
+ */
+export function updateFeature(
+  plan: FloorPlan,
+  wallRunId: string,
+  featureId: string,
+  patch: { offset?: number; width?: number },
+  at: string,
+): FloorPlan {
+  const run = plan.parsedGeometry.wallRuns.find((r) => r.id === wallRunId);
+  if (!run || !run.features.some((f) => f.id === featureId)) return plan;
+  return {
+    ...plan,
+    parsedGeometry: {
+      ...plan.parsedGeometry,
+      wallRuns: plan.parsedGeometry.wallRuns.map((r) =>
+        r.id === wallRunId
+          ? {
+              ...r,
+              features: r.features.map((f) => (f.id === featureId
+                ? {
+                    ...f,
+                    ...(patch.offset !== undefined ? { offset: quantize(patch.offset) } : {}),
+                    ...(patch.width !== undefined ? { width: quantize(patch.width) } : {}),
+                  }
+                : f)),
+            }
+          : r),
+    },
+    updatedAt: at,
+  };
+}
+
 /** 生成给客户的追问列表——按待确认项逐条问，不合并成一大段。 */
 export function pendingQuestions(plan: FloorPlan): { id: string; question: string; suggestion?: number }[] {
   return plan.unresolvedItems

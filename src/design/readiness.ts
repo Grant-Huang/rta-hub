@@ -7,7 +7,7 @@
 import type { Conversation } from "../domain/types.js";
 import type { FloorPlan, WallRun } from "../floorplan/types.js";
 import { isIsland, isLayoutReady } from "../floorplan/types.js";
-import { assumedOnes, applianceLabel } from "../floorplan/appliances.js";
+import { assumedOnes, applianceLabel, type ApplianceKind } from "../floorplan/appliances.js";
 import { planAppliances } from "../layout/appliance-plan.js";
 import { missingFields, fieldLabel } from "../agents/orchestrator.js";
 import { geometrySuppressesIntake } from "./site-questions.js";
@@ -38,12 +38,28 @@ export interface DesignBriefSection {
   status: "locked" | "provisional" | "untouched" | "clarify";
 }
 
+/**
+ * 已确认 Tab 里这一行能不能手动改、改的话要传什么——前端不用去解析 `key`
+ * 字符串猜目标，直接读这个字段拼 `/resolve` 的请求体（见 web/index.html
+ * 的 `submitConfirmedEdit`）。没有这个字段 = 这一行不支持面板内编辑
+ * （风格/预算/省份等走对话改，不在这次编辑范围内）。
+ */
+export type ConfirmedFactEditTarget =
+  | { kind: "wall"; wallRunId: string; currentLength: number }
+  | { kind: "ceiling"; currentHeight: number }
+  | { kind: "appliance"; applianceKind: ApplianceKind; currentWidth: number }
+  | {
+      kind: "feature"; wallRunId: string; featureId: string;
+      currentOffset: number; currentWidth: number;
+    };
+
 /** 已确认 Tab 用的明确事实行（尺寸/位置等，禁止模糊「已记录」）。 */
 export interface ConfirmedFact {
   key: string;
   label: string;
   value: string;
   status: CheckStatus;
+  editTarget?: ConfirmedFactEditTarget;
 }
 
 export interface DesignReadiness {
@@ -506,6 +522,7 @@ function buildConfirmedFacts(
           ? msg(lang, `${r.length}"${depth}`, `${r.length}"${depth}`)
           : msg(lang, "not set", "未定"),
         status: r.length > 0 ? "ok" : "missing",
+        editTarget: { kind: "wall", wallRunId: r.id, currentLength: r.length },
       });
     }
     const ceil = plan.parsedGeometry.ceilingHeight;
@@ -514,6 +531,7 @@ function buildConfirmedFacts(
       label: msg(lang, "Ceiling height", "层高"),
       value: ceil != null ? `${ceil}"` : msg(lang, "not set", "未定"),
       status: ceil != null ? "ok" : "missing",
+      editTarget: { kind: "ceiling", currentHeight: ceil ?? 0 },
     });
     for (const kind of ["plumbing", "window", "door"] as const) {
       for (const { run } of featureKind(plan, kind)) {
@@ -530,6 +548,10 @@ function buildConfirmedFacts(
               `offset ${f.offset}", width ${f.width}"`,
               `距起点 ${f.offset}"，宽 ${f.width}"`),
             status: "ok",
+            editTarget: {
+              kind: "feature", wallRunId: run.id, featureId: f.id,
+              currentOffset: f.offset, currentWidth: f.width,
+            },
           });
         }
       }
@@ -544,6 +566,7 @@ function buildConfirmedFacts(
         label: name,
         value: msg(lang, `width ${a.width}" (${tag})`, `宽 ${a.width}"（${tag}）`),
         status: a.provenance === "assumed" ? "assumed" : "ok",
+        editTarget: { kind: "appliance", applianceKind: a.kind, currentWidth: a.width },
       });
     }
   }

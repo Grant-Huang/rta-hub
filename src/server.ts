@@ -98,7 +98,7 @@ import { buildComparison, renderComparisonHtml, renderComparisonText } from "./q
 import {
   addFeature, addWallRun, createChatSourcedFloorPlan, createFloorPlanWithOutcome, extractionNote,
   interpretationSummary, pendingQuestions, resolveCeilingHeight, resolveItem,
-  resolveWallLength,
+  resolveWallLength, updateFeature,
 } from "./floorplan/parse.js";
 import {
   applyDesignInput, DesignInputError, exportDesignInput, validateDesignInputDocument,
@@ -111,6 +111,7 @@ import {
 } from "./design/chat-appliance-answers.js";
 import { extractGeometryFromChat } from "./design/llm-extract.js";
 import { justConfirmedNotes } from "./design/confirm-recap.js";
+import type { BlockedEdit } from "./design/confirm-lock.js";
 import { renderSiteDiagram } from "./render/site-diagram.js";
 import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
@@ -1180,6 +1181,9 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     // 本轮开始前的快照——用来算"这一轮到底新记下了什么"（弱确认复述），
     // 不是全量已确认清单（那个用 confirmedBriefs，下面已经在用）。
     const planBeforeThisTurn = planChat;
+    // 本轮被"确认锁"拦下的修改尝试——不管是 LLM 抽取还是正则解析触发的，
+    // 都汇总到这一份列表里，用于下面推一句委婉拒绝+引导去已确认面板改。
+    const blockedEditsThisTurn: BlockedEdit[] = [];
     if (planChat) {
       // LLM 结构化解析先"抢答"墙长/层高/家电——喂给它的是按角色打行标的
       // 干净记录（CUSTOMER/ASSISTANT），不是下面 combined 那种把历史文本整段
@@ -1193,12 +1197,14 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
         const extracted = await extractGeometryFromChat(appCtx.llm, turns);
         if (extracted) {
           if (extracted.wallRuns.length > 0 || extracted.ceilingHeightInches !== undefined) {
-            planChat = applyExtractedWalls(planChat, extracted.wallRuns, extracted.ceilingHeightInches, at);
+            planChat = applyExtractedWalls(
+              planChat, extracted.wallRuns, extracted.ceilingHeightInches, at, blockedEditsThisTurn,
+            );
             await appCtx.repos.floorPlans.upsert(planChat);
           }
           if (extracted.appliances.length > 0 || extracted.confirmAssumedAppliances) {
             planChat = applyExtractedAppliances(
-              planChat, extracted.appliances, extracted.confirmAssumedAppliances,
+              planChat, extracted.appliances, extracted.confirmAssumedAppliances, blockedEditsThisTurn,
             );
             await appCtx.repos.floorPlans.upsert(planChat);
           }
@@ -1210,12 +1216,32 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       if (siteApply) {
         await appCtx.repos.floorPlans.upsert(siteApply.plan);
         planChat = siteApply.plan;
+        blockedEditsThisTurn.push(...siteApply.blockedEdits);
       }
       // 用累计文本：历史里的「assumed widths are fine」也能在本轮落库
       const appApply = applyChatApplianceAnswers(planChat, combined);
       if (appApply) {
         await appCtx.repos.floorPlans.upsert(appApply.plan);
         planChat = appApply.plan;
+        blockedEditsThisTurn.push(...appApply.blockedEdits);
+      }
+      // 客户想在对话里改一个已经确认过的数字——委婉拒绝，引导去"已确认"
+      // 面板手动改，不静默套用、也不假装没看见这次修改尝试。
+      if (blockedEditsThisTurn.length > 0) {
+        const lines = blockedEditsThisTurn.map((b) => language === "zh"
+          ? `${b.label}：已确认为 ${b.current}"，暂时没法在对话里直接改成 ${b.attempted}"`
+          : `${b.label}: already confirmed at ${b.current}", can't change it to ${b.attempted}" here`);
+        replies.push({
+          role: "assistant",
+          content: (language === "zh"
+            ? "这几项已经确认过了，对话里没法直接改：\n"
+            : "These are already confirmed and can't be changed in chat:\n")
+            + lines.join("\n")
+            + (language === "zh"
+              ? "\n如果确实要改，请到右边「已确认」面板里手动修改。"
+              : "\nIf you really need to change it, please edit it directly in the Confirmed panel on the right."),
+          at,
+        });
       }
       // 墙长 + 家电一旦齐：立刻报空间不足（禁止「收齐再拒绝」）
       if (planChat) {
@@ -2855,6 +2881,8 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
       kind?: "wall" | "island"; depth?: number;
     };
     addFeature: { wallRunId: string; kind: WallFeature["kind"]; offset: number; width: number };
+    /** 改一个已存在特征的位置/宽度（已确认面板用，不是新加一个）。 */
+    editFeature: { wallRunId: string; featureId: string; offset?: number; width?: number };
     /**
      * 这个厨房里的家电（FR-3.2）。
      *
@@ -2894,6 +2922,22 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
       next = addFeature(next, f.wallRunId, {
         kind: f.kind, offset: f.offset, width: f.width,
       }, now());
+    }
+    if (body.editFeature) {
+      const e = body.editFeature;
+      const run = next.parsedGeometry.wallRuns.find((r) => r.id === e.wallRunId);
+      if (!run) return c.json({ error: `Wall run ${e.wallRunId} not found` }, 400);
+      const feature = run.features.find((f) => f.id === e.featureId);
+      if (!feature) return c.json({ error: `Feature ${e.featureId} not found on ${run.label}` }, 400);
+      const offset = e.offset ?? feature.offset;
+      const width = e.width ?? feature.width;
+      if (offset < 0 || offset + width > run.length) {
+        return c.json({
+          error: `${feature.kind} at ${formatInches(offset)}–${formatInches(offset + width)} ` +
+            `is outside ${run.label} (${formatInches(run.length)})`,
+        }, 400);
+      }
+      next = updateFeature(next, e.wallRunId, e.featureId, { offset: e.offset, width: e.width }, now());
     }
     if (body.appliances) {
       if (!Array.isArray(body.appliances)) {
