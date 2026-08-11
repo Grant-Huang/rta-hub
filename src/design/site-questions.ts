@@ -47,6 +47,17 @@ function hasKind(run: WallRun, kind: string): boolean {
 }
 
 /**
+ * 这类特征已经存在，但是不是客户确认的——户型模板预填的门/窗/上下水
+ * 会带一条待确认项（FR-17.4），不能因为"已经有了"就当作已经问过。
+ */
+function pendingFeatureConfirm(plan: FloorPlan, kind: string): boolean {
+  return plan.unresolvedItems.some((u) =>
+    !u.resolved && u.target.kind === "feature"
+    && plan.parsedGeometry.wallRuns.some((r) => r.features.some(
+      (f) => f.id === u.target.id && f.kind === kind)));
+}
+
+/**
  * 根据户型与需求文案，生成带 Q# 的现场追问。
  *
  * `requirements` 用于识别客户已明文推迟（no windows / plumbing later）。
@@ -121,7 +132,8 @@ export function buildSiteQuestions(
   }
 
   if (geometryUsable && !needsManualWalls) {
-    if (!runs.some((r) => hasKind(r, "plumbing")) && !deferPlumbing) {
+    const plumbingPending = pendingFeatureConfirm(plan, "plumbing");
+    if ((!runs.some((r) => hasKind(r, "plumbing")) && !deferPlumbing) || plumbingPending) {
       add({
         id: "sq_plumbing",
         kind: "plumbing",
@@ -129,30 +141,44 @@ export function buildSiteQuestions(
         wallLabel: runs[0]?.label,
         mark: "Plumbing?",
         promptFor: (q) => msg(lang,
-          `Q${q}: Where is the sink plumbing (which wall name, roughly how far from a corner)? Or say "plumbing later".`,
-          `Q${q}: 上下水在哪面墙（墙名）、距墙角大概多少？不确定可以说「下水稍后」。`),
+          plumbingPending
+            ? `Q${q}: The sink plumbing shown is from the template, not measured yet — does it look about right, or tell me the real wall/offset?`
+            : `Q${q}: Where is the sink plumbing (which wall name, roughly how far from a corner)? Or say "plumbing later".`,
+          plumbingPending
+            ? `Q${q}: 上下水位置是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和距离。`
+            : `Q${q}: 上下水在哪面墙（墙名）、距墙角大概多少？不确定可以说「下水稍后」。`),
       });
     }
 
-    if (!runs.some((r) => hasKind(r, "window")) && !deferWindows) {
+    const windowPending = pendingFeatureConfirm(plan, "window");
+    if ((!runs.some((r) => hasKind(r, "window")) && !deferWindows) || windowPending) {
       add({
         id: "sq_window",
         kind: "window",
         mark: "Window?",
         promptFor: (q) => msg(lang,
-          `Q${q}: Any windows on these walls? Name the wall + rough size, or say "no windows".`,
-          `Q${q}: 这几面墙有窗吗？说出墙名和大概尺寸，或说「没有窗」。`),
+          windowPending
+            ? `Q${q}: The window shown is from the template, not measured yet — does it look about right, or tell me the real wall/size?`
+            : `Q${q}: Any windows on these walls? Name the wall + rough size, or say "no windows".`,
+          windowPending
+            ? `Q${q}: 窗户位置是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和尺寸。`
+            : `Q${q}: 这几面墙有窗吗？说出墙名和大概尺寸，或说「没有窗」。`),
       });
     }
 
-    if (!runs.some((r) => hasKind(r, "door")) && !/no doors?|没有门|无门洞/i.test(req)) {
+    const doorPending = pendingFeatureConfirm(plan, "door");
+    if ((!runs.some((r) => hasKind(r, "door")) && !/no doors?|没有门|无门洞/i.test(req)) || doorPending) {
       add({
         id: "sq_door",
         kind: "door",
         mark: "Door?",
         promptFor: (q) => msg(lang,
-          `Q${q}: Any door openings on these walls? Wall name + width, or say "no door openings".`,
-          `Q${q}: 有门洞吗？说出墙名与宽度，或说「没有门洞」。`),
+          doorPending
+            ? `Q${q}: The door opening shown is from the template, not measured yet — does it look about right, or tell me the real wall/width?`
+            : `Q${q}: Any door openings on these walls? Wall name + width, or say "no door openings".`,
+          doorPending
+            ? `Q${q}: 门洞位置是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和宽度。`
+            : `Q${q}: 有门洞吗？说出墙名与宽度，或说「没有门洞」。`),
       });
     }
   }

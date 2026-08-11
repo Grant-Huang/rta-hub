@@ -109,6 +109,7 @@ import {
 import { renderSiteDiagram } from "./render/site-diagram.js";
 import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
+import { floorplanTemplateById } from "./samples/templates.js";
 import {
   floorplanFirstWelcome, intakeSampleCards, reuploadPrompt, shouldSuggestReupload,
 } from "./floorplan/intake.js";
@@ -2563,6 +2564,141 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     // FR-17.2：解读可用时前端勿再展示加墙/尺寸/形状 quick replies
     suppressGeometryIntake: briefing.geometryUsable,
     ...(extractionNote(extraction!, fpLang) ? { extractionNote: extractionNote(extraction!, fpLang) } : {}),
+    ...briefing,
+    replies: [interpretMsg],
+  }, 201);
+});
+
+/**
+ * 户型模板快选（FR-17.4）：客户选"我家像哪个"，跳过从零手绘。
+ *
+ * 预填**不是**客户确认——每段墙、每处门窗都留一条待确认项，走跟手绘/上传
+ * 一样的 Q# 核对（FR-15.5）。选「其他」（`templateId: "other"`）等同于没选
+ * 模板：维持零墙段，走既有的手动补墙追问。
+ */
+app.post("/api/conversations/:id/floorplan-template", requireAccount, async (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
+  const archived = rejectIfArchived(c, conv);
+  if (archived) return archived;
+  const body = await jsonBody<{ templateId?: string }>(c);
+  const templateId = body.templateId ?? "";
+  const fpLang = resolveLanguage(conv.preferences?.shared);
+  const at = now();
+
+  // 一会话一户型：跟上传口径一致
+  const previousPlans = appCtx.repos.floorPlans.filter((p) => p.conversationId === conv.id);
+  const carriedAppliances = normalizeAppliances(previousPlans.flatMap((p) => p.appliances ?? []));
+
+  if (templateId === "other" || templateId === "") {
+    // 客户说都不像——维持零墙段，走既有的手动补墙追问（FR-17.2 例外条款）
+    let plan = previousPlans[0];
+    if (!plan) {
+      plan = createChatSourcedFloorPlan(conv.id, at);
+      if (carriedAppliances.length > 0) plan = { ...plan, appliances: carriedAppliances };
+      await appCtx.repos.floorPlans.upsert(plan);
+    }
+    const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
+    const noneMsg: ChatMessage = {
+      role: "assistant",
+      content: msg(fpLang,
+        "No problem — let's go wall by wall instead. How many walls does the kitchen have, "
+          + "and roughly how long is each one?",
+        "没关系，那我们一段墙一段墙来——厨房大概几面墙，每段大概多长？"),
+      at,
+    };
+    await appCtx.repos.conversations.update(conv.id, { messages: [...conv.messages, noneMsg] });
+    return c.json({
+      floorPlan: plan,
+      ready: isLayoutReady(plan),
+      questions: pendingQuestions(plan),
+      intakeSamples: intakeSampleCards(fpLang),
+      ...briefing,
+      replies: [noneMsg],
+    });
+  }
+
+  const template = floorplanTemplateById(templateId);
+  if (!template) return c.json({ error: `Unknown template: ${templateId}` }, 400);
+
+  for (const old of previousPlans) await appCtx.repos.floorPlans.remove(old.id);
+  let plan = createChatSourcedFloorPlan(conv.id, at);
+  const wallIds: string[] = [];
+  for (const w of template.walls) {
+    plan = addWallRun(plan, {
+      label: w.label,
+      length: w.length,
+      ...(w.kind ? { kind: w.kind } : {}),
+      ...(w.depth !== undefined ? { depth: w.depth } : {}),
+      ...(w.startsAtCorner !== undefined ? { startsAtCorner: w.startsAtCorner } : {}),
+    }, at);
+    wallIds.push(plan.parsedGeometry.wallRuns[plan.parsedGeometry.wallRuns.length - 1]!.id);
+  }
+  for (const f of template.features) {
+    plan = addFeature(plan, wallIds[f.wall]!, { kind: f.kind, offset: f.offset, width: f.width }, at);
+  }
+  plan = resolveCeilingHeight(plan, template.ceilingHeight, at);
+  if (carriedAppliances.length > 0) plan = { ...plan, appliances: carriedAppliances };
+
+  // 模板预填不是客户量的——每段墙长、每处门窗都留一条待确认项（FR-17.4 / FR-15.5）
+  const confirmItems: FloorPlan["unresolvedItems"] = [];
+  for (const r of plan.parsedGeometry.wallRuns) {
+    confirmItems.push({
+      id: `tpl_${randomUUID().slice(0, 8)}`,
+      target: { kind: "wallRun", id: r.id },
+      field: "length",
+      reason: msg(fpLang,
+        `Confirm "${r.label}" is about ${r.length}" (from the ${template.id} template).`,
+        `请确认「${r.label}」大约是 ${r.length}"（来自 ${template.id} 模板）。`),
+      suggestion: r.length,
+      resolved: false,
+    });
+    for (const f of r.features) {
+      confirmItems.push({
+        id: `tpl_${randomUUID().slice(0, 8)}`,
+        target: { kind: "feature", id: f.id },
+        field: f.kind,
+        reason: msg(fpLang,
+          `Confirm the ${f.kind} on "${r.label}" (from the template) — offset ${f.offset}", width ${f.width}".`,
+          `请确认「${r.label}」上的${f.kind}（模板预填）——距起点 ${f.offset}"，宽 ${f.width}"。`),
+        suggestion: f.offset,
+        resolved: false,
+      });
+    }
+  }
+  plan = { ...plan, unresolvedItems: [...plan.unresolvedItems, ...confirmItems], updatedAt: at };
+  await appCtx.repos.floorPlans.upsert(plan);
+
+  const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
+  const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
+  const templateNote = fpLang === "zh" ? template.noteZh : template.noteEn;
+  const interpretation = [
+    msg(fpLang,
+      `Applied the "${templateId}" template as a starting point: ${templateNote} `
+        + "These are standard numbers, not measured — please confirm below.",
+      `已按「${templateId}」模板预填作为起点：${templateNote} `
+        + "这些是标准数值，不是量出来的——请在下面逐项确认。"),
+    ...sitePrompts,
+  ].filter(Boolean).join("\n");
+  const echoMsg: ChatMessage = {
+    role: "user",
+    content: msg(fpLang, `[Picked floor-plan template: ${templateId}]`, `[选择户型模板：${templateId}]`),
+    at,
+  };
+  const interpretMsg: ChatMessage = { role: "assistant", content: interpretation, at };
+  await appCtx.repos.conversations.update(conv.id, {
+    messages: [...conv.messages, echoMsg, interpretMsg],
+  });
+
+  return c.json({
+    floorPlan: plan,
+    ready: isLayoutReady(plan),
+    // 完整性优先：拿不准的地方逐条追问，不静默跳过（FR-3）
+    questions: pendingQuestions(plan),
+    interpretation,
+    intakeSamples: intakeSampleCards(fpLang),
+    // FR-17.2：解读可用时前端勿再展示加墙/尺寸/形状 quick replies
+    suppressGeometryIntake: briefing.geometryUsable,
     ...briefing,
     replies: [interpretMsg],
   }, 201);

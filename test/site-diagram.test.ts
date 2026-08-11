@@ -129,5 +129,5 @@ test("开场欢迎语优先户型；示例白名单含设计草图 jpg", () => {
   assert.ok(cards.some((c) => c.file === "sample-design-sketch.jpg"));
   assert.equal(isAllowedSampleFile("sample-design-sketch.jpg"), true);
   assert.equal(isAllowedSampleFile("../secrets.env"), false);
-  assert.equal(INTAKE_SAMPLES.length, 2);
+  assert.equal(INTAKE_SAMPLES.length, 6);
 });

@@ -7,7 +7,7 @@
  * FR-19：客户按 Q# 作答时同样走此路径。
  */
 import type { FloorPlan, WallFeatureKind, WallRun } from "../floorplan/types.js";
-import { addFeature, addWallRun, resolveCeilingHeight, resolveWallLength } from "../floorplan/parse.js";
+import { addFeature, addWallRun, resolveCeilingHeight, resolveItem, resolveWallLength } from "../floorplan/parse.js";
 import { compassWallsAdjacent } from "../layout/plan-model.js";
 import type { SiteQuestion } from "./site-questions.js";
 
@@ -526,7 +526,22 @@ function applyNumberedSiteAnswers(
     if (q.kind === "plumbing" || q.kind === "window" || q.kind === "door") {
       const hasKind = next.parsedGeometry.wallRuns.some((r) =>
         r.features.some((f) => f.kind === q.kind));
-      if (hasKind) continue;
+      if (hasKind) {
+        // 已经有这类特征了——但可能是户型模板预填、还没经客户确认过（FR-17.4）。
+        // 这一问不是"再加一个"，是"这个对不对"：非推迟话术的回复就当作确认。
+        if (q.kind === "window" && isDeferWindows(body)) continue;
+        if (q.kind === "door" && isDeferDoors(body)) continue;
+        if (q.kind === "plumbing" && isDeferPlumbing(body)) continue;
+        const pending = next.unresolvedItems.find((u) =>
+          !u.resolved && u.target.kind === "feature"
+          && next.parsedGeometry.wallRuns.some((r) => r.features.some(
+            (f) => f.id === u.target.id && f.kind === q.kind)));
+        if (pending) {
+          next = resolveItem(next, pending.id, at);
+          applied.push(q.kind);
+        }
+        continue;
+      }
 
       if (q.kind === "window" && isDeferWindows(body)) continue;
       if (q.kind === "door" && isDeferDoors(body)) continue;
