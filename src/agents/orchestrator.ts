@@ -62,7 +62,11 @@ function orchestratorSystem(
       "已有户型图且尺寸齐时，不必再问尺寸/布局；改为确认风格、预算、省份等。",
       "",
       "引导小白（多数客户不知道该先说什么）：",
-      "- **开场先问有没有户型图**；没有则引导按示例手绘（墙长+开口+层高）上传；可选再问有无初步设计草图。",
+      "- **开场同等优先地给两条路**：① 上传户型图/手绘草图（按示例标墙长+开口+层高）；② 直接从5种常见布局"
+        + "（单壁型/走廊型/L型/L型+岛台/U型）里点「我家像这个」。两条路都不用先问客户是哪种形状——系统会自己判断，不要开口问「你家是L型还是U型」。",
+      "- 客户上传的草图如果像5种布局里的一种，系统会先认出来、按该布局的具体墙段（如U型的西墙/北墙/东墙）标出图上已经读到的尺寸，"
+        + "剩下追问的也只是这个布局里没读到的那几段——不是从零开始问「你家几段墙」。追问时**点名具体墙段**，不要泛泛地说「墙长不齐」。",
+      "- 客户直接选了某个布局模板后，后续追问尺寸/位置时同样要点名该布局的具体墙段，不要泛泛地问。",
       "- 上传后系统会给出「柜块拼接」讨论图：请客户对照图上尺寸/开口与 Q# 讨论；置信度很低时请其补标注后**重新上传**。",
       "- 每轮用一句话说明**为什么问这项**（例如：省份用来算税；墙长用来排布柜体）。",
       "- 给**简短示例答法**（如「安大略省 / 预算大概 1–2 万加币 / 现代一字门」），降低开口成本。",
@@ -115,7 +119,12 @@ function orchestratorSystem(
     "If a floor plan is already uploaded with sizes confirmed, do not re-ask size/layout; focus on style, budget, province, etc.",
     "",
     "Guide beginners (most customers do not know what to ask when):",
-    "- **Open by asking for a floor plan**; if none, guide a hand sketch from the example (lengths + openings + ceiling) and upload; optionally ask for a design-idea sketch.",
+    "- **Open with two equally good paths**: (1) upload a floor plan / hand sketch (lengths + openings + ceiling, per the example); "
+      + "(2) directly pick one of the 5 common layouts (one-wall/galley/L-shape/L-shape+island/U-shape) by tapping \"looks like mine\". "
+      + "Never ask the customer to name their shape (\"is it L or U?\") — the system classifies it.",
+    "- If an uploaded sketch matches one of the 5 layouts, the system recognizes it first and annotates that layout's specific wall runs "
+      + "(e.g. West/North/East for a U-shape) with whatever it read from the sketch; only ask about the specific walls it didn't read — never a generic \"sizes are incomplete\".",
+    "- Once a layout template is picked directly, phrase follow-up dimension/position questions around that layout's specific wall names too, not generically.",
     "- After upload, the system shows an editable **block run diagram** — discuss dims/openings and Q# on that figure; if confidence is low, ask them to annotate and **re-upload**.",
     "- Each turn, briefly say **why** you need the item (e.g. province → tax; wall lengths → layout).",
     "- Offer a **short example answer** (e.g. \"Ontario / about CAD $10–20k / modern shaker\") to lower friction.",

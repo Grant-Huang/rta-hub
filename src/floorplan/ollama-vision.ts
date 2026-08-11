@@ -8,11 +8,24 @@
  * 直接收口——以前这里返回 rooms/walls 形状，归一化永远看不到墙段。
  */
 import type { VisionExtractor, RawExtraction } from "./parse.js";
+import { FLOORPLAN_TEMPLATES } from "../samples/templates.js";
 
 interface OllamaGenerateResponse {
   response?: string;
   done?: boolean;
   error?: string;
+}
+
+/**
+ * 5 种标准布局的分类说明——从 `samples/templates.ts` 现算，不在这里另写一份
+ * 重复描述（否则模板改了、这里的分类提示词忘了同步，是同一类"两份判断"的坑）。
+ */
+function templateGuessSection(): string {
+  const lines = Object.values(FLOORPLAN_TEMPLATES).map((t) =>
+    `- "${t.id}": ${t.noteEn} (${t.walls.length} wall run${t.walls.length === 1 ? "" : "s"})`);
+  return `Also classify which of these 5 standard kitchen layouts the sketch most resembles (or none):
+${lines.join("\n")}
+Set "templateGuess" to the matching id and your confidence 0–1, or omit it entirely if none of the 5 fit well.`;
 }
 
 const FLOOR_PLAN_PROMPT = `You are reading an architectural floor plan image to extract the KITCHEN for cabinet layout.
@@ -23,11 +36,14 @@ From the kitchen outline, return the walls where base cabinets would run (usuall
 
 Convert feet-inches labels: 11'5" = 11*12+5 = 137 inches. 10'5" = 125 inches.
 
+${templateGuessSection()}
+
 Return ONLY a JSON object (no markdown fences, no commentary):
 {
   "ceilingHeight": 96,
   "ceilingHeightConfidence": 0.4,
   "overallConfidence": 0.8,
+  "templateGuess": { "id": "l-island-kitchen", "confidence": 0.75 },
   "wallRuns": [
     {
       "label": "Kitchen wall A",
@@ -51,7 +67,8 @@ Rules:
 - If the kitchen is labeled with overall room size (W x D) but individual wall segments are not marked, emit the four sides (or two for a galley) using that W and D.
 - **Only add features you can actually see** (sink → plumbing on that wall, a drawn window, a doorway). Do NOT invent a window/door/plumbing on every wall.
 - If you truly cannot find any kitchen, set wallRuns to [] and explain in notes — but first look carefully for a Kitchen label on the main floor.
-- Do not invent bedrooms as kitchen walls.`;
+- Do not invent bedrooms as kitchen walls.
+- Still return your best-effort wallRuns even when you give a templateGuess — the guess only helps organize them, it does not replace them.`;
 
 export interface OllamaVisionOptions {
   /** Ollama base URL, e.g. http://localhost:11434 */
@@ -200,7 +217,8 @@ function num(v: unknown): number | undefined {
   return undefined;
 }
 
-function toRawExtraction(parsed: Record<string, unknown>): RawExtraction {
+/** @internal 导出供单测直接断言 JSON→RawExtraction 的转换，不用真的起一个 Ollama。 */
+export function toRawExtraction(parsed: Record<string, unknown>): RawExtraction {
   const wallRunsRaw = Array.isArray(parsed.wallRuns) ? parsed.wallRuns
     : Array.isArray(parsed.walls) ? parsed.walls
       : [];
@@ -244,6 +262,11 @@ function toRawExtraction(parsed: Record<string, unknown>): RawExtraction {
     ? parsed.notes.filter((n): n is string => typeof n === "string")
     : undefined;
 
+  const templateGuessRaw = (parsed.templateGuess && typeof parsed.templateGuess === "object"
+    ? parsed.templateGuess : undefined) as Record<string, unknown> | undefined;
+  const templateGuessId = typeof templateGuessRaw?.id === "string" ? templateGuessRaw.id : undefined;
+  const templateGuessConfidence = num(templateGuessRaw?.confidence);
+
   return {
     ...(ceilingHeight !== undefined ? { ceilingHeight } : {}),
     ...(num(parsed.ceilingHeightConfidence) !== undefined
@@ -252,6 +275,9 @@ function toRawExtraction(parsed: Record<string, unknown>): RawExtraction {
       ? { overallConfidence: num(parsed.overallConfidence)! } : {}),
     ...(wallRuns.length ? { wallRuns } : { wallRuns: [] }),
     ...(notes && notes.length ? { notes } : {}),
+    ...(templateGuessId && templateGuessConfidence !== undefined
+      ? { templateGuess: { id: templateGuessId, confidence: templateGuessConfidence } }
+      : {}),
   };
 }
 

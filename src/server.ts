@@ -115,6 +115,7 @@ import { renderSiteDiagram } from "./render/site-diagram.js";
 import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
 import { floorplanTemplateById } from "./samples/templates.js";
+import { matchesKnownTemplate, normalizeExtractionWithTemplate } from "./floorplan/template-match.js";
 import {
   floorplanFirstWelcome, intakeSampleCards, reuploadPrompt, shouldSuggestReupload,
 } from "./floorplan/intake.js";
@@ -2520,6 +2521,14 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
       },
       file.image,
       appCtx.vision,
+      // 草图先判断像不像 5 种标准布局之一（FLOORPLAN_TEMPLATES）；猜中且够可信，
+      // 就按该布局的墙段框架去标注图上已读到的尺寸、只追问框架里缺的那几段——
+      // 而不是把草图当完全自由的墙段列表从零问起。猜不中/没猜/置信度不够时
+      // 返回 undefined，parse.ts 原样退回既有的自由抽取路径。
+      (raw, lang) => {
+        const template = matchesKnownTemplate(raw);
+        return template ? normalizeExtractionWithTemplate(raw!, template, lang) : undefined;
+      },
     );
     plan = outcome.plan;
     extraction = outcome.extraction;
