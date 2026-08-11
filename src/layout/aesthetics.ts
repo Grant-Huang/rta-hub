@@ -14,8 +14,10 @@
  * `notes` 默认英文；只有调用方传入 `language: "zh"` 时才出中文。
  */
 import type { Placement } from "./generate.js";
+import type { ModuleSpec } from "../domain/types.js";
 import type { WallRun } from "../floorplan/types.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
+import { capabilitiesFor } from "../spec/capabilities.js";
 
 /**
  * 各项权重。数值本身没有绝对意义，重要的是**相对大小**：
@@ -31,9 +33,6 @@ export const AESTHETIC_WEIGHTS = {
 
 /** 低于此宽度的柜子除非有功能理由（拉篮/垃圾柜），否则视为「凑数的窄柜」。 */
 export const NARROW_THRESHOLD = 15;
-
-/** 这些型号即使窄也有明确功能，不算凑数。 */
-const FUNCTIONAL_NARROW = /^(BPO|TDC|BWB|WF|BF|TF)/i;
 
 export interface AestheticScore {
   /** 总分，越高越好。范围大致 0–100。 */
@@ -51,6 +50,8 @@ export interface AestheticScore {
 export interface ScoreInput {
   run: WallRun;
   placements: readonly Placement[];
+  /** 该公司规格库，用于按能力标签判断功能性窄柜（见 scoreNarrowCabinets）。 */
+  modules: readonly ModuleSpec[];
   /** 客户语言偏好。默认英文。 */
   language?: UiLanguage;
 }
@@ -64,7 +65,7 @@ export function scoreAesthetics(input: ScoreInput): AestheticScore {
   const notes: string[] = [];
 
   const widthRhythm = scoreWidthRhythm(lang, base, notes);
-  const narrowPenalty = scoreNarrowCabinets(lang, base, notes);
+  const narrowPenalty = scoreNarrowCabinets(lang, base, input.modules, notes);
   const seamAlignment = scoreSeamAlignment(lang, base, wall, notes);
   const symmetry = scoreSymmetry(lang, run, base, notes);
   const fillerPlacement = scoreFillerPlacement(lang, run, mine, notes);
@@ -118,13 +119,30 @@ function scoreWidthRhythm(lang: UiLanguage, base: readonly Placement[], notes: s
  *
  * 「填得尽量满」会主动塞 9"/12" 窄柜收尾——这恰恰是最难看的做法，
  * 而且窄柜单位造价高、储物效率低。有功能理由的窄柜（拉篮/垃圾柜/填缝）不罚。
+ *
+ * 判据是**能力**（开放格/家电配套件这类本来就窄的功能件），不是型号码前缀——
+ * 前缀判断在非标准命名的商家（如 `NW-` 前缀）上会一个都命不中，见
+ * generate.ts 的 isFunctionalNarrow 同名注释与 spec/capabilities.ts。
  */
-function scoreNarrowCabinets(lang: UiLanguage, base: readonly Placement[], notes: string[]): number {
+function scoreNarrowCabinets(
+  lang: UiLanguage,
+  base: readonly Placement[],
+  modules: readonly ModuleSpec[],
+  notes: string[],
+): number {
   const cabinets = base.filter((p) => p.kind === "cabinet");
   if (cabinets.length === 0) return 1;
 
+  const byId = new Map(modules.map((m) => [m.id, m]));
+  const isFunctionalNarrow = (p: Placement): boolean => {
+    const m = p.moduleId ? byId.get(p.moduleId) : undefined;
+    if (!m) return false;
+    const roles = capabilitiesFor(m).capabilities.roles;
+    return roles.includes("openDisplay") || roles.includes("applianceHousing");
+  };
+
   const gratuitous = cabinets.filter(
-    (p) => p.width < NARROW_THRESHOLD && !FUNCTIONAL_NARROW.test(p.moduleCode ?? ""),
+    (p) => p.width < NARROW_THRESHOLD && !isFunctionalNarrow(p),
   );
   if (gratuitous.length > 0) {
     const list = gratuitous.map((p) => `${p.moduleCode} ${p.width}"`).join(lang === "zh" ? "、" : ", ");

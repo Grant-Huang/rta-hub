@@ -16,6 +16,7 @@ import {
 } from "../src/layout/ergonomics.js";
 import { generateLayout, regenerateRun, HEIGHTS, type Placement } from "../src/layout/generate.js";
 import type { ParsedGeometry, WallRun } from "../src/floorplan/types.js";
+import type { ModuleSpec } from "../src/domain/types.js";
 import { pilotModules } from "../src/app/seed.js";
 import { applianceFrom, type ApplianceKind } from "../src/floorplan/appliances.js";
 
@@ -104,12 +105,19 @@ const cab = (x: number, width: number, over: Partial<Placement> = {}): Placement
   height: HEIGHTS.baseBox, depth: 24, moduleCode: `B${width}`, ...over,
 });
 
+/** 最小可用 ModuleSpec，供美观评分测试按能力标签（而非型号码前缀）判断功能性窄柜。 */
+const modSpec = (id: string, over: Partial<ModuleSpec> = {}): ModuleSpec => ({
+  id, specVersionId: "sv_1", companyId: "co_1", code: id, type: "base",
+  widthOptions: [9], heightOptions: [34.5], depthOptions: [24], assemblyOptions: ["RTA"],
+  ...over,
+});
+
 test("宽度均匀得高分，跳动得低分", () => {
   const even = scoreAesthetics({
-    run: run(), placements: [cab(0, 36), cab(36, 36), cab(72, 36), cab(108, 36)],
+    run: run(), modules: [], placements: [cab(0, 36), cab(36, 36), cab(72, 36), cab(108, 36)],
   });
   const jumpy = scoreAesthetics({
-    run: run(), placements: [cab(0, 36), cab(36, 9), cab(45, 30), cab(75, 12), cab(87, 33)],
+    run: run(), modules: [], placements: [cab(0, 36), cab(36, 9), cab(45, 30), cab(75, 12), cab(87, 33)],
   });
   assert.ok(even.breakdown.widthRhythm > jumpy.breakdown.widthRhythm);
   assert.ok(even.total > jumpy.total, `均匀 ${even.total} 应高于跳动 ${jumpy.total}`);
@@ -117,20 +125,25 @@ test("宽度均匀得高分，跳动得低分", () => {
 
 test("凑数的窄柜被扣分，有功能的不扣", () => {
   const padded = scoreAesthetics({
-    run: run(), placements: [cab(0, 36), cab(36, 9), cab(45, 36)],
+    run: run(), modules: [], placements: [cab(0, 36), cab(36, 9), cab(45, 36)],
   });
   assert.ok(padded.breakdown.narrowPenalty < 1);
   assert.ok(padded.notes.some((n) => /narrow cabinet|窄柜/i.test(n)));
 
-  const functional = scoreAesthetics({
-    run: run(), placements: [cab(0, 36), cab(36, 9, { moduleCode: "BPO09" }), cab(45, 36)],
+  // 判据是能力标签，不是型号码前缀——即使这家公司用完全不按行业惯例命名的码。
+  const pulloutSpec = modSpec("m_pullout09", {
+    code: "NW-WHATEVER-9", capabilities: { roles: ["openDisplay"] },
   });
-  assert.equal(functional.breakdown.narrowPenalty, 1, "BPO 拉篮柜有功能理由，不该扣分");
+  const functional = scoreAesthetics({
+    run: run(), modules: [pulloutSpec],
+    placements: [cab(0, 36), cab(36, 9, { moduleId: "m_pullout09", moduleCode: "NW-WHATEVER-9" }), cab(45, 36)],
+  });
+  assert.equal(functional.breakdown.narrowPenalty, 1, "有 openDisplay 能力的拉篮柜有功能理由，不该扣分");
 });
 
 test("填缝条在墙角得满分，在中间被扣分", () => {
   const atEdge = scoreAesthetics({
-    run: run({ length: 75 }),
+    run: run({ length: 75 }), modules: [],
     placements: [
       { ...cab(0, 3), kind: "filler" },
       cab(3, 36), cab(39, 36),
@@ -139,7 +152,7 @@ test("填缝条在墙角得满分，在中间被扣分", () => {
   assert.equal(atEdge.breakdown.fillerPlacement, 1);
 
   const inMiddle = scoreAesthetics({
-    run: run({ length: 75 }),
+    run: run({ length: 75 }), modules: [],
     placements: [cab(0, 36), { ...cab(36, 3), kind: "filler" }, cab(39, 36)],
   });
   assert.equal(inMiddle.breakdown.fillerPlacement, 0);
@@ -149,13 +162,13 @@ test("填缝条在墙角得满分，在中间被扣分", () => {
 test("吊柜与地柜柜缝对齐得高分", () => {
   const baseRow = [cab(0, 36), cab(36, 36), cab(72, 36)];
   const aligned = scoreAesthetics({
-    run: run(), placements: [
+    run: run(), modules: [], placements: [
       ...baseRow,
       cab(0, 36, { layer: "wall" }), cab(36, 36, { layer: "wall" }), cab(72, 36, { layer: "wall" }),
     ],
   });
   const misaligned = scoreAesthetics({
-    run: run(), placements: [
+    run: run(), modules: [], placements: [
       ...baseRow,
       cab(0, 30, { layer: "wall" }), cab(30, 30, { layer: "wall" }), cab(60, 48, { layer: "wall" }),
     ],
@@ -167,10 +180,10 @@ test("吊柜与地柜柜缝对齐得高分", () => {
 test("水槽应对齐窗中心，偏了扣分", () => {
   const windowed = run({ features: [{ id: "f", kind: "window", offset: 48, width: 36 }] });
   const centered = scoreAesthetics({
-    run: windowed, placements: [cab(51, 30, { moduleCode: "SB30" })], // 中心 66 = 窗中心 66
+    run: windowed, modules: [], placements: [cab(51, 30, { moduleCode: "SB30" })], // 中心 66 = 窗中心 66
   });
   const offset = scoreAesthetics({
-    run: windowed, placements: [cab(0, 30, { moduleCode: "SB30" })],  // 中心 15
+    run: windowed, modules: [], placements: [cab(0, 30, { moduleCode: "SB30" })],  // 中心 15
   });
   assert.equal(centered.breakdown.symmetry, 1);
   assert.ok(offset.breakdown.symmetry < 1);
@@ -178,7 +191,7 @@ test("水槽应对齐窗中心，偏了扣分", () => {
 });
 
 test("没有对称参照物时不强求对称", () => {
-  const s = scoreAesthetics({ run: run(), placements: [cab(0, 36), cab(36, 30)] });
+  const s = scoreAesthetics({ run: run(), modules: [], placements: [cab(0, 36), cab(36, 30)] });
   assert.equal(s.breakdown.symmetry, 1, "一字型厨房强求对称没有意义");
 });
 
