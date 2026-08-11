@@ -713,6 +713,7 @@ function renderConfirmed() {
           <div class="brief-body">${esc(s.body)}</div>
         </div>`).join('');
     el.innerHTML = `
+      ${designImportExportToolbarHtml()}
       ${openHint}
       ${factsHtml}
       ${sectionsHtml ? `<h3>${t('confirmedBasis')}</h3>${sectionsHtml}` : ''}
@@ -721,8 +722,20 @@ function renderConfirmed() {
     return;
   }
 
-  // 回退：尚无 brief 时用轻量提示
-  el.innerHTML = `<p class="hint">${t('confirmedEmpty')}</p>`;
+  // 回退：尚无 brief 时用轻量提示——导入按钮尤其在这个状态下有用
+  // （还没聊过任何东西，直接导入一份现成的设计输入作为起点）。
+  el.innerHTML = `${designImportExportToolbarHtml()}<p class="hint">${t('confirmedEmpty')}</p>`;
+}
+
+/** 已确认面板顶部的导入/导出小工具条——两个按钮共用一条通用错误提示。 */
+function designImportExportToolbarHtml() {
+  return `
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button type="button" class="fact-edit-btn" data-export-design="1">${esc(t('exportDesignBtn'))}</button>
+      <button type="button" class="fact-edit-btn" data-import-design="1">${esc(t('importDesignBtn'))}</button>
+    </div>
+    ${factEditErr ? `<p class="hint fact-edit-err" style="margin-bottom:12px">${esc(factEditErr)}</p>` : ''}
+  `;
 }
 
 function applyDesignBrief(brief) {
@@ -779,7 +792,6 @@ function renderFactEditRow(f) {
         ${inputs}
         <button type="button" class="fact-edit-save" data-fact-save="${esc(f.key)}">${esc(t('factSaveBtn'))}</button>
         <button type="button" class="fact-edit-cancel" data-fact-cancel="1">${esc(t('factCancelBtn'))}</button>
-        ${factEditErr ? `<div class="fact-edit-err">${esc(factEditErr)}</div>` : ''}
       </div>
     </li>`;
 }
@@ -800,8 +812,81 @@ $('confirmedPane')?.addEventListener('click', (e) => {
     return;
   }
   const saveBtn = e.target.closest('[data-fact-save]');
-  if (saveBtn) saveFactEdit(saveBtn.dataset.factSave);
+  if (saveBtn) { saveFactEdit(saveBtn.dataset.factSave); return; }
+  if (e.target.closest('[data-export-design]')) { exportDesignInput(); return; }
+  if (e.target.closest('[data-import-design]')) { triggerImportDesign(); }
 });
+
+/**
+ * 导出当前已确认的设计输入（FR-24 schema）——客户换会话/换设备带走，
+ * 或体外系统直接消费。接口已经有了（GET /design-input），这里只是
+ * 触发浏览器下载，不新增后端逻辑。
+ */
+async function exportDesignInput() {
+  if (!conversationId) return;
+  try {
+    const { ok, body } = await api(`/api/conversations/${conversationId}/design-input`);
+    if (!ok) {
+      factEditErr = body.error || t('submitFail');
+      renderConfirmed();
+      return;
+    }
+    factEditErr = '';
+    const blob = new Blob([JSON.stringify(body.designInput, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `design-input-${conversationId}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    factEditErr = t('factSaveFail', err.message || String(err));
+    renderConfirmed();
+  }
+}
+
+/**
+ * 导入一份设计输入 JSON（同一套 FR-24 schema）——套用后跳过逐项收集，
+ * 未声明 provenance:"customer" 的项仍会走 Q# 确认（applyDesignInput 本来
+ * 就是这样，接口不是新的，这里只是加一个文件选择+POST 的前端入口）。
+ */
+function triggerImportDesign() {
+  if (!conversationId) return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    let doc;
+    try {
+      doc = JSON.parse(await file.text());
+    } catch (err) {
+      factEditErr = t('importParseFail', err.message || String(err));
+      renderConfirmed();
+      return;
+    }
+    try {
+      const { ok, body } = await api(`/api/conversations/${conversationId}/design-input`, {
+        method: 'POST', body: JSON.stringify(doc),
+      });
+      if (!ok) {
+        factEditErr = body.error || t('submitFail');
+        renderConfirmed();
+        return;
+      }
+      factEditErr = '';
+      for (const m of body.replies || []) addMsg(m.role, m.content);
+      if (body.designBrief) applyDesignBrief(body.designBrief);
+      await renderFloorPlan(body);
+      await refreshConversations();
+    } catch (err) {
+      factEditErr = t('factSaveFail', err.message || String(err));
+      renderConfirmed();
+    }
+  });
+  input.click();
+}
 
 /** 已确认面板里保存一行手动编辑——直接走 /resolve，这是它本来就有的合法编辑通道，
  * 不受聊天那边的"确认锁"限制（那把锁只挡自由文本解析，不挡这条客户主动点开的路径）。 */
