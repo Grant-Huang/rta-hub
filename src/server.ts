@@ -100,6 +100,9 @@ import {
   interpretationSummary, pendingQuestions, resolveCeilingHeight, resolveItem,
   resolveWallLength,
 } from "./floorplan/parse.js";
+import {
+  applyDesignInput, DesignInputError, exportDesignInput, validateDesignInputDocument,
+} from "./floorplan/design-input.js";
 import { isLayoutReady, isIsland, type WallFeature } from "./floorplan/types.js";
 import { buildSiteQuestions, geometrySuppressesIntake } from "./design/site-questions.js";
 import { applyChatSiteAnswers, chatMentionsGeometry } from "./design/chat-site-answers.js";
@@ -2708,6 +2711,86 @@ app.get("/api/floorplans/:id", requireAccount, (c) => {
   const plan = ownedFloorPlan(c, param(c, "id"));
   if (!plan) return c.json({ error: "Floor plan not found" }, 404);
   return c.json({ floorPlan: plan, ready: isLayoutReady(plan), questions: pendingQuestions(plan) });
+});
+
+/**
+ * 导入一份标准化设计输入 JSON（FR-24）——供体外系统（更强的 VL 模型读图、
+ * CAD/设计软件导出、另一套系统迁移）直接套用，跳过本系统的逐项收集。
+ *
+ * 与户型模板（FR-17.4）同一门禁：只有 `provenance: "customer"` 的项才不
+ * 生成待确认项；其余（含未声明 provenance 的）仍要走 Q# 确认，不能因为
+ * 数据来自"更强的模型"就自动当成已确认。
+ */
+app.post("/api/conversations/:id/design-input", requireAccount, async (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
+  const archived = rejectIfArchived(c, conv);
+  if (archived) return archived;
+
+  const raw = await jsonBody<Record<string, unknown>>(c);
+  let doc;
+  try {
+    doc = validateDesignInputDocument(raw);
+  } catch (e) {
+    if (e instanceof DesignInputError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+
+  const at = now();
+  // 一会话一户型：跟上传/模板选择口径一致
+  const previousPlans = appCtx.repos.floorPlans.filter((p) => p.conversationId === conv.id);
+  const carriedAppliances = normalizeAppliances(previousPlans.flatMap((p) => p.appliances ?? []));
+  for (const old of previousPlans) await appCtx.repos.floorPlans.remove(old.id);
+
+  const { plan, pendingConfirmCount } = applyDesignInput(conv.id, doc, at, carriedAppliances);
+  await appCtx.repos.floorPlans.upsert(plan);
+
+  const fpLang = resolveLanguage(conv.preferences?.shared);
+  const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
+  const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
+  const interpretation = [
+    pendingConfirmCount > 0
+      ? msg(fpLang,
+        `Imported design data as a starting point — ${pendingConfirmCount} item(s) are not yet `
+          + "confirmed and still need your OK. Please confirm below.",
+        `已导入设计数据作为起点——其中 ${pendingConfirmCount} 项尚未确认，仍需你过一遍。请在下面逐项确认。`)
+      : msg(fpLang,
+        "Imported design data — everything came in already confirmed.",
+        "已导入设计数据——所有项都已标记为确认过的。"),
+    ...sitePrompts,
+  ].filter(Boolean).join("\n");
+  const echoMsg: ChatMessage = {
+    role: "user",
+    content: msg(fpLang, "[Imported design input]", "[导入设计输入]"),
+    at,
+  };
+  const interpretMsg: ChatMessage = { role: "assistant", content: interpretation, at };
+  await appCtx.repos.conversations.update(conv.id, {
+    messages: [...conv.messages, echoMsg, interpretMsg],
+  });
+
+  return c.json({
+    floorPlan: plan,
+    ready: isLayoutReady(plan),
+    questions: pendingQuestions(plan),
+    interpretation,
+    intakeSamples: intakeSampleCards(fpLang),
+    suppressGeometryIntake: briefing.geometryUsable,
+    ...briefing,
+    replies: [interpretMsg],
+  }, 201);
+});
+
+/**
+ * 导出当前已确认的设计输入为同一套 schema（FR-24）——供客户换会话/换设备
+ * 带走已确认的结果，或供另一套系统直接消费。
+ */
+app.get("/api/conversations/:id/design-input", requireAccount, (c) => {
+  const conv = ownedConversation(c, param(c, "id"));
+  if (!conv) return c.json({ error: "Conversation not found" }, 404);
+  const plan = planForConversation(conv.id);
+  if (!plan) return c.json({ error: "No floor plan yet" }, 404);
+  return c.json({ designInput: exportDesignInput(plan) });
 });
 
 /** 客户回答追问 / 手动补齐尺寸。 */
