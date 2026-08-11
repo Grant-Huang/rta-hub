@@ -258,7 +258,8 @@ export function applyChatWallLengths(
   // 2) 口语方向：left/back/long leg 等 → 新建或更新
   const mentionRe = new RegExp(
     `(?:^|[^\\w])(?:(left|right|back|front|long|short|north|south|east|west)\\s*(?:wall|leg)?`
-      + `|(?:wall\\s*)?([A-D])`
+      // 「wall A」「A墙」「A 墙」——字母后可选紧跟中文「墙」（口语常见写法，非「wall A: 120」不受影响）
+      + `|(?:wall\\s*)?([A-D])\\s*墙?`
       + `|([东西南北左右前后])(?:侧)?墙)`
       + `\\s*[:=]?\\s*(\\d+(?:\\.\\d+)?)`
       + `(?:\\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm))?`
@@ -397,6 +398,8 @@ export function chatMentionsGeometry(text: string): boolean {
   }
   if (/[东西南北左右前后](?:侧)?墙/.test(text) && /\d/.test(text)) return true;
   if (/\b(?:wall\s*)?[A-D]\b\s*[:=]?\s*\d+/i.test(text)) return true;
+  // 「A墙120」——字母直接接中文「墙」，不带空格/冒号（口语常见，非「wall A」也非方位墙）
+  if (/\b[A-D]\s*墙/i.test(text) && /\d/.test(text)) return true;
   if (/\b(?:North|South|East|West)\s*[:=]?\s*\d+/i.test(text)) return true;
   // 快捷回答：One wall ~12 ft / 两面墙各 10 尺
   if (/(?:one\s+wall|two\s+walls?|一面墙|两面墙)/i.test(text) && /\d/.test(text)) return true;

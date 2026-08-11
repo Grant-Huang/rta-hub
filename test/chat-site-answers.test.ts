@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyChatSiteAnswers, parseCeilingFromChat, parseDoorFromChat,
+  applyChatSiteAnswers, chatMentionsGeometry, parseCeilingFromChat, parseDoorFromChat,
   parsePlumbingFromChat, parseWindowFromChat,
 } from "../src/design/chat-site-answers.js";
 import type { FloorPlan } from "../src/floorplan/types.js";
@@ -247,4 +247,36 @@ test("Q# 答窗绑到题面墙：Q3 写 North，不得落到 West", () => {
   const west = r!.plan.parsedGeometry.wallRuns.find((x) => x.id === "wr_w")!;
   assert.ok(north.features.some((f) => f.kind === "window"));
   assert.equal(west.features.some((f) => f.kind === "window"), false);
+});
+
+test("「A墙120英寸，B墙96英寸」——字母墙名+中文墙字须落成两段墙（回归：此前无限循环+数据丢失）", () => {
+  const empty: FloorPlan = {
+    id: "fp_ab",
+    conversationId: "c1",
+    sourceFile: { name: "chat-geometry.txt", mimeType: "text/plain", sizeBytes: 0 },
+    parseConfidence: 0.5,
+    parsedGeometry: { wallRuns: [], confidence: 0.5 },
+    unresolvedItems: [],
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const r = applyChatSiteAnswers(
+    empty, "A墙120英寸，B墙96英寸，层高108英寸，下水稍后", AT,
+  );
+  assert.ok(r);
+  assert.ok(r!.applied.includes("wallLength"));
+  assert.ok(r!.applied.includes("ceiling"));
+  const wallA = r!.plan.parsedGeometry.wallRuns.find((x) => /A/i.test(x.label));
+  const wallB = r!.plan.parsedGeometry.wallRuns.find((x) => /B/i.test(x.label));
+  assert.equal(wallA?.length, 120);
+  assert.equal(wallB?.length, 96);
+  assert.equal(r!.plan.parsedGeometry.ceilingHeight, 108);
+  // 「下水稍后」是明确推迟，不应被当成上下水位置写入
+  assert.ok(!r!.applied.includes("plumbing"));
+});
+
+test("chatMentionsGeometry 识别「A墙120」（无需层高词也应建壳）", () => {
+  assert.ok(chatMentionsGeometry("A墙120，B墙96"));
+  assert.ok(chatMentionsGeometry("A墙 120cm"));
+  assert.equal(chatMentionsGeometry("这个厨房挺大的"), false);
 });
