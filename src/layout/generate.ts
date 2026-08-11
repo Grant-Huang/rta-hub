@@ -879,7 +879,7 @@ export function generateLayout(
   }
   for (const run of geometry.wallRuns) {
     if (run.length <= 0) continue;
-    aesthetics.push({ wallRunId: run.id, score: scoreAesthetics({ run, placements, language: lang }) });
+    aesthetics.push({ wallRunId: run.id, score: scoreAesthetics({ run, placements, modules, language: lang }) });
   }
 
   // 修订提示：调料拉篮 / 垃圾桶 / 按柜号改双抽 —— 先编号再改，改完再重编号
@@ -1364,7 +1364,7 @@ export function regenerateRun(
   }
   for (const r of geometry.wallRuns) {
     if (r.length <= 0) continue;
-    aesthetics.push({ wallRunId: r.id, score: scoreAesthetics({ run: r, placements, language: lang }) });
+    aesthetics.push({ wallRunId: r.id, score: scoreAesthetics({ run: r, placements, modules, language: lang }) });
   }
 
   assignCabinetNumbers(placements);
