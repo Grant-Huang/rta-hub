@@ -205,6 +205,13 @@ export interface OrchestratorOptions {
     readyToAskDesign: boolean;
     /** 已确认项短摘要，禁止再问 */
     confirmedBriefs?: readonly string[];
+    /**
+     * **这一轮**刚从"未确认"变成"已确认"的具体数字（墙长/层高/家电宽度），
+     * 由 `design/confirm-recap.ts` 算出。与 `confirmedBriefs`（全量、用于
+     * "别再问"）不同——这个只报变化量，用于让回复先简短复述一句
+     * "北墙168寸、层高96寸，记下了"，起弱确认作用（不是门禁，只是回声）。
+     */
+    justConfirmed?: readonly string[];
   };
   /** FR-22：已发布 handbook 正文（由服务端从 knowledge cards 渲染）。 */
   platformHandbook?: string;
@@ -392,25 +399,32 @@ function intakeStatusNote(
   const open = (status.openAsks?.length ? status.openAsks : status.missing.map((f) => fieldLabel(f, lang)))
     .slice(0, 3);
   const confirmed = (status.confirmedBriefs ?? []).slice(0, 6);
+  const justConfirmed = (status.justConfirmed ?? []).slice(0, 6);
   if (lang === "zh") {
+    const recap = justConfirmed.length
+      ? `本轮刚记下：${justConfirmed.join("、")}——先用一句话简短复述这几个数字（弱确认，不是提问），再继续。`
+      : "";
     if (status.readyToAskDesign) {
-      return "【状态】必要信息已齐，户型可用。请主动友好地问：是否要根据目前需求生成设计方案？未同意前不要说已经出图。";
+      return `${recap ? `${recap} ` : ""}【状态】必要信息已齐，户型可用。请主动友好地问：是否要根据目前需求生成设计方案？未同意前不要说已经出图。`;
     }
     const miss = open.join("；") || "（无）";
     const done = confirmed.length ? `已确认勿再问：${confirmed.join("；")}。` : "";
-    return `【状态】户型${status.floorPlanReady ? "已就绪" : "未就绪"}。${done}`
+    return `${recap ? `${recap} ` : ""}【状态】户型${status.floorPlanReady ? "已就绪" : "未就绪"}。${done}`
       + `本轮最多追问 1 项仍缺信息：${miss}。`
       + `若客户答非所问：先简短确认已记下的内容，再换一种问法或请其点快捷选项——禁止原样重复上一问。`
       + `不要贴户型草图；用纯文字提问。`
       + `未就绪时禁止：声称信息已齐、邀请出图、改问抽屉/五金等偏好。`
       + `信息未齐时不要提议出完整方案。`;
   }
+  const recap = justConfirmed.length
+    ? `Just recorded this turn: ${justConfirmed.join(", ")} — briefly restate these numbers first (a soft confirmation, not a question), then continue.`
+    : "";
   if (status.readyToAskDesign) {
-    return "[Status] Intake is complete and the floor plan is ready. Proactively and warmly ask whether to generate a design from what they've shared. Do not claim a drawing exists until they agree.";
+    return `${recap ? `${recap} ` : ""}[Status] Intake is complete and the floor plan is ready. Proactively and warmly ask whether to generate a design from what they've shared. Do not claim a drawing exists until they agree.`;
   }
   const miss = open.join("; ") || "(none)";
   const done = confirmed.length ? `Already confirmed (do NOT re-ask): ${confirmed.join("; ")}. ` : "";
-  return `[Status] Floor plan ${status.floorPlanReady ? "ready" : "not ready"}. ${done}`
+  return `${recap ? `${recap} ` : ""}[Status] Floor plan ${status.floorPlanReady ? "ready" : "not ready"}. ${done}`
     + `Ask at most ONE still-missing item this turn: ${miss}. `
     + `If their reply is off-topic: briefly acknowledge what you have, then rephrase or point to quick options — never repeat the same question verbatim. `
     + `Text-only questions (no floor-plan sketches). `
@@ -471,6 +485,25 @@ export function fieldLabel(field: string, lang: UiLanguage = DEFAULT_LANGUAGE): 
 }
 
 function fallbackPrompt(
+  requirements: string,
+  profile: TradeInteractionProfile,
+  repeatedAsk: number | boolean = 0,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+  intakeStatus?: OrchestratorOptions["intakeStatus"],
+): string {
+  // 弱确认复述：只在这一轮真的有新东西被记下时才加这一句前缀——没有
+  // `justConfirmed`（现有全部调用方都没传）时这句是空字符串，行为与之前
+  // 完全一致，不会动到既有测试断言的原文案。
+  const justConfirmed = intakeStatus?.justConfirmed ?? [];
+  const recapPrefix = justConfirmed.length
+    ? (lang === "zh"
+      ? `记下了：${justConfirmed.join("、")}。`
+      : `Got it — ${justConfirmed.join(", ")}. `)
+    : "";
+  return recapPrefix + fallbackPromptCore(requirements, profile, repeatedAsk, lang, intakeStatus);
+}
+
+function fallbackPromptCore(
   requirements: string,
   profile: TradeInteractionProfile,
   repeatedAsk: number | boolean = 0,

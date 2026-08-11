@@ -110,6 +110,7 @@ import {
   applyChatApplianceAnswers, applyExtractedAppliances, chatMentionsApplianceKinds, isConfirmAssumedAppliances,
 } from "./design/chat-appliance-answers.js";
 import { extractGeometryFromChat } from "./design/llm-extract.js";
+import { justConfirmedNotes } from "./design/confirm-recap.js";
 import { renderSiteDiagram } from "./render/site-diagram.js";
 import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
@@ -1151,6 +1152,10 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
 
   let designRequirements = conv.designRequirements;
 
+  // 本轮"刚记下"的具体数字（弱确认复述用）——在下面的块里算出来，
+  // 块结束后传给 orchestratorReply 的 intakeStatus。
+  let justConfirmedThisTurn: string[] = [];
+
   // 对话确认 Q# / 现场特征 / 家电 → 写入 FloorPlan
   // （无图时也要建壳；助手复述里的墙长/「推定可以」也要从历史回填，否则 Confirmed 空）
   {
@@ -1171,6 +1176,9 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       planChat = createChatSourcedFloorPlan(conv.id, at);
       await appCtx.repos.floorPlans.upsert(planChat);
     }
+    // 本轮开始前的快照——用来算"这一轮到底新记下了什么"（弱确认复述），
+    // 不是全量已确认清单（那个用 confirmedBriefs，下面已经在用）。
+    const planBeforeThisTurn = planChat;
     if (planChat) {
       // LLM 结构化解析先"抢答"墙长/层高/家电——喂给它的是按角色打行标的
       // 干净记录（CUSTOMER/ASSISTANT），不是下面 combined 那种把历史文本整段
@@ -1232,6 +1240,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
         }
       }
     }
+    justConfirmedThisTurn = justConfirmedNotes(planBeforeThisTurn, planChat, language);
   }
 
   // FR-22.2：可识别的会话纠错 → 该公司 L1 draft（禁写 L0 / published 价）
@@ -1316,6 +1325,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
               confirmedBriefs,
               floorPlanReady: planReady,
               readyToAskDesign: readinessPre.readyToAskDesign,
+              ...(justConfirmedThisTurn.length ? { justConfirmed: justConfirmedThisTurn } : {}),
             },
           });
         designRequirements = reply.requirements ?? designRequirements;
