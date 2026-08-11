@@ -13,6 +13,7 @@ import {
 import {
   BillingError, computeDedupeKey, invoice, openDispute, recordLeadBilling, resolveDispute,
 } from "../src/billing/lead-events.js";
+import { recordServiceConfirmation, recordServiceRequest } from "../src/app/quote-service.js";
 import type { LeadBillingEvent, Quote } from "../src/domain/types.js";
 import { COMPANY_ID, SPEC_V1, makeContext } from "./fixtures.js";
 
@@ -226,4 +227,68 @@ test("裁定维持后可出账；裁定退款后状态为 refunded", () => {
 test("争议窗口结束后正常出账", () => {
   const e = makeEvent();
   assert.equal(invoice(e, "2026-06-20T00:00:00.000Z").feeStatus, "invoiced");
+});
+
+// ── 厂商会话 Type1：到店/上门落地 ────────────────────────────────────────────
+
+test("只能对已经 sent 的报价发起到店/上门请求", () => {
+  const draft = buildQuote({ status: "draft" });
+  assert.throws(
+    () => recordServiceRequest(
+      draft, { serviceType: "showroom_visit", customerContact: { email: "c@example.com" } },
+      { delivered: true }, AT,
+    ),
+    /must be sent to the seller first/,
+  );
+});
+
+test("请求成功：写入 serviceRequest 并留审计事件；不改变 Quote.status", () => {
+  const sent = buildQuote({ status: "sent" });
+  const r = recordServiceRequest(
+    sent,
+    { serviceType: "onsite_visit", customerContact: { phone: "555-0100" }, note: "周末方便" },
+    { delivered: true }, AT,
+  );
+  assert.equal(r.quote.status, "sent", "不是状态机迁移，只是挂一段附属数据");
+  assert.equal(r.quote.serviceRequest?.serviceType, "onsite_visit");
+  assert.equal(r.quote.serviceRequest?.customerContact.phone, "555-0100");
+  assert.equal(r.quote.serviceRequest?.confirmedAt, undefined);
+  assert.equal(r.events[0]?.action, "serviceRequested");
+});
+
+test("邮件没发出去：状态不落地，留一条 serviceRequestFailed 审计", () => {
+  const sent = buildQuote({ status: "sent" });
+  const r = recordServiceRequest(
+    sent, { serviceType: "showroom_visit", customerContact: { email: "c@example.com" } },
+    { delivered: false, error: "SMTP 550" }, AT,
+  );
+  assert.equal(r.quote.serviceRequest, undefined, "发送失败不该假装请求已经落地");
+  assert.equal(r.events[0]?.action, "serviceRequestFailed");
+  assert.equal(r.events[0]?.details, "SMTP 550");
+});
+
+test("厂商确认后写 confirmedAt；重复确认要拒绝", () => {
+  const sent = buildQuote({ status: "sent" });
+  const requested = recordServiceRequest(
+    sent, { serviceType: "showroom_visit", customerContact: { email: "c@example.com" } },
+    { delivered: true }, AT,
+  ).quote;
+
+  const confirmed = recordServiceConfirmation(requested, { delivered: true }, AT);
+  assert.ok(confirmed.quote.serviceRequest?.confirmedAt);
+  assert.equal(confirmed.events[0]?.action, "serviceConfirmed");
+  assert.equal(confirmed.events[0]?.actor, "company");
+
+  assert.throws(
+    () => recordServiceConfirmation(confirmed.quote, { delivered: true }, AT),
+    /already confirmed/,
+  );
+});
+
+test("没有 serviceRequest 就不能确认", () => {
+  const sent = buildQuote({ status: "sent" });
+  assert.throws(
+    () => recordServiceConfirmation(sent, { delivered: true }, AT),
+    /no service request/,
+  );
 });

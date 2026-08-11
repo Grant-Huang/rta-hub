@@ -12,6 +12,9 @@
 import type { SpecBundle } from "../spec/bundle.js";
 import { stripPriceFields } from "../spec/validation.js";
 import { resolveModuleSellUnit } from "../spec/sku-semantics.js";
+import {
+  formatModulePriceHint, priceSummaryForModule, standardAutoQuotableDiscount,
+} from "../pricing/informal-quote.js";
 import type { CompanyCodingRules, CompanyEngagementHandoff } from "../domain/types.js";
 import { interactionProfile, type TradeInteractionProfile } from "../trade/interaction.js";
 import type { AgentContext, AgentReply, CompletionClient, DesignIntent } from "./types.js";
@@ -85,9 +88,10 @@ function orchestratorSystem(
       "- 这个平台卖的是 **RTA 板式待组装橱柜**，不是全定制。",
       "  尺寸只有厂家的固定档、板件平装发货需要组装、不含上门安装。",
       "  客户把它当成定制来理解时**要当场纠正**——等到货到了再解释就是投诉了。",
-      "- 你只掌握通用橱柜知识。**不要报出任何具体公司的价格或型号**。",
+      "- 你只掌握通用橱柜知识。**在这条主线程里绝对不要报任何价格数字或区间——连「行业典型区间」也不要**，"
+        + "只描述产品/清单信息（型号大类、常见配置、注意事项）。报价是厂商 Agent 的事：客户一问到钱，"
+        + "就提示他 @公司名，由那家公司的助手用该公司真实规格库报价。",
       "- 客户想问某家公司的具体产品时，提示他用 @公司名 点名，由那家公司的助手来答。",
-      "- 需要给价格感觉时，只能说「行业典型区间」，且必须说明这不是任何公司的真实报价。",
       "",
       languageRuleForLlm(lang),
       "",
@@ -146,9 +150,11 @@ function orchestratorSystem(
     "- This platform sells **RTA (ready-to-assemble) cabinets**, not fully custom.",
     "  Sizes come in manufacturer fixed steps, they ship flat-packed and need assembly, install is not included.",
     "  If the customer treats this as custom, **correct that immediately** — explaining after delivery is a complaint.",
-    "- You only have generic cabinet knowledge. **Never quote a specific company's price or SKU**.",
+    "- You only have generic cabinet knowledge. **In this main thread, never state any price number or range — not "
+      + "even a \"typical industry range\".** Describe products/catalog information only (broad SKU categories, "
+      + "common configurations, things to watch for). Pricing is the seller agent's job: the moment money comes up, "
+      + "point them to @ the company name so that seller's agent can quote from its real catalog.",
     "- When they want a specific seller, tell them to @ the company name so that company's agent can answer.",
-    "- For ballpark pricing, only say \"typical industry ranges\" and make clear it is not any seller's real quote.",
     "",
     languageRuleForLlm(lang),
     "",
@@ -607,10 +613,17 @@ export function buildCompanyAgentSystem(
       return u === "combo" || u === "standalone" || m.sellUnit === undefined;
     })
     .slice(0, 80)
-    .map((m) => language === "zh"
-      ? `${m.code}(${m.type} 宽:${m.widthOptions.join("/")} 高:${m.heightOptions.join("/")} 深:${m.depthOptions.join("/")})`
-      : `${m.code}(${m.type} W:${m.widthOptions.join("/")} H:${m.heightOptions.join("/")} D:${m.depthOptions.join("/")})`)
+    .map((m) => {
+      const dims = language === "zh"
+        ? `${m.type} 宽:${m.widthOptions.join("/")} 高:${m.heightOptions.join("/")} 深:${m.depthOptions.join("/")}`
+        : `${m.type} W:${m.widthOptions.join("/")} H:${m.heightOptions.join("/")} D:${m.depthOptions.join("/")}`;
+      // 价格必须在这算好——Agent 只转述数字，不允许自己做加减乘除
+      const priceSummary = priceSummaryForModule(bundle, m);
+      const price = priceSummary ? ` · ${formatModulePriceHint(priceSummary, language)}` : "";
+      return `${m.code}(${dims})${price}`;
+    })
     .join(join);
+  const standardDiscount = standardAutoQuotableDiscount(bundle);
   const doors = bundle.doorStyles.map((d) => d.name).join(join);
   const hardware = bundle.hardwareOptions.map((h) => h.name).join(join);
   const accessories = bundle.accessoryOptions.map((a) => a.name).join(join);
@@ -628,6 +641,10 @@ export function buildCompanyAgentSystem(
     return [
       `你是「${companyName}」的产品助手。只能基于下面这份本公司规格库回答问题。`,
       "",
+      standardDiscount
+        ? `本店标准折扣：消费者统一 -${standardDiscount.value}%（已算进下面每个型号的参考价）。`
+        : "本店暂无标准折扣——报价即 MSRP 原价。",
+      "",
       `可供型号：${modules || none}`,
       `门板样式：${doors || none}`,
       `五金选项：${hardware || none}`,
@@ -637,14 +654,18 @@ export function buildCompanyAgentSystem(
       "硬性规则：",
       "1. 只回答上面列出的型号与选项。列表里没有的，直接说本公司不提供，**不要编，也不要提别家公司**。",
       "2. 尺寸只能取型号对应的候选值，不要给「接近的尺寸」。",
-      "3. **绝对不要报价格。** 价格由系统按规格库计算，你说的任何金额都会被丢弃。",
+      "3. **可以报价。** 每个型号后面已经标好参考价（如有标准折扣，已经算进去了），"
+        + "直接引用那个数字即可——**不要自己加减乘除，也不要编造清单外没标出的价格**。"
+        + "没标折扣就是这家公司没有标准折扣，别暗示「还能再优惠」——那是厂商员工接手后才能决定的事，"
+        + "不是你能承诺的。正式成交价以系统出的报价单为准，这里给的是参考价。",
       "4. 不确定就说不确定，让客户联系公司确认。",
       "5. 解释型号码时只用本公司前缀规则，禁止套用其他厂商的 B12/DB12 含义。",
       "",
       "引导（答完产品问题后仍要帮小白往前走）：",
       "- **结合【当前户型几何】**：谈转角柜/懒人转盘/大宽度柜时，用实际墙长判断是否放得下（例如单墙约 84\" 时转角柜往往不合适，要直说）。",
       "- 用一句白话解释该型号是否适合客户已透露的厨房形状/墙长。",
-      "- 主动提示下一步：缺尺寸→请上传户型或按 Q# 报墙长/层高；家电宽度未确认→请按图上 Q# 确认或说「推定可以」；需要正式价→出图后由系统报价（勿口报卖家价）。",
+      "- 主动提示下一步：缺尺寸→请上传户型或按 Q# 报墙长/层高；家电宽度未确认→请按图上 Q# 确认或说「推定可以」；"
+        + "客户想要一份能发出去的正式报价单→出图后由系统出具（这里给的参考价可以先聊，但不是那份正式单）。",
       "- 客户显然不懂术语时，先给一句话解释再给型号名；已问过的字段不要重复追问。",
       "",
       languageRuleForLlm(language),
@@ -653,6 +674,10 @@ export function buildCompanyAgentSystem(
 
   return [
     `You are the product assistant for "${companyName}". Answer only from this seller's catalog below.`,
+    "",
+    standardDiscount
+      ? `Standard discount: -${standardDiscount.value}% for consumers (already folded into each SKU's reference price below).`
+      : "No standard discount on file for this seller — prices below are MSRP.",
     "",
     `SKUs: ${modules || none}`,
     `Door styles: ${doors || none}`,
@@ -663,14 +688,20 @@ export function buildCompanyAgentSystem(
     "Hard rules:",
     "1. Only answer about SKUs/options listed above. If it is not listed, say this seller does not offer it — **do not invent, and do not mention other sellers**.",
     "2. Sizes must be from that SKU's option lists — do not suggest “close” sizes.",
-    "3. **Never quote prices.** The system prices from the catalog; any amount you invent is discarded.",
+    "3. **You may quote prices.** Each SKU above already shows a reference price (standard discount already "
+      + "applied, if this seller has one) — read that number directly. **Do not do your own arithmetic, and never "
+      + "invent a price not shown.** No discount shown means this seller has no standard discount — don't imply "
+      + "further negotiation is possible; that call belongs to seller staff, not you. The formal price is whatever "
+      + "the system's quote states; what you give here is a reference only.",
     "4. If unsure, say so and suggest contacting the seller.",
     "5. When explaining SKU codes, use ONLY this seller's prefix guide — never another company's B12/DB12 meaning.",
     "",
     "Guidance (after answering the product question, keep beginners moving):",
     "- **Use [Kitchen geometry] when present**: for corner bases / lazy susans / wide units, judge fit against actual wall lengths (e.g. a ~84\" single run often cannot take a corner unit — say so).",
     "- In one plain sentence, relate the SKU to the customer's kitchen shape/wall lengths.",
-    "- Next steps: missing sizes → upload a floor plan or answer wall/ceiling Q#; unconfirmed appliance widths → confirm via Q# or say \"assumed widths are fine\"; formal price → system quote after drawings (never invent seller prices).",
+    "- Next steps: missing sizes → upload a floor plan or answer wall/ceiling Q#; unconfirmed appliance widths → "
+      + "confirm via Q# or say \"assumed widths are fine\"; a formal quote document is generated by the system after "
+      + "drawings (the reference price above is fine to discuss now, it just isn't that formal document).",
     "- Define jargon briefly for non-technical customers; do not re-ask fields already stated.",
     "",
     languageRuleForLlm(language),
@@ -796,15 +827,17 @@ export function deterministicSpecAnswer(
   const q = question.toUpperCase();
   const hits = bundle.modules.filter((m) => q.includes(m.code));
   if (hits.length > 0) {
-    return hits.map((m) =>
-      msg(lang,
+    return hits.map((m) => {
+      const priceSummary = priceSummaryForModule(bundle, m);
+      const priceLine = priceSummary ? ` ${formatModulePriceHint(priceSummary, lang)}.` : "";
+      return msg(lang,
         `${companyName} ${m.code}: ${m.type}, widths ${m.widthOptions.join("/")}", ` +
         `heights ${m.heightOptions.join("/")}", depths ${m.depthOptions.join("/")}", ` +
-        `assembly ${m.assemblyOptions.join(" / ")}.`,
+        `assembly ${m.assemblyOptions.join(" / ")}.${priceLine}`,
         `${companyName} 的 ${m.code}：${m.type}，宽 ${m.widthOptions.join("/")}"，` +
         `高 ${m.heightOptions.join("/")}"，深 ${m.depthOptions.join("/")}"，` +
-        `可选 ${m.assemblyOptions.join(" / ")}。`),
-    ).join("\n");
+        `可选 ${m.assemblyOptions.join(" / ")}。${priceLine}`);
+    }).join("\n");
   }
 
   // 尺寸类提问：「有 36 寸的转角柜吗」

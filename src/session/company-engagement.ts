@@ -288,7 +288,8 @@ export function renderHandoffContextNote(
       "1. 不要重问上面已列出的字段；不要引用主线程闲聊原文。",
       "2. 开线或 pull 后：简短复述要点，再请用户确认是否正确。",
       "3. 用户纠正某字段时先确认理解，再问是否写入已确认。",
-      "4. 绝对不要报价格。",
+      "4. 可以按本公司规格清单里标好的参考价（MSRP，已含标准折扣）报价；"
+        + "不要自己加减乘除或承诺清单外的优惠——员工发言接管后，更大的优惠由员工决定。",
     ].join("\n");
   }
   const lines = facts.map((f) =>
@@ -303,7 +304,9 @@ export function renderHandoffContextNote(
     "1. Do not re-ask fields listed above; do not quote main-thread chatter.",
     "2. On open / after pull: briefly restate key points, then ask one yes/correct question.",
     "3. If the user corrects a field, acknowledge and ask whether to update Confirmed.",
-    "4. Never quote prices.",
+    "4. You may quote the reference price shown in this seller's catalog (MSRP, standard discount already "
+      + "applied) — don't do your own math or promise discounts beyond that; once staff join the thread, "
+      + "anything further is their call.",
   ].join("\n");
 }
 

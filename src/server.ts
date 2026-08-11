@@ -18,7 +18,8 @@ import type { Context, Next } from "hono";
 
 import { fromDollars, format } from "./domain/money.js";
 import type {
-  CabinetCompany, ChatMessage, CompanyEngagement, Conversation, CritiqueStatus, CustomerAccount, ModuleType, Quote,
+  CabinetCompany, ChatMessage, CompanyEngagement, CompanyStaffMessage, CompanyStaffThread, Conversation,
+  CritiqueStatus, CustomerAccount, ModuleType, Quote, ServiceType,
 } from "./domain/types.js";
 import type { FloorPlan } from "./floorplan/types.js";
 import type { GeneratedLayout } from "./layout/generate.js";
@@ -39,6 +40,7 @@ import {
 } from "./routing/mention.js";
 import {
   buildSendDisclosure, confirm, createQuoteFromLlmOutput, recordSendResult,
+  recordServiceConfirmation, recordServiceRequest,
 } from "./app/quote-service.js";
 import { openDispute, resolveDispute } from "./billing/lead-events.js";
 import { quoteContentHash, verifySnapshot } from "./quote/state.js";
@@ -92,7 +94,10 @@ import { quickRepliesFor } from "./agents/quick-replies.js";
 import {
   buildEstimateDraft, buildIllustratedEstimate, catalogToPseudoModules, estimateCountsFromText, renderEstimateText,
 } from "./estimate/generic.js";
-import { buildQuoteEmail, deIdentifySignal, resolveSenderIdentity, sendEmail } from "./email/sender.js";
+import {
+  buildQuoteEmail, buildServiceConfirmationEmail, buildServiceRequestEmail,
+  deIdentifySignal, resolveSenderIdentity, sendEmail,
+} from "./email/sender.js";
 import { buildHtmlQuoteEmail } from "./email/html-quote.js";
 import { buildComparison, renderComparisonHtml, renderComparisonText } from "./quote/comparison.js";
 import {
@@ -166,6 +171,11 @@ import {
   startSession, type OnboardingSession, type QuestionAnswer,
 } from "./spec/onboarding.js";
 import { blankTemplates, type ImportSources } from "./spec/import.js";
+import { parseJsonCatalog, parseXlsxCatalog, type JsonCatalogPayload, type UploadParseResult } from "./spec/catalog-upload.js";
+import { parsePdfCatalog, PdfCatalogExtractError } from "./spec/pdf-catalog-extract.js";
+import {
+  applyStandardDiscountPatch, companyStaffAgentReply, renderNextQuestionPrompt,
+} from "./agents/company-staff-agent.js";
 import type { CompanyOverrides } from "./render/templates.js";
 import { rtaIntro, rtaQuoteNote } from "./quote/rta-disclosure.js";
 import {
@@ -2478,6 +2488,159 @@ app.get("/api/quotes/:id/pdf", requireAccount, (c) => {
   });
 });
 
+/**
+ * 厂商会话 Type1 落地——客户请求到店/上门。
+ *
+ * 只促成一次邮件：把联系方式和已发出的报价一起递给厂商 `quoteEmail`，
+ * 不排班、不做地理覆盖校验，双方线下联系。只能对已经 `sent` 的报价发起——
+ * 发出前厂商压根没收到这个客户的线索，谈"到店/上门"没有意义。
+ */
+app.post("/api/quotes/:id/service-request", requireAccount, async (c) => {
+  const account = c.get("account");
+  const q = ownedQuote(c, param(c, "id"));
+  if (!q) return c.json({ error: "Quote not found" }, 404);
+  if (q.status !== "sent") {
+    return c.json({ error: `Quote status is ${q.status}; the quote must be sent to the seller first` }, 409);
+  }
+  if (q.serviceRequest) {
+    return c.json({ error: "A service request already exists for this quote", serviceRequest: q.serviceRequest }, 409);
+  }
+
+  const body = await jsonBody<{ serviceType: ServiceType; phone: string; email: string; note: string }>(c);
+  if (body.serviceType !== "showroom_visit" && body.serviceType !== "onsite_visit") {
+    return c.json({ error: "serviceType must be showroom_visit or onsite_visit" }, 400);
+  }
+  const phone = body.phone?.trim();
+  const email = body.email?.trim();
+  if (!phone && !email) {
+    return c.json({ error: "Provide at least a phone or an email so the seller can reach you" }, 400);
+  }
+  const customerContact = { ...(phone ? { phone } : {}), ...(email ? { email } : {}) };
+
+  const company = appCtx.repos.companies.byId(q.companyId);
+  const sender = resolveSenderIdentity();
+  const plan = planForConversation(q.conversationId);
+  const layout = plan ? storedLayoutFor(plan.id, q.companyId) : undefined;
+  const pdf = plan && layout ? renderQuotePdf(q, plan, layout, account) : undefined;
+
+  const outbound = buildServiceRequestEmail({
+    companyName: company?.name ?? q.companyId,
+    customerName: account.displayName,
+    customerAccountEmail: account.email,
+    serviceType: body.serviceType,
+    customerContact,
+    ...(body.note?.trim() ? { note: body.note.trim() } : {}),
+    quoteId: q.id,
+    quoteText: renderQuoteText(q),
+  }, sender);
+  outbound.to = company?.quoteEmail ?? "";
+  if (pdf) {
+    outbound.attachments = [{
+      filename: quoteFilename(q),
+      contentType: "application/pdf",
+      content: pdf.pdf.toString("base64"),
+      encoding: "base64",
+    }];
+  }
+
+  const sendResult = await sendEmail(outbound, {
+    sender,
+    ...(appCtx.mailTransport ? { transport: appCtx.mailTransport } : {}),
+  });
+  const at = now();
+  let outcome;
+  try {
+    outcome = recordServiceRequest(
+      q,
+      { serviceType: body.serviceType, customerContact, ...(body.note?.trim() ? { note: body.note.trim() } : {}) },
+      sendResult.delivered
+        ? { delivered: true }
+        : { delivered: false, error: "error" in sendResult ? sendResult.error : "Unknown error" },
+      at,
+    );
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+  await appCtx.repos.quotes.update(outcome.quote.id, outcome.quote);
+  for (const e of outcome.events) await appCtx.repos.auditEvents.insert(e);
+
+  return c.json({
+    quote: outcome.quote,
+    dryRun: sendResult.dryRun,
+    ...(sendResult.delivered ? {} : { sendError: "error" in sendResult ? sendResult.error : "Unknown error" }),
+  });
+});
+
+/**
+ * 厂商员工确认到店/上门请求——发第二封邮件给客户。
+ *
+ * 鉴权走 `requireCompany`：先证明是这家公司，再操作它自己的报价单。
+ */
+app.post("/api/company/:companyId/quotes/:id/confirm-service", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const q = appCtx.repos.quotes.byId(param(c, "id"));
+  if (!q || q.companyId !== companyId) return c.json({ error: "Quote not found" }, 404);
+  if (!q.serviceRequest) return c.json({ error: "This quote has no service request to confirm" }, 409);
+  if (q.serviceRequest.confirmedAt) {
+    return c.json({ error: "Already confirmed", serviceRequest: q.serviceRequest }, 409);
+  }
+
+  const company = appCtx.repos.companies.byId(companyId);
+  const account = appCtx.repos.accounts.byId(q.customerAccountId);
+  const to = q.serviceRequest.customerContact.email ?? account?.email;
+  if (!to) {
+    return c.json({ error: "Customer left no email; confirm by phone directly and note it offline" }, 409);
+  }
+
+  const sender = resolveSenderIdentity();
+  const plan = planForConversation(q.conversationId);
+  const layout = plan ? storedLayoutFor(plan.id, companyId) : undefined;
+  const pdf = plan && layout && account ? renderQuotePdf(q, plan, layout, account) : undefined;
+
+  const outbound = buildServiceConfirmationEmail({
+    companyName: company?.name ?? companyId,
+    customerName: account?.displayName ?? "there",
+    serviceType: q.serviceRequest.serviceType,
+    ...(company?.storeAddress ? { storeAddress: company.storeAddress } : {}),
+    quoteId: q.id,
+  }, sender);
+  outbound.to = to;
+  if (pdf) {
+    outbound.attachments = [{
+      filename: quoteFilename(q),
+      contentType: "application/pdf",
+      content: pdf.pdf.toString("base64"),
+      encoding: "base64",
+    }];
+  }
+
+  const sendResult = await sendEmail(outbound, {
+    sender,
+    ...(appCtx.mailTransport ? { transport: appCtx.mailTransport } : {}),
+  });
+  const at = now();
+  let outcome;
+  try {
+    outcome = recordServiceConfirmation(
+      q,
+      sendResult.delivered
+        ? { delivered: true }
+        : { delivered: false, error: "error" in sendResult ? sendResult.error : "Unknown error" },
+      at,
+    );
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+  await appCtx.repos.quotes.update(outcome.quote.id, outcome.quote);
+  for (const e of outcome.events) await appCtx.repos.auditEvents.insert(e);
+
+  return c.json({
+    quote: outcome.quote,
+    dryRun: sendResult.dryRun,
+    ...(sendResult.delivered ? {} : { sendError: "error" in sendResult ? sendResult.error : "Unknown error" }),
+  });
+});
+
 app.get("/api/quotes/:id/audit", requireAccount, (c) => {
   const q = ownedQuote(c, param(c, "id"));
   if (!q) return c.json({ error: "Quote not found" }, 404);
@@ -3870,6 +4033,195 @@ app.post("/api/company/:companyId/spec/sessions/:sessionId/publish", requireComp
     canQuote: blockers.length === 0,
     ...(blockers.length ? { blockers } : {}),
     specCompleteness: readiness,
+  }, 201);
+});
+
+// ── 厂商员工会话（Type2 A）——对话式初始化 ──────────────────────────────────
+//
+// 不是上面表单 API 的替代——是同一套底层状态机的另一个入口。员工在这里聊出来
+// 的答案，落地方式跟表单提交完全一样（同一个 ingestTemplates/answerQuestion）。
+// 这里只是把"数据怎么递进来"从"填表"换成"聊天 + 发文件"。厂商注册后没有
+// 单独的表单页面——门店地址、标准折扣、产品目录都是从这条入口进来的。
+
+function staffThreadFor(companyId: string): CompanyStaffThread {
+  return appCtx.repos.companyStaffThreads.byId(companyId)
+    ?? { id: companyId, companyId, messages: [], updatedAt: now() };
+}
+
+app.get("/api/company/:companyId/staff-chat", requireCompany, (c) => {
+  return c.json({ thread: staffThreadFor(param(c, "companyId")) });
+});
+
+/** 员工发一句话；后台 Agent 答复，并把能落地的意图（地址/折扣/追问答案）直接写库。 */
+app.post("/api/company/:companyId/staff-chat/messages", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const company = appCtx.repos.companies.byId(companyId);
+  if (!company) return c.json({ error: "Company not found" }, 404);
+  const body = await jsonBody<{ text: string }>(c);
+  const text = body.text?.trim();
+  if (!text) return c.json({ error: "text is required" }, 400);
+
+  const thread = staffThreadFor(companyId);
+  const at = now();
+  const language = inferLanguageFromText(text) ?? DEFAULT_LANGUAGE;
+
+  const session = thread.activeOnboardingSessionId
+    ? appCtx.repos.onboardingSessions.byId(thread.activeOnboardingSessionId)
+    : undefined;
+  const bundle = session ? appCtx.repos.specBundles.byId(session.specVersionId) : undefined;
+
+  const outcome = await companyStaffAgentReply(
+    { client: appCtx.llm, company, session, bundle, language }, text, at,
+  );
+
+  let updatedCompany = company;
+  if (outcome.patch?.companyUpdate) {
+    updatedCompany = { ...company, ...outcome.patch.companyUpdate };
+    await appCtx.repos.companies.update(companyId, outcome.patch.companyUpdate);
+  }
+  if (outcome.patch?.discountRule) {
+    const specVersionId = company.currentPublishedSpecVersionId ?? session?.specVersionId;
+    const existingBundle = specVersionId ? appCtx.repos.specBundles.byId(specVersionId) : undefined;
+    if (!specVersionId || !existingBundle) {
+      return c.json({
+        error: "This company has no draft or published spec yet — import a catalog before setting a discount",
+      }, 409);
+    }
+    const discountRules = applyStandardDiscountPatch(
+      existingBundle.discountRules, specVersionId, companyId, outcome.patch.discountRule,
+    );
+    await appCtx.repos.specBundles.upsert({ ...existingBundle, discountRules });
+  }
+  let nextSession = session;
+  if (outcome.patch?.onboardingAnswer) {
+    nextSession = outcome.patch.onboardingAnswer.session;
+    await appCtx.repos.onboardingSessions.update(nextSession.id, nextSession);
+    await appCtx.repos.specBundles.upsert(outcome.patch.onboardingAnswer.bundle);
+  }
+
+  const staffMsg: CompanyStaffMessage = { role: "staff", content: text, at };
+  const assistantMsg: CompanyStaffMessage = {
+    role: "assistant",
+    content: outcome.reply,
+    at: now(),
+    ...(outcome.patch ? {
+      action: {
+        kind: outcome.patch.companyUpdate ? "profileUpdated" as const
+          : outcome.patch.discountRule ? "discountUpdated" as const
+          : "questionsAnswered" as const,
+      },
+    } : {}),
+  };
+  const nextThread: CompanyStaffThread = {
+    ...thread,
+    messages: [...thread.messages, staffMsg, assistantMsg],
+    updatedAt: assistantMsg.at,
+    ...(nextSession ? { activeOnboardingSessionId: nextSession.id } : {}),
+  };
+  await appCtx.repos.companyStaffThreads.upsert(nextThread);
+
+  return c.json({ thread: nextThread, company: updatedCompany });
+});
+
+/**
+ * 批量目录/价目表上传——Excel(.xlsx)/JSON 一等公民，PDF 走 LLM 抽取兜底。
+ * Word/.txt 不支持：没有可依赖的表格结构，宁可让商家转存成 Excel。
+ *
+ * 接 multipart（字段名 `file`）或直接 JSON body（四/五张表的对象数组）。
+ */
+app.post("/api/company/:companyId/staff-chat/catalog", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const company = appCtx.repos.companies.byId(companyId);
+  if (!company) return c.json({ error: "Company not found" }, 404);
+
+  let parsed: UploadParseResult;
+  let filename = "upload.json";
+  try {
+    const contentType = c.req.header("content-type") ?? "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await c.req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) return c.json({ error: "No file field found in the upload (expected \"file\")" }, 400);
+      filename = file.name || filename;
+      const buffer = Buffer.from(await file.arrayBuffer());
+      if (/\.xlsx?$/i.test(filename)) {
+        parsed = parseXlsxCatalog(buffer);
+      } else if (/\.pdf$/i.test(filename)) {
+        parsed = await parsePdfCatalog(buffer, appCtx.llm);
+      } else if (/\.json$/i.test(filename)) {
+        parsed = parseJsonCatalog(JSON.parse(buffer.toString("utf-8")) as JsonCatalogPayload);
+      } else {
+        return c.json({
+          error: `Unsupported file type for "${filename}" — please upload .xlsx, .json, or .pdf. ` +
+            "Word/.txt are not supported: there is no reliable table structure to parse from them.",
+        }, 400);
+      }
+    } else {
+      parsed = parseJsonCatalog(await jsonBody<JsonCatalogPayload>(c));
+    }
+  } catch (e) {
+    if (e instanceof PdfCatalogExtractError) return c.json({ error: e.message, code: e.code }, 422);
+    return c.json({ error: `Could not read this file: ${e instanceof Error ? e.message : String(e)}` }, 400);
+  }
+
+  if (parsed.missingRequiredSheets.length) {
+    return c.json({
+      error: `Missing required tables: ${parsed.missingRequiredSheets.join(", ")}`,
+      unmatchedSheets: parsed.unmatchedSheets,
+    }, 422);
+  }
+
+  const thread = staffThreadFor(companyId);
+  let session = thread.activeOnboardingSessionId
+    ? appCtx.repos.onboardingSessions.byId(thread.activeOnboardingSessionId)
+    : appCtx.repos.onboardingSessions.all().find((s) => s.companyId === companyId && s.status !== "published");
+
+  if (!session) {
+    const versions = appCtx.repos.specVersions.all().filter((v) => v.companyId === companyId);
+    const started = startSession(companyId, now(), versions);
+    session = started.session;
+    await appCtx.repos.specVersions.insert(started.draftVersion);
+    await appCtx.repos.onboardingSessions.insert(session);
+  }
+
+  const previous = company.currentPublishedSpecVersionId
+    ? appCtx.repos.specBundles.byId(company.currentPublishedSpecVersionId)
+    : undefined;
+
+  let ingestResult;
+  try {
+    ingestResult = ingestTemplates(session, parsed.sources, now(), {
+      ...(previous ? { knownModules: previous.modules } : {}),
+    });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+  await appCtx.repos.onboardingSessions.update(ingestResult.session.id, ingestResult.session);
+  await appCtx.repos.specBundles.upsert(ingestResult.bundle);
+
+  const summary = `Parsed "${filename}": ${ingestResult.importResult.stats.modulesImported} SKUs, ` +
+    `${ingestResult.importResult.stats.priceMatrixImported} price rows, ` +
+    `${ingestResult.session.unresolved.length} item(s) need review.` +
+    (parsed.unmatchedSheets.length ? ` (unrecognized tabs/keys: ${parsed.unmatchedSheets.join(", ")})` : "");
+  const systemMsg: CompanyStaffMessage = {
+    role: "system", content: summary, at: now(), action: { kind: "catalogImported" },
+  };
+  const assistantMsg: CompanyStaffMessage = {
+    role: "assistant", content: renderNextQuestionPrompt(ingestResult.session, DEFAULT_LANGUAGE), at: now(),
+  };
+  const nextThread: CompanyStaffThread = {
+    ...thread,
+    messages: [...thread.messages, systemMsg, assistantMsg],
+    activeOnboardingSessionId: ingestResult.session.id,
+    updatedAt: assistantMsg.at,
+  };
+  await appCtx.repos.companyStaffThreads.upsert(nextThread);
+
+  return c.json({
+    thread: nextThread,
+    session: ingestResult.session,
+    stats: ingestResult.importResult.stats,
+    unmatchedSheets: parsed.unmatchedSheets,
   }, 201);
 });
 

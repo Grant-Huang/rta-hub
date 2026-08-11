@@ -10,7 +10,7 @@
 import path from "node:path";
 import { JsonCollection } from "./json-store.js";
 import type {
-  CabinetCompany, CompanyMentionSignal, CompanyProspect, Conversation,
+  CabinetCompany, CompanyMentionSignal, CompanyProspect, CompanyStaffThread, Conversation,
   CritiqueReview, CustomerAccount, DeliveryAuditRecord, DesignLayout, DesignRevision,
   EmailSubscription, EstimateDraft, LeadBillingEvent, ProductSpecVersion, Quote,
   QuoteAuditEvent, SessionRun,
@@ -64,6 +64,8 @@ export interface Repositories {
   l1LearningQueue: JsonCollection<CompanyLearningItem>;
   /** 测试用户 Agent 套件（可切割 src/testing）。 */
   testUserRuns: JsonCollection<TestUserRun>;
+  /** 厂商员工会话（Type2）——一家公司一条常驻线程，id = companyId。 */
+  companyStaffThreads: JsonCollection<CompanyStaffThread>;
 }
 
 export function openRepositories(dataDir = process.env.DATA_DIR ?? path.join(process.cwd(), "data")): Repositories {
@@ -108,5 +110,6 @@ export function openRepositories(dataDir = process.env.DATA_DIR ?? path.join(pro
     trainerConversations: new JsonCollection<TrainerConversation>(f("trainer-conversations")),
     l1LearningQueue: new JsonCollection<CompanyLearningItem>(f("l1-learning-queue")),
     testUserRuns: new JsonCollection<TestUserRun>(f("test-user-runs")),
+    companyStaffThreads: new JsonCollection<CompanyStaffThread>(f("company-staff-threads")),
   };
 }

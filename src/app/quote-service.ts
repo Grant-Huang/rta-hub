@@ -9,7 +9,7 @@
 import type { Money } from "../domain/money.js";
 import type {
   AccountType, LeadBillingEvent, ModuleSelection, Province, Quote,
-  QuoteAuditEvent, ShippingRule, TaxRule,
+  QuoteAuditEvent, QuoteServiceRequest, ServiceType, ShippingRule, TaxRule,
 } from "../domain/types.js";
 import { computePrice, type PricingContext } from "../pricing/engine.js";
 import { resolveTaxRule } from "../pricing/tax.js";
@@ -209,6 +209,69 @@ export function recordSendResult(
     return { quote: s.quote, events, billingSuppressed: true };
   }
   return { quote: s.quote, events, billingEvent: billing.event, billingSuppressed: false };
+}
+
+// ── 厂商会话 Type1：到店/上门落地 ──────────────────────────────────────────
+//
+// 不是状态机迁移——`Quote.status` 停在 `sent`，这只是挂在报价单上的一段
+// 附属数据。系统只促成两次邮件（客户请求→厂商；厂商确认→客户），不排班、
+// 不做地理覆盖校验，双方线下联系。跟 `recordSendResult` 一样：**邮件是否
+// 发出去由调用方决定并把结果传进来**，这里只管状态落盘与审计留痕。
+
+export interface ServiceRequestOutcome {
+  quote: Quote;
+  events: QuoteAuditEvent[];
+}
+
+/** 客户请求到店/上门。只能对已经 `sent` 的报价发起——发出前厂商压根没收到这条线索。 */
+export function recordServiceRequest(
+  quote: Quote,
+  request: { serviceType: ServiceType; customerContact: { phone?: string; email?: string }; note?: string },
+  outcome: { delivered: boolean; error?: string },
+  at: string,
+): ServiceRequestOutcome {
+  if (quote.status !== "sent") {
+    throw new Error(`Quote status is ${quote.status}; the quote must be sent to the seller first`);
+  }
+  if (!outcome.delivered) {
+    return {
+      quote,
+      events: [makeAuditEvent(quote, "serviceRequestFailed", "customer", at, outcome.error ?? "Unknown error")],
+    };
+  }
+  const serviceRequest: QuoteServiceRequest = {
+    serviceType: request.serviceType,
+    customerContact: request.customerContact,
+    ...(request.note?.trim() ? { note: request.note.trim() } : {}),
+    requestedAt: at,
+  };
+  const next: Quote = { ...quote, serviceRequest };
+  return { quote: next, events: [makeAuditEvent(next, "serviceRequested", "customer", at)] };
+}
+
+/** 厂商员工确认到店/上门。给客户发第二封邮件——同样由调用方把发送结果传进来。 */
+export function recordServiceConfirmation(
+  quote: Quote,
+  outcome: { delivered: boolean; error?: string },
+  at: string,
+): ServiceRequestOutcome {
+  if (!quote.serviceRequest) {
+    throw new Error("This quote has no service request to confirm");
+  }
+  if (quote.serviceRequest.confirmedAt) {
+    throw new Error("This service request was already confirmed");
+  }
+  if (!outcome.delivered) {
+    return {
+      quote,
+      events: [makeAuditEvent(quote, "serviceConfirmFailed", "company", at, outcome.error ?? "Unknown error")],
+    };
+  }
+  const next: Quote = {
+    ...quote,
+    serviceRequest: { ...quote.serviceRequest, confirmedAt: at },
+  };
+  return { quote: next, events: [makeAuditEvent(next, "serviceConfirmed", "company", at)] };
 }
 
 /**
