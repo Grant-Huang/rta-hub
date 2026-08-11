@@ -1294,7 +1294,9 @@ function renderRestoredPlanViews(d) {
 
 /**
  * 开场示例：户型极简图 / 设计想法草图。
- * 点 chip → 在会话里展示示例图 + 提示；用户再按示例手绘后用 + 上传。
+ * 点标签 chip → 在会话里展示示例图 + 提示，用户再按示例手绘后用 + 上传。
+ * `role: "floorplan"` 的示例额外带一个"我家像这个"按钮（FR-17.4）：
+ * 点了直接按该模板预填几何，不必手绘。末尾一个"都不像，其他"对应零墙段现状。
  */
 function renderIntakeSamples(samples) {
   if (!samples?.length || conversationArchived) return;
@@ -1303,13 +1305,20 @@ function renderIntakeSamples(samples) {
   const box = document.createElement('div');
   box.id = 'intakeSamples';
   box.className = 'msg assistant';
+  const hasFloorplan = samples.some((s) => s.role === 'floorplan');
   box.innerHTML = `<div class="intake-samples">${samples.map((s) =>
-    `<button type="button" class="chip" data-sample="${esc(s.file)}" data-hint="${esc(s.hint)}" data-label="${esc(s.label)}">${esc(s.label)}</button>`,
+    `<button type="button" class="chip" data-sample="${esc(s.file)}" data-hint="${esc(s.hint)}" data-label="${esc(s.label)}">${esc(s.label)}</button>`
+    + (s.role === 'floorplan'
+      ? `<button type="button" class="chip alt" data-template="${esc(s.id)}" data-label="${esc(s.label)}">${esc(t('useThisLayout'))}</button>`
+      : ''),
   ).join('')}
+  ${hasFloorplan ? `<button type="button" class="chip alt" data-template="other">${esc(t('noneOfThese'))}</button>` : ''}
   <span class="chip alt" data-upload-hint="1">${esc(t('intakeUploadHint'))}</span></div>`;
   box.addEventListener('click', (e) => {
     const upload = e.target.closest('[data-upload-hint]');
     if (upload) { $('attachBtn')?.click(); return; }
+    const tplBtn = e.target.closest('[data-template]');
+    if (tplBtn) { selectFloorplanTemplate(tplBtn.dataset.template, tplBtn.dataset.label); return; }
     const btn = e.target.closest('[data-sample]');
     if (!btn) return;
     showSamplePreview(btn.dataset.sample, btn.dataset.label, btn.dataset.hint);
@@ -1326,6 +1335,44 @@ function showSamplePreview(file, label, hint) {
     + `<img src="/samples/${encodeURIComponent(file)}" alt=""/>`;
   $('chatLog').appendChild(wrap);
   scrollChatToBottom();
+}
+
+/**
+ * 户型模板快选（FR-17.4）：选"我家像这个"直接预填几何，跳过手绘。
+ * 预填不算确认——响应形状跟上传/手绘一致，复用同一套 `renderFloorPlan` 渲染
+ * 与 Q# 追问，客户还是要把每段墙、每处门窗过一遍。
+ */
+async function selectFloorplanTemplate(templateId, label) {
+  if (!conversationId || conversationArchived) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'msg user';
+  wrap.innerHTML = `<div>${esc(templateId === 'other' ? t('noneOfThese') : (label || templateId))}</div>`;
+  $('chatLog').appendChild(wrap);
+  scrollChatToBottom();
+
+  const { ok, body } = await api(`/api/conversations/${conversationId}/floorplan-template`, {
+    method: 'POST', body: JSON.stringify({ templateId }),
+  });
+  if (!ok || body.code === 'CONVERSATION_ARCHIVED') {
+    if (body.code === 'CONVERSATION_ARCHIVED') { conversationArchived = true; setComposerArchived(true); }
+    addMsg('system', body.error || t('submitFail'));
+    return;
+  }
+  floorPlanId = body.floorPlan?.id;
+  stepIndex = 1; renderSteps();
+  if (body.interpretation) addMsg('assistant', body.interpretation);
+  for (const r of body.replies || []) {
+    if (r.content && r.content !== body.interpretation) addMsg('assistant', r.content);
+  }
+  if (body.designBrief) applyDesignBrief(body.designBrief);
+  if (body.geometryUsable || body.suppressGeometryIntake) {
+    confirmed.floorPlan = { ...(confirmed.floorPlan || {}), geometryUsable: true };
+  }
+  if (body.siteDiagram?.svg) showSiteDiagramInChat(body.siteDiagram.svg);
+  if (body.siteQuestions?.length) renderSiteQuestionsText(body.siteQuestions);
+  renderQuickReplies([], { suppressGeometry: true });
+  await renderFloorPlan(body);
+  refreshConversations();
 }
 
 /**
