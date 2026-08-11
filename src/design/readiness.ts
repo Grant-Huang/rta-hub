@@ -173,13 +173,13 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
       const isL = /l\s*-?\s*shape|l\s*型/i.test(req);
       const isU = /u\s*-?\s*shape|u\s*型/i.test(req);
       let askHint = !wallsReady
-        ? msg(lang, "Enter each wall length in inches (e.g. North 84\").", "请按墙报英寸长度（如 North 84\"）。")
+        ? msg(lang, "Enter each wall length in inches (e.g. `<wall name> <inches>\"`).", "请按墙报英寸长度（如 `<墙名> <英寸数>寸`）。")
         : msg(lang, "What is the ceiling height in inches?", "层高多少英寸？");
       if (!wallsReady && knownRuns.length === 1 && isL) {
         const w = knownRuns[0]!;
         askHint = msg(lang,
-          `Got "${w.label}" at ${w.length}" (~${(w.length / 12).toFixed(0)} ft). What is the other L-leg length? (e.g. short leg 96" or 8 ft)`,
-          `已记「${w.label}」${w.length}"（约 ${(w.length / 12).toFixed(0)} 尺）。L 型另一段多长？（如 short leg 96" 或 8 ft）`);
+          `Got "${w.label}" at ${w.length}" (~${(w.length / 12).toFixed(0)} ft). What is the other L-leg length in inches or ft?`,
+          `已记「${w.label}」${w.length}"（约 ${(w.length / 12).toFixed(0)} 尺）。L 型另一段多长（英寸或英尺）？`);
       } else if (!wallsReady && knownRuns.length >= 1 && knownRuns.length < 3 && isU) {
         askHint = msg(lang,
           `Got ${knownRuns.length} run(s). Please give the remaining U-leg length(s) in inches or ft.`,

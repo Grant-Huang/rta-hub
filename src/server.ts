@@ -2524,10 +2524,10 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
   if (needsManual) {
     assistantBits.push(msg(fpLang,
       "Answer in text only — send wall lengths and ceiling in one message "
-        + "(e.g. `North 84\", East 108\", ceiling 96\"`). "
+        + "(e.g. `<wall name> <inches>\", <wall name> <inches>\", ceiling <inches>\"`). "
         + "Then confirm each appliance with its width so we can ask whether to draw.",
       "请只用文字回答——一条消息补齐墙长和层高"
-        + "（例如：`North 84\"，East 108\"，层高 96\"`）。"
+        + "（例如：`<墙名> <英寸数>寸，<墙名> <英寸数>寸，层高 <英寸数>寸`）。"
         + "随后确认家电（或说「家电后定」），即可问你要不要出图。"));
   } else if (sitePrompts.length) {
     assistantBits.push(msg(fpLang,

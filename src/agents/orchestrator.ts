@@ -522,7 +522,7 @@ function fallbackPrompt(
   }
   if (repeats >= 2) {
     return "I won't repeat the same question — tap a quick option below, or send wall lengths like "
-      + "`North 84\", ceiling 96\"`. If the model timed out, just reply once more; no need to re-confirm answered items.";
+      + "`<wall name> <inches>\", ceiling <inches>\"`. If the model timed out, just reply once more; no need to re-confirm answered items.";
   }
   if (repeats === 1) {
     return `I may not have asked clearly. Please answer: ${ask.join("; ")}. `

@@ -259,9 +259,9 @@ export function planAppliances(
         kind: spec.kind,
         message: msg(lang,
           `${name} needs ${need}" but no wall run can fit it` +
-            ` (excluding doors${tall ? ", windows" : ""}, obstructions, and other appliances)`,
+            ` (excluding entry openings${tall ? ", windows" : ""}, obstructions, and other appliances)`,
           `${name}需要 ${need}" 的位置，` +
-            `但没有一段墙能放下（已排除门洞${tall ? "、窗洞" : ""}、障碍与其他家电占位）`),
+            `但没有一段墙能放下（已排除出入口${tall ? "、窗洞" : ""}、障碍与其他家电占位）`),
       });
       continue;
     }

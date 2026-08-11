@@ -16,6 +16,14 @@ const DEFAULT_WINDOW_WIDTH = 36;
 const DEFAULT_DOOR_WIDTH = 32;
 const DEFAULT_PLUMBING_OFFSET_RATIO = 0.4;
 
+/**
+ * 墙名/方位与数字之间容许的口语插入词——"North **about** 7 ft" 这类含糊表述
+ * 不该因为中间多了一个 "about"/"大概" 就让整段墙长解析失败（beginner 人设的
+ * 真实说法，见测试报告 Bug②）。
+ */
+const HEDGE_WORDS = "\\s*(?:(?:is|are|was|were|about|around|roughly|approx(?:imately)?|"
+  + "maybe|probably|like|大概|大约|差不多|将近|好像|可能)\\s*)?";
+
 export interface ParsedFeatureAnswer {
   wallRunId: string;
   offset: number;
@@ -241,7 +249,7 @@ export function applyChatWallLengths(
     if (!lab) continue;
     const esc = lab.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(
-      `(?:^|[^\\w])${esc}\\s*(?:墙|wall|leg)?\\s*[:=]?\\s*(\\d+(?:\\.\\d+)?)`
+      `(?:^|[^\\w])${esc}\\s*(?:墙|wall|leg)?${HEDGE_WORDS}[:=]?\\s*(\\d+(?:\\.\\d+)?)`
         // 单位前的空白必须跟单位绑在一起，否则会吞掉「East 120 North 144」里下一墙前的空格
         + `(?:\\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm))?`
         + `(?!\\s*(?:["″]\\s*)?from)`,
@@ -261,7 +269,7 @@ export function applyChatWallLengths(
       // 「wall A」「A墙」「A 墙」——字母后可选紧跟中文「墙」（口语常见写法，非「wall A: 120」不受影响）
       + `|(?:wall\\s*)?([A-D])\\s*墙?`
       + `|([东西南北左右前后])(?:侧)?墙)`
-      + `\\s*[:=]?\\s*(\\d+(?:\\.\\d+)?)`
+      + `${HEDGE_WORDS}[:=]?\\s*(\\d+(?:\\.\\d+)?)`
       + `(?:\\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm))?`
       + `(?!\\s*(?:["″]\\s*)?from)`,
     "gi",

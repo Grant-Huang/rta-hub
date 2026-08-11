@@ -280,3 +280,25 @@ test("chatMentionsGeometry 识别「A墙120」（无需层高词也应建壳）"
   assert.ok(chatMentionsGeometry("A墙 120cm"));
   assert.equal(chatMentionsGeometry("这个厨房挺大的"), false);
 });
+
+test("口语含糊尺寸「North about 7 ft」不应因中间插入词而解析失败（回归：beginner 人设死循环）", () => {
+  const empty: FloorPlan = {
+    id: "fp_hedge",
+    conversationId: "c1",
+    sourceFile: { name: "chat-geometry.txt", mimeType: "text/plain", sizeBytes: 0 },
+    parseConfidence: 0.5,
+    parsedGeometry: { wallRuns: [], confidence: 0.5 },
+    unresolvedItems: [],
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const r = applyChatSiteAnswers(
+    empty, "Um… maybe North about 7 ft, ceiling around 8 ft", AT,
+  );
+  assert.ok(r, "含糊口语也应落成墙长/层高，而不是原样重复同一句提示");
+  assert.ok(r!.applied.includes("wallLength"));
+  assert.ok(r!.applied.includes("ceiling"));
+  const north = r!.plan.parsedGeometry.wallRuns.find((x) => /north/i.test(x.label));
+  assert.equal(north?.length, 84); // 7 ft
+  assert.equal(r!.plan.parsedGeometry.ceilingHeight, 96); // 8 ft
+});
