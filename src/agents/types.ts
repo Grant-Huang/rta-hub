@@ -7,6 +7,7 @@
  *      回答不了就是回答不了，不编、不借用别家信息。
  *   3. **Agent 不产出价格。** 它只输出「选择」，价格由 PricingEngine 算（FR-8 第 1 条）。
  */
+import type { ZodType } from "zod";
 import type { CompanyEngagementHandoff, ModuleSelection } from "../domain/types.js";
 import type { CallSite } from "./model-tiers.js";
 
@@ -29,6 +30,23 @@ export interface CompletionClient {
     system: string;
     messages: { role: "user" | "assistant"; content: string }[];
     schemaHint: string;
+    temperature?: number;
+    callSite?: CallSite;
+  }): Promise<T | undefined>;
+
+  /**
+   * 结构化输出——调用方直接给 Zod schema，模型按它产出，不像 `completeJson`
+   * 那样内部收口到固定结构（那个是给 `proposeDesign` 一次性用的）。
+   * 返回 undefined 表示模型没能产出合法结构（含调用失败/超时），调用方必须
+   * 有确定性兜底，不能假设这个字段永远有值。
+   */
+  extractStructured?<T>(input: {
+    system: string;
+    messages: { role: "user" | "assistant"; content: string }[];
+    // Def/Input 留 `any`：只按 T（schema 的输出类型）推断，否则 zod 的
+    // `.default()` 字段会让输出类型（必填）与输入类型（可选）打架，
+    // TS 会把 T 推成两者的交集，字段又变回可选。
+    schema: ZodType<T, any, any>;
     temperature?: number;
     callSite?: CallSite;
   }): Promise<T | undefined>;

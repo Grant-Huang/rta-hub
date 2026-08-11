@@ -427,6 +427,49 @@ export function applyChatWallLengths(
   return changed ? next : undefined;
 }
 
+/**
+ * 把 LLM 结构化抽取（`llm-extract.ts`）的墙长/层高结果写入 FloorPlan——
+ * 与正则路径（`applyChatWallLengths`）共用同一把"确认锁"，已确认的墙长
+ * 不会被 LLM 的结果覆盖，跟被正则覆盖一样都要拦下来。
+ *
+ * 层高沿用现有规则：只在还没设置时才写入（一旦设置过，聊天路径——不管
+ * 正则还是 LLM——都不再碰它，见 `applyChatSiteAnswers` 里对应的判断）。
+ */
+export function applyExtractedWalls(
+  plan: FloorPlan,
+  wallRuns: readonly { label: string; lengthInches: number }[],
+  ceilingHeightInches: number | undefined,
+  at: string,
+  blockedOut?: BlockedEdit[],
+): FloorPlan {
+  let next = plan;
+  const blocked: BlockedEdit[] = [];
+
+  for (const w of wallRuns) {
+    const existing = next.parsedGeometry.wallRuns.find(
+      (r) => r.label.toLowerCase() === w.label.toLowerCase(),
+    );
+    if (existing) {
+      const r = tryResolveWallLength(next, existing.id, w.lengthInches, at, blocked);
+      next = r.plan;
+    } else {
+      next = addWallRun(next, {
+        label: w.label,
+        length: w.lengthInches,
+        startsAtCorner: shouldJoinNewWall(next, w.label),
+        endsAtCorner: false,
+      }, at);
+    }
+  }
+
+  if (ceilingHeightInches !== undefined && next.parsedGeometry.ceilingHeight == null) {
+    next = resolveCeilingHeight(next, ceilingHeightInches, at);
+  }
+
+  if (blockedOut) blockedOut.push(...blocked);
+  return next;
+}
+
 /** 罗盘相对墙（东西对望）不得当成内墙角相接，否则会画出假 L 并把方位画反。 */
 function shouldJoinNewWall(plan: FloorPlan, newLabel: string): boolean {
   const prev = [...plan.parsedGeometry.wallRuns].reverse().find((r) => r.kind !== "island");

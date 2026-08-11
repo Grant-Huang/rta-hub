@@ -138,6 +138,32 @@ export function createLlmClient(
         return undefined;
       }
     },
+
+    async extractStructured<T>({ system, messages, schema, temperature, callSite }: {
+      system: string;
+      messages: { role: "user" | "assistant"; content: string }[];
+      schema: z.ZodType<T, any, any>;
+      temperature?: number;
+      callSite?: CallSite;
+    }): Promise<T | undefined> {
+      const llm = llmOf(callSite)!;
+      try {
+        const { output } = await withTimeout(
+          generateText({
+            model: modelOf(callSite),
+            ...fold(system, messages, llm),
+            output: Output.object({ schema: schema as never }),
+            temperature: temperature ?? 0.1,
+            abortSignal: AbortSignal.timeout(timeoutMs),
+          }),
+          timeoutMs,
+          `LLM extractStructured timed out after ${timeoutMs}ms`,
+        );
+        return output as T | undefined;
+      } catch {
+        return undefined;
+      }
+    },
   };
 }
 

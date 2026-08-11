@@ -105,10 +105,11 @@ import {
 } from "./floorplan/design-input.js";
 import { isLayoutReady, isIsland, type WallFeature } from "./floorplan/types.js";
 import { buildSiteQuestions, geometrySuppressesIntake } from "./design/site-questions.js";
-import { applyChatSiteAnswers, chatMentionsGeometry } from "./design/chat-site-answers.js";
+import { applyChatSiteAnswers, applyExtractedWalls, chatMentionsGeometry } from "./design/chat-site-answers.js";
 import {
-  applyChatApplianceAnswers, chatMentionsApplianceKinds, isConfirmAssumedAppliances,
+  applyChatApplianceAnswers, applyExtractedAppliances, chatMentionsApplianceKinds, isConfirmAssumedAppliances,
 } from "./design/chat-appliance-answers.js";
+import { extractGeometryFromChat } from "./design/llm-extract.js";
 import { renderSiteDiagram } from "./render/site-diagram.js";
 import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
@@ -1171,6 +1172,30 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       await appCtx.repos.floorPlans.upsert(planChat);
     }
     if (planChat) {
+      // LLM 结构化解析先"抢答"墙长/层高/家电——喂给它的是按角色打行标的
+      // 干净记录（CUSTOMER/ASSISTANT），不是下面 combined 那种把历史文本整段
+      // 拼起来的东西，这正是为了不让助手自己的举例/警告文案被当成数据
+      // （见 llm-extract.ts 头部注释的根因说明）。没配 LLM、或抽取失败/
+      // 返回不合法时，extractGeometryFromChat 原样返回 undefined，照旧退回
+      // 下面的正则解析——两条路径共用同一把"确认锁"（confirm-lock.ts），
+      // 已确认的字段谁都不能覆盖。
+      if (appCtx.llm) {
+        const turns = [...conv.messages.slice(-24).map(toHistory), { role: "user" as const, content: text }];
+        const extracted = await extractGeometryFromChat(appCtx.llm, turns);
+        if (extracted) {
+          if (extracted.wallRuns.length > 0 || extracted.ceilingHeightInches !== undefined) {
+            planChat = applyExtractedWalls(planChat, extracted.wallRuns, extracted.ceilingHeightInches, at);
+            await appCtx.repos.floorPlans.upsert(planChat);
+          }
+          if (extracted.appliances.length > 0 || extracted.confirmAssumedAppliances) {
+            planChat = applyExtractedAppliances(
+              planChat, extracted.appliances, extracted.confirmAssumedAppliances,
+            );
+            await appCtx.repos.floorPlans.upsert(planChat);
+          }
+        }
+      }
+
       const siteQs = buildSiteQuestions(planChat, combined, language).questions;
       const siteApply = applyChatSiteAnswers(planChat, combined, at, siteQs);
       if (siteApply) {
