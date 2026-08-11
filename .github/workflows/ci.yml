@@ -30,7 +30,11 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # pnpm-workspace.yaml 的 allowBuilds 是 v10 才有的设置项；v9 不认识它，
+          # 又要求 packages 字段（这里没有），在 `pnpm store path` 这一步直接报错，
+          # 后面所有步骤都跑不到。本地开发已经在用 v10（见 pnpm-lock.yaml
+          # lockfileVersion 9.0，v10 向后兼容），这里跟着对齐，不是新引入的要求。
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
