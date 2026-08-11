@@ -8,8 +8,10 @@
  */
 import type { FloorPlan, WallFeatureKind, WallRun } from "../floorplan/types.js";
 import { addFeature, addWallRun, resolveCeilingHeight, resolveItem, resolveWallLength } from "../floorplan/parse.js";
+import { wallRunProvenance } from "../floorplan/design-input.js";
 import { compassWallsAdjacent } from "../layout/plan-model.js";
 import type { SiteQuestion } from "./site-questions.js";
+import type { BlockedEdit } from "./confirm-lock.js";
 
 const DEFAULT_PLUMBING_WIDTH = 24;
 const DEFAULT_WINDOW_WIDTH = 36;
@@ -39,6 +41,8 @@ export type ChatSiteApplyKind = "plumbing" | "window" | "door" | "ceiling" | "wa
 export interface ChatSiteApplyResult {
   plan: FloorPlan;
   applied: ChatSiteApplyKind[];
+  /** 被"确认锁"拦下的修改尝试（已确认字段被聊天新数值撞上，未写入）。 */
+  blockedEdits: BlockedEdit[];
 }
 
 /** 从客户话术解析上下水位置；能落到某段墙才返回。 */
@@ -232,16 +236,41 @@ const ORIENT_LABEL: Record<string, string> = {
 };
 
 /**
+ * 已确认（无待处理项）的墙长被聊天新解析出的不同数值撞上时，不静默覆盖——
+ * 记一条 `BlockedEdit`，由上层引导客户去"已确认"面板手动改（见 `confirm-lock.ts`）。
+ * 墙段还没定长（`length === 0`）或还挂着待确认项时，照常写入，不算"改已确认的"。
+ */
+function tryResolveWallLength(
+  plan: FloorPlan,
+  runId: string,
+  inches: number,
+  at: string,
+  blocked: BlockedEdit[],
+): { plan: FloorPlan; changed: boolean } {
+  const run = plan.parsedGeometry.wallRuns.find((r) => r.id === runId);
+  if (!run || run.length === inches) return { plan, changed: false };
+  if (run.length > 0 && wallRunProvenance(plan, runId) === "customer") {
+    blocked.push({ kind: "wallLength", label: run.label, current: run.length, attempted: inches });
+    return { plan, changed: false };
+  }
+  return { plan: resolveWallLength(plan, runId, inches, at), changed: true };
+}
+
+/**
  * 手输墙长：`North 84"` / `left wall 12ft` / `南墙 120"` —— 识图失败或无图对话的主路径。
  * 若计划里还没有对应墙段，会按口语方向新建（L 型 left+back 等）。
+ *
+ * `blockedOut` 可选——传入一个数组来接收被"确认锁"拦下的修改尝试（不传不影响行为）。
  */
 export function applyChatWallLengths(
   plan: FloorPlan,
   text: string,
   at: string,
+  blockedOut?: BlockedEdit[],
 ): FloorPlan | undefined {
   let next = plan;
   let changed = false;
+  const blocked: BlockedEdit[] = [];
 
   // 1) 更新已有 label 匹配的墙
   for (const run of next.parsedGeometry.wallRuns) {
@@ -258,9 +287,10 @@ export function applyChatWallLengths(
     const m = text.match(re);
     if (!m) continue;
     const n = parseWallLengthInches(m[1]!, m[2]);
-    if (n === undefined || run.length === n) continue;
-    next = resolveWallLength(next, run.id, n, at);
-    changed = true;
+    if (n === undefined) continue;
+    const r = tryResolveWallLength(next, run.id, n, at, blocked);
+    next = r.plan;
+    if (r.changed) changed = true;
   }
 
   // 2) 口语方向：left/back/long leg 等 → 新建或更新
@@ -288,10 +318,9 @@ export function applyChatWallLengths(
       r.label.toLowerCase() === label.toLowerCase()
       || (key && new RegExp(`^${key}\\b`, "i").test(r.label)));
     if (existing) {
-      if (existing.length !== inches) {
-        next = resolveWallLength(next, existing.id, inches, at);
-        changed = true;
-      }
+      const r = tryResolveWallLength(next, existing.id, inches, at, blocked);
+      next = r.plan;
+      if (r.changed) changed = true;
       continue;
     }
     next = addWallRun(next, {
@@ -321,10 +350,9 @@ export function applyChatWallLengths(
         const existing = next.parsedGeometry.wallRuns.find((r) =>
           r.label.toLowerCase() === label.toLowerCase());
         if (existing) {
-          if (existing.length !== inches) {
-            next = resolveWallLength(next, existing.id, inches, at);
-            changed = true;
-          }
+          const r = tryResolveWallLength(next, existing.id, inches, at, blocked);
+          next = r.plan;
+          if (r.changed) changed = true;
         } else {
           next = addWallRun(next, {
             label,
@@ -357,10 +385,9 @@ export function applyChatWallLengths(
           const existing = next.parsedGeometry.wallRuns.find((r) =>
             r.label.toLowerCase() === label.toLowerCase());
           if (existing) {
-            if (existing.length !== inches) {
-              next = resolveWallLength(next, existing.id, inches, at);
-              changed = true;
-            }
+            const r = tryResolveWallLength(next, existing.id, inches, at, blocked);
+            next = r.plan;
+            if (r.changed) changed = true;
           } else {
             next = addWallRun(next, {
               label,
@@ -386,6 +413,17 @@ export function applyChatWallLengths(
     }
   }
 
+  if (blockedOut) {
+    // 同一面墙可能同时命中「标签匹配」与「口语方位」两条规则，被拦下的是
+    // 同一次修改尝试——按 (墙名, 想改成的值) 去重，不重复上报。
+    const seen = new Set<string>();
+    for (const b of blocked) {
+      const key = `${b.label} ${b.attempted}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      blockedOut.push(b);
+    }
+  }
   return changed ? next : undefined;
 }
 
@@ -428,6 +466,7 @@ export function applyChatSiteAnswers(
 ): ChatSiteApplyResult | undefined {
   let next = plan;
   const applied: ChatSiteApplyKind[] = [];
+  const blockedEdits: BlockedEdit[] = [];
 
   if (siteQuestions && siteQuestions.length > 0) {
     const numbered = applyNumberedSiteAnswers(next, text, at, siteQuestions);
@@ -439,7 +478,7 @@ export function applyChatSiteAnswers(
     }
   }
 
-  const walls = applyChatWallLengths(next, text, at);
+  const walls = applyChatWallLengths(next, text, at, blockedEdits);
   if (walls) {
     next = walls;
     applied.push("wallLength");
@@ -488,8 +527,8 @@ export function applyChatSiteAnswers(
     }
   }
 
-  if (applied.length === 0) return undefined;
-  return { plan: next, applied };
+  if (applied.length === 0 && blockedEdits.length === 0) return undefined;
+  return { plan: next, applied, blockedEdits };
 }
 
 /**
@@ -588,7 +627,7 @@ function applyNumberedSiteAnswers(
   }
 
   if (applied.length === 0) return undefined;
-  return { plan: next, applied };
+  return { plan: next, applied, blockedEdits: [] };
 }
 
 function mentionsPlumbing(text: string): boolean {

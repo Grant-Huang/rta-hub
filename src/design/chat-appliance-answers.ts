@@ -9,14 +9,17 @@
  */
 import type { FloorPlan } from "../floorplan/types.js";
 import {
-  applianceFrom, normalizeAppliances, type ApplianceKind, type ApplianceSpec,
+  applianceFrom, applianceLabel, normalizeAppliances, type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
+import type { BlockedEdit } from "./confirm-lock.js";
 
 export type ChatApplianceApplyKind = "kinds" | "widths" | "confirmAssumed" | "defer";
 
 export interface ChatApplianceApplyResult {
   plan: FloorPlan;
   applied: ChatApplianceApplyKind[];
+  /** 被"确认锁"拦下的修改尝试（已确认的家电宽度被聊天新数值撞上，未写入）。 */
+  blockedEdits: BlockedEdit[];
 }
 
 const DEFER_RE =
@@ -119,6 +122,7 @@ export function applyChatApplianceAnswers(
 ): ChatApplianceApplyResult | undefined {
   const parsed = parseAppliancesFromChat(text);
   const applied: ChatApplianceApplyKind[] = [];
+  const blockedEdits: BlockedEdit[] = [];
   let next = plan;
   let list = [...(next.appliances ?? [])];
 
@@ -128,11 +132,22 @@ export function applyChatApplianceAnswers(
   }
 
   if (parsed.appliances.length > 0) {
-    // 新解析优先；已有 customer 宽度不被无宽度的 assumed 覆盖
+    // 已确认（provenance customer）的宽度不被聊天新解析出的不同数值静默覆盖——
+    // 无论新解析是 customer 还是 assumed，都算"想改已确认的"，记入 blockedEdits，
+    // 交给已确认面板去改（见 confirm-lock.ts）。
     const byKind = new Map<ApplianceKind, ApplianceSpec>();
     for (const a of list) byKind.set(a.kind, a);
     for (const a of parsed.appliances) {
       const prev = byKind.get(a.kind);
+      if (prev?.provenance === "customer" && a.width !== prev.width) {
+        blockedEdits.push({
+          kind: "appliance",
+          label: applianceLabel(a.kind, "en"),
+          current: prev.width,
+          attempted: a.width,
+        });
+        continue;
+      }
       if (prev?.provenance === "customer" && a.provenance === "assumed") continue;
       byKind.set(a.kind, a);
     }
@@ -159,7 +174,8 @@ export function applyChatApplianceAnswers(
     }
   }
 
-  if (applied.length === 0) return undefined;
+  if (applied.length === 0 && blockedEdits.length === 0) return undefined;
+  if (applied.length === 0) return { plan: next, applied, blockedEdits };
   next = { ...next, appliances: list, updatedAt: new Date().toISOString() };
-  return { plan: next, applied };
+  return { plan: next, applied, blockedEdits };
 }
