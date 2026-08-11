@@ -1,5 +1,20 @@
-# 加拿大橱柜报价平台 —— 需求说明书（v1.5）
+# 加拿大橱柜报价平台 —— 需求说明书（v1.6）
 
+> **v1.6 变更摘要**（设计输入标准化导入导出；2026-08-11）：
+> 1. 新增 **FR-24 设计输入标准化导入导出**：几何（`ParsedGeometry` 同构）+ 家电
+>    （`ApplianceSpec`）可打包成一份带 `schemaVersion` 的 JSON，通过
+>    `POST /api/conversations/:id/design-input` 导入，或经
+>    `GET /api/conversations/:id/design-input` 导出——供体外系统（更强的 VL 模型
+>    读户型图、CAD/设计软件导出、另一套系统迁移）直接产出/消费，不必重新走一遍
+>    对话收集。
+> 2. 核心机制是**复用而不是新造**：每一段墙、每一处门窗、每一件家电都带
+>    `provenance: "customer" | "assumed"`——`customer` 直接采信、不生成待确认项；
+>    `assumed`（含未声明，缺省即此）仍走与 FR-17.4 模板预填相同的 Q# 确认门禁。
+>    "谁"确认过不重要，"有没有被确认过"才重要。
+> 3. **明确范围边界**：本条只覆盖几何与家电——这两类字段本来就有 provenance
+>    机制；风格/预算/省份等目前靠正则读对话原文，没有分级确认机制，本次不把
+>    它们塞进这份 schema 假装"已确认"，仍走原有路径。
+>
 > **v1.5 变更摘要**（户型模板快选；2026-08-11）：
 > 1. 新增 **FR-17.4 户型模板快选**：`src/samples/catalog.ts` 里 5 个 `role: "floorplan"`
 >    的示例图（单壁型/U型/L型+岛台/走廊型/L型标准）除了原有的"手绘参考"用途外，
@@ -1756,6 +1771,100 @@ Tab2 列出本会话已产出的：**户型解读图、墙对齐/Q# 图、全局
 - 正式报价仍只来自该公司 published 矩阵（FR-8）；SellUnit 只决定**怎么分行展示/拆卖**，
   不发明价格。
 - Oppein 等种子数据若曾用 PriceGroup 冒充 BOX/DOOR，实现阶段必须改为真实模块行。
+
+---
+
+## 5.z6 FR-24　设计输入标准化导入导出（v1.6 新增）
+
+> 背景：FR-17.4（户型模板快选）已经证明"预填 ≠ 确认"这套门禁足够撑起一次"跳过
+> 手绘"的体验——模板给的是标准值，仍要逐项过一遍 Q#。这条继续往前走一步：如果
+> 预填的数据不是系统自己挑的模板，而是体外一套流程（更强的视觉模型读图、专业
+> 设计软件的导出、另一套系统的迁移）**已经核实过**的结果，客户不应该被逼着再
+> 逐项确认一遍——但"谁说已经核实过"不能只凭一句自称，要有数据说清楚。
+
+### FR-24.1　设计输入文档（DesignInputDocument）
+
+一份与内部 `ParsedGeometry` / `ApplianceSpec` 同构、但面向外部系统的 JSON：
+
+```json
+{
+  "schemaVersion": "1.0",
+  "source": { "kind": "vl_model", "producer": "...", "generatedAt": "...", "note": "..." },
+  "geometry": {
+    "wallRuns": [
+      {
+        "label": "North", "length": 144,
+        "startsAtCorner": true, "endsAtCorner": true,
+        "provenance": "customer",
+        "features": [
+          { "kind": "window", "offset": 48, "width": 36, "provenance": "customer" }
+        ]
+      }
+    ],
+    "ceilingHeight": { "value": 96, "provenance": "customer" },
+    "confidence": 0.95
+  },
+  "appliances": [
+    { "kind": "refrigerator", "width": 36, "clearanceEachSide": 1, "provenance": "customer" }
+  ]
+}
+```
+
+覆盖范围**只到几何 + 家电**——这两类字段本来就已经有 provenance 机制（家电见
+FR-3.2 的 `ApplianceSpec.provenance`；几何见 FR-15.5 / FR-17.4 的 `FloorPlanUnresolved`）。
+风格 / 预算 / 省份等目前是从对话原文正则抽取的（`matchStyle` / `matchProvince`），
+没有可信度分级机制，本条不把它们塞进这份 schema——理由见 FR-24.5。
+
+### FR-24.2　provenance 决定要不要再问一遍
+
+1. `provenance: "customer"`：这项数据**已经核实过**——可以是客户自己给的，也可以
+   是体外流程量过/核对过的。系统不关心"谁"确认的，只认"有没有被确认过"。导入时
+   **不生成待确认项**，直接计入 FR-15 检查表的 `ok`。
+2. `provenance: "assumed"`，**或没有声明**：仍要走与 FR-17.4 模板预填完全相同的
+   门禁——生成一条 `FloorPlanUnresolved`，客户要逐项过一遍 Q# 才算数。**缺省值是
+   `"assumed"` 而不是 `"customer"`**——不能因为数据来自"更强的模型"就自动免检，
+   这与 FR-15.5 是同一条原则：没有安全默认值的关键项，系统不能替客户点"确认"。
+3. 一份文档里允许**逐段墙、逐个门窗**混合声明——比如墙长是客户确认过的，其中一处
+   窗的位置还没人核实过，两者各自按自己的 provenance 处理，不搭便车。
+
+### FR-24.3　导入（`POST /api/conversations/:id/design-input`）
+
+1. 校验 `schemaVersion`、`wallRuns` 非空、每项数值与 `provenance` 取值合法；不合规
+   直接 400，不做静默纠正（FR-3 完整性原则的延伸）。
+2. 与上传户型图 / 选模板同一口径：**一会话一户型**，导入会替换掉当前 `FloorPlan`。
+   之前已确认的家电，若这次导入体没带 `appliances`，继续沿用（不因为换了几何输入
+   方式就把家电答案丢了）。
+3. 导入成功后在会话里回显一句复述（"已导入设计数据——N 项尚未确认"或"——全部已
+   确认"），仍待确认的项照常挂到墙对齐简图的 Q# 上（FR-19），不额外发明一套确认 UI。
+
+### FR-24.4　导出（`GET /api/conversations/:id/design-input`）
+
+1. 把当前 `FloorPlan` 序列化成同一套 schema——供客户换设备/换会话时带走已确认的
+   结果，或直接喂给另一套系统消费。
+2. 每一项的 `provenance` 由当前 `unresolvedItems` 的状态**现算**，不另存一份标记——
+   避免"数值改了、provenance 标记没跟着改"的漂移（客户在 Tab1 手动改了一段墙长后，
+   导出必须如实反映"这段墙已经确认过"，不能还留着导入时的旧标记）。
+3. 没有 `FloorPlan` 时导出 404，不返回一份空文档误导下游当作"这个厨房没有墙"。
+
+### FR-24.5　范围声明：为什么不是任意字段都能这样导入
+
+风格 / 预算 / 省份 / 厂商选型目前的确认机制与几何/家电不同（正则匹配对话原文、或
+FR-1.1 的选择题），本条**不**把这些字段纳入"`provenance: customer` 即免检"的范围——
+给一个从未设计确认路径的字段编一个"已确认"的信任标记，等于凭空放行。这些字段仍走
+现有路径（对话原文 / `POST /preferences`）；未来要把它们纳入本条，需要先补上对应的
+确认机制，而不是先开导入口子。
+
+### 验收（FR-24）
+
+| # | 标准 |
+|---|---|
+| 1 | 全部字段 `provenance: "customer"` 的导入 → 无待确认项，几何/家电检查项直接 `ok` |
+| 2 | `provenance: "assumed"` 或未声明的项 → 生成 `unresolvedItems`，走 Q# 确认，不直接判 `ok` |
+| 3 | 同一份文档允许逐段墙、逐个门窗混合 provenance |
+| 4 | 非法 `schemaVersion` / 空 `wallRuns` / 非法 `provenance` 值 → 400 |
+| 5 | 导出内容的 `provenance` 与当前 `unresolvedItems` 实际状态一致，且随后续确认动态更新 |
+| 6 | 没有户型时导出 → 404 |
+| 7 | 导入不影响已有家电答案（导入体未带 `appliances` 时沿用旧值） |
 
 ---
 
