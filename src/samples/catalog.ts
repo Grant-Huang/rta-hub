@@ -29,6 +29,50 @@ export const INTAKE_SAMPLES: readonly IntakeSample[] = [
       "没有正式图？可按此极简标注手绘：墙长、窗/水槽/门（宽度+距墙角偏移）、岛台尺寸、层高。画好后点 + 上传。",
   },
   {
+    id: "one-wall-kitchen",
+    file: "one-wall-kitchen-floorplan.png",
+    role: "floorplan",
+    labelEn: "One-Wall Kitchen",
+    labelZh: "单壁型厨房",
+    hintEn:
+      "Single straight wall layout (144\"). Common in small condos/apartments. Mark window, door, plumbing position.",
+    hintZh:
+      "单壁型布局（144英寸）。常见于小户型公寓。标注窗户、门、上下水位置。",
+  },
+  {
+    id: "u-shaped-kitchen",
+    file: "u-shaped-kitchen-floorplan.png",
+    role: "floorplan",
+    labelEn: "U-Shaped Kitchen",
+    labelZh: "U型厨房",
+    hintEn:
+      "Three-wall U-shape layout. Maximum counter space, ideal for 10x10' or larger. Mark door, window, sink position.",
+    hintZh:
+      "三面墙U型布局。台面空间最大化，适合10x10英尺以上。标注门、窗、水槽位置。",
+  },
+  {
+    id: "l-island-kitchen",
+    file: "l-island-kitchen-floorplan.png",
+    role: "floorplan",
+    labelEn: "L-Shape + Island Kitchen",
+    labelZh: "L型+岛台厨房",
+    hintEn:
+      "L-shaped walls with center island. Popular in modern homes. Mark island size (72x36\"), door, window, plumbing.",
+    hintZh:
+      "L型墙面+中央岛台。现代住宅流行布局。标注岛台尺寸（72x36英寸）、门、窗、上下水。",
+  },
+  {
+    id: "galley-kitchen",
+    file: "galley-kitchen-floorplan.png",
+    role: "floorplan",
+    labelEn: "Galley Kitchen (Corridor)",
+    labelZh: "双排型厨房（走廊式）",
+    hintEn:
+      "Two parallel walls with 48\" aisle. Efficient for narrow spaces (townhouses). Mark both walls, door, window, sink.",
+    hintZh:
+      "两面平行墙，48英寸通道。适合窄长空间（联排别墅）。标注两侧墙、门、窗、水槽。",
+  },
+  {
     id: "design-sketch",
     file: "sample-design-sketch.jpg",
     role: "design",
