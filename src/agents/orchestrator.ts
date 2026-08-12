@@ -29,6 +29,7 @@ import {
   deterministicHandoffRestate,
   renderHandoffContextNote,
 } from "../session/company-engagement.js";
+import { hasProvinceMention } from "../design/province-match.js";
 
 /** 总控可注入的 L0 摘要——不含任何厂商前缀表。 */
 function l0SellUnitSummary(lang: UiLanguage): string {
@@ -480,16 +481,7 @@ export function missingFields(requirements: string): string[] {
   return missing;
 }
 
-/** 是否已提到加拿大省份（避免英文介词 on 假阳性）。 */
-export function hasProvinceMention(requirements: string): boolean {
-  const text = requirements;
-  if (/ontario|british columbia|alberta|quebec|安大略|不列颠|阿尔伯塔|魁北克|曼尼托巴|萨斯|新斯科舍|多伦多|温哥华|卡尔加里|蒙特利尔|渥太华|\b(?:bc|ab|qc|mb|sk|ns|nb|nl|pe|yt|nt|nu)\s*省?\b|(?:^|[^a-zA-Z])on\s*省\b/i
-    .test(text)) {
-    return true;
-  }
-  // 大写两字母省码（含快捷回答里的 "Ontario ON"）
-  return /(?:^|[^A-Za-z])(?:ON|BC|AB|QC|MB|SK|NS|NB|NL|PE|YT|NT|NU)(?:[^A-Za-z]|$)/.test(text);
-}
+export { hasProvinceMention };
 
 /** 缺失字段的客户可见名称。 */
 export function fieldLabel(field: string, lang: UiLanguage = DEFAULT_LANGUAGE): string {
@@ -517,8 +509,8 @@ function fallbackPrompt(
   const justConfirmed = intakeStatus?.justConfirmed ?? [];
   const recapPrefix = justConfirmed.length
     ? (lang === "zh"
-      ? `记下了：${justConfirmed.join("、")}。`
-      : `Got it — ${justConfirmed.join(", ")}. `)
+      ? `✅ 已记录：${justConfirmed.join("、")}。`
+      : `✅ Recorded: ${justConfirmed.join(", ")}. `)
     : "";
   return recapPrefix + fallbackPromptCore(requirements, profile, repeatedAsk, lang, intakeStatus);
 }

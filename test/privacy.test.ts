@@ -278,7 +278,7 @@ test("访问权导出该账号的全部个人信息", () => {
     conversations: [conv("cv_1", AT), { ...conv("cv_2", AT), customerAccountId: "ca_other" }],
     estimates: [estimate("est_1", "cv_1")],
     quotes: [quote("q1", "cv_1")],
-  }, AT);
+  }, AT, "zh");
   assert.equal(exported.conversations.length, 1);
   assert.equal(exported.estimates.length, 1);
   assert.equal(exported.quotes.length, 1);
@@ -295,7 +295,7 @@ test("删除权：冲突时去标识化保留，且如实说明原因", () => {
       customerAccountId: "ca_1", sentAt: AT, dedupeKey: "k",
       feeAmount: fromDollars("45.00"), currency: "CAD", feeStatus: "invoiced",
     }],
-  });
+  }, "zh");
   assert.deepEqual(outcome.conversationsDeleted, ["cv_1"]);
   assert.deepEqual(outcome.quotesDeIdentified, ["q1"]);
   assert.deepEqual(outcome.billingDeIdentified, ["lbe1"]);
@@ -307,7 +307,7 @@ test("删除权：冲突时去标识化保留，且如实说明原因", () => {
 test("无留存冲突时说明「不再持有你的个人信息」", () => {
   const outcome = executeDeletionRequest("ca_1", {
     conversations: [conv("cv_1", AT)], estimates: [], quotes: [], billingEvents: [],
-  });
+  }, "zh");
   assert.match(outcome.explanation, /不再持有你的个人信息/);
 });
 

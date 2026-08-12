@@ -364,7 +364,7 @@ test("留存清除返回计划而不是直接执行", async () => {
 });
 
 test("数据主体访问权：导出本账号数据并说明留存规则", async () => {
-  const r = await req("/api/me/export", { accountId: CONSUMER });
+  const r = await req("/api/me/export?lang=zh", { accountId: CONSUMER });
   assert.equal(r.status, 200);
   const body = await r.json() as { account: { id: string }; notes: string[] };
   assert.equal(body.account.id, CONSUMER);
@@ -383,7 +383,9 @@ test("数据主体删除权：会话删除、报价去标识化保留", async ()
   });
   const { quote } = await quoteRes.json() as { quote: { id: string } };
 
-  const del = await req("/api/me/delete", { method: "POST", accountId: "ca_demo_trade" });
+  const del = await req("/api/me/delete", {
+    method: "POST", accountId: "ca_demo_trade", body: JSON.stringify({ lang: "zh" }),
+  });
   assert.equal(del.status, 200);
   const body = await del.json() as { outcome: { conversationsDeleted: string[]; quotesDeIdentified: string[]; explanation: string } };
   assert.ok(body.outcome.conversationsDeleted.includes(conversation.id));
@@ -477,42 +479,13 @@ test("补齐户型 → 出方案 → 四视图 → 转报价（完整 MVP-2 链�
   });
   const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
 
-  // 手动补齐
-  const added = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
-    method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
-  });
-  const runId = (await added.json() as {
-    floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };
-  }).floorPlan.parsedGeometry.wallRuns[0]!.id;
-  const resolved = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+  // 补齐户型/上下水/家电/风格预算省份——与 seedDesignIntake 同一套（含 204" 墙长：
+  // 144" 留了上下水净空后放不下冰箱+灶具，是家电落位算法的正确行为，不是 bug）。
+  await seedDesignIntake(conversation.id, CONSUMER, floorPlan.id);
+  const afterResolve = await (await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
-  });
-  const afterResolve = await resolved.json() as { ready: boolean };
+  })).json() as { ready: boolean };
   assert.equal(afterResolve.ready, true);
-  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
-    method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({
-      addFeature: { wallRunId: runId, kind: "plumbing", offset: 60, width: 24 },
-    }),
-  });
-
-  await req(`/api/conversations/${conversation.id}/messages`, {
-    method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({
-      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Fridge 36\", stove 30\", dishwasher 24\".",
-    }),
-  });
-  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
-    method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({
-      appliances: [
-        { kind: "refrigerator", width: 36 },
-        { kind: "range", width: 30 },
-        { kind: "dishwasher", width: 24 },
-      ],
-    }),
-  });
   await advance(conversation.id, CONSUMER, "consent");
   const planRes = await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
     method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
@@ -859,14 +832,63 @@ test("推定的家电尺寸要跟着**报价单**一起走，不能只写在图�
   // SCENARIOS 场景 J：客户对烤箱选了「我不确定」→ 走常见默认值，但**报价单上
   // 要如实写「烤箱按 30" 预留」**。报价单是客户拿去下单的那一份；只在图纸说明里
   // 说过一次，订柜的人看不到，柜子做出来装不进去。
-  const { conversationId, layout } = await readyProject(CONSUMER, [
-    { kind: "refrigerator", width: 33 },  // 客户给的尺寸
-    { kind: "wallOven" },                 // 「不确定」→ 推定
-  ]);
+  //
+  // 不走 readyProject/seedDesignIntake：那条路径的聊天文本里带了 stove/dishwasher，
+  // 而 appliances 覆盖是**合并**不是替换（确认锁语义），会让这里只想测的
+  // 「冰箱+烤箱」两件套变成四件套，在 204" 墙上挤出真实的厨具净空违规——
+  // 与本测试要验证的「推定尺寸披露」无关，另起一条只有冰箱+烤箱的干净流程。
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  const added = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addRun: { label: "North", length: 204 } }),
+  });
+  const runId = (await added.json() as {
+    floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };
+  }).floorPlan.parsedGeometry.wallRuns[0]!.id;
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addFeature: { wallRunId: runId, kind: "plumbing", offset: 60, width: 24 } }),
+  });
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ text: "Modern style, budget CAD $10–20k, Ontario ON. No windows." }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({
+      appliances: [
+        { kind: "refrigerator", width: 33 },  // 客户给的尺寸
+        { kind: "wallOven" },                 // 「不确定」→ 推定
+      ],
+    }),
+  });
+  await req(`/api/conversations/${conversation.id}/messages`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ text: "assumed widths are fine" }),
+  });
+  await advance(conversation.id, CONSUMER, "consent");
+  await req(`/api/floorplans/${floorPlan.id}/plan-view`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  await advance(conversation.id, CONSUMER, "approvePlan");
+  const layoutRes = await req(`/api/floorplans/${floorPlan.id}/layout`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ companyId: "co_pilot" }),
+  });
+  const layout = await layoutRes.json() as { selections: unknown[] };
+
   const res = await req("/api/quotes", {
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({
-      companyId: "co_pilot", conversationId,
+      companyId: "co_pilot", conversationId: conversation.id,
       doorStyleId: "ds_shaker_white", selections: layout.selections,
     }),
   });
@@ -1364,7 +1386,8 @@ test("有户型图后才出预算题，区间按尺寸锚定", async () => {
 
   const budget = body.questions.find((q) => q.key === "budgetBand");
   assert.ok(budget, "有户型图就该能给出预算区间");
-  assert.match(budget!.prompt, /144"/);
+  // seedDesignIntake 的墙长是 204"（144" 留了上下水净空后放不下冰箱+灶具，见该函数注释）
+  assert.match(budget!.prompt, /204"/);
   assert.equal(body.note, undefined);
 });
 

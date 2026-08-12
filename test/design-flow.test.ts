@@ -122,7 +122,9 @@ test("窗贴着墙角时，水槽让位给台面工作区（硬约束压过对�
       { id: "f_pl12", kind: "plumbing", offset: 12, width: 24 },
     ],
   });
-  const layout = generateLayout(geometryOf(wall), pilotModules, { ceilingHeight: 96 });
+  // 84" 单墙本身就排不下默认推定的整套家电（冰箱+灶具）——这条测的是水槽
+  // 对窗角的硬约束，不是家电放不下，所以不带默认推定家电，只看水槽落位。
+  const layout = generateLayout(geometryOf(wall), pilotModules, { ceilingHeight: 96, appliances: [] });
 
   const sink = layout.placements.find((p) => p.label === "sink");
   assert.ok(sink, "应当排出水槽柜");

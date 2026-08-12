@@ -187,6 +187,19 @@ test("Tab1 sections 未谈及时写 Not discussed，而不是铺满 TBD 字段",
   assert.match(site!.body, /Not discussed/i);
 });
 
+test("组内一项已确认、另一项还缺时，徽标不能标成整组「未讨论」", () => {
+  // 上下水已确认（有 plumbing feature），窗还没谈——不是"整组没聊"，
+  // 是"聊了一半"，body 里也确实带出了上下水的真实数据。
+  const plan = readyPlan();
+  const r = evaluateDesignReadiness({ conversation: conv(), plan, language: "en" });
+  const site = r.sections.find((s) => s.id === "site");
+  assert.ok(site);
+  assert.notEqual(site!.status, "untouched", "上下水已确认，不该说整组还没讨论过");
+  assert.equal(site!.status, "clarify");
+  assert.match(site!.body, /Plumbing/i, "body 应该带出已确认的上下水数据，不能被 untouched 掩盖");
+  assert.doesNotMatch(site!.body, /Not discussed/i);
+});
+
 test("风格 brief 写出标准术语，禁止「已记在需求里」", () => {
   const plan = readyPlan();
   plan.appliances = [{

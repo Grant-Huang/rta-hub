@@ -152,7 +152,7 @@ export const secondDiscounts: DiscountRule[] = [
       { minSubtotal: fromDollars("2500.00"), percentOff: 3 },
       { minSubtotal: fromDollars("6000.00"), percentOff: 6 },
     ],
-    stackable: false, description: "整厨满额折扣",
+    stackable: false, description: "Whole-kitchen spend discount",
   },
 ];
 
