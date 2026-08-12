@@ -69,18 +69,30 @@ test("追问同一批字段的话术会逐轮退让，不会一字不差地重�
   const third = await say(2);
   const fourth = await say(3);
 
-  // 三个阶段：正常问 → 软化+指向选项 → 放弃再造词、稳定指向选项。
-  // 追问两次还没结果就该停下（见 OrchestratorOptions.repeatedAsk 文档注释）——
-  // 第三次起是稳定终态文案，不需要每轮都造一句新说法，第三轮和第四轮理应相同。
-  assert.equal(new Set([first, second, third]).size, 3,
-    "问 → 软化 → 换选择题，这三个阶段的话术应该不同");
-  assert.equal(third, fourth, "追问两次已经停下换选择题，第三次不必再造一种新说法");
+  // 四个阶段：正常问 → 软化+指向选项 → 放弃再造词、稳定指向选项 → 连三轮
+  // 没进展，改口给兜底联系方式（OrchestratorOptions.supportContact；这里
+  // 没传，走"可以先留言"的降级说法）。
+  assert.equal(new Set([first, second, third, fourth]).size, 4,
+    "问 → 软化 → 换选择题 → 兜底转人工，四个阶段的话术都不该一样");
   assert.match(second, /点.*选项|下面.*选/, "第二次该指向可点选的选项");
+  assert.match(fourth, /留言|联系|contact|email/i, "第四次该给出一条兜底出路，不是继续在对话里打转");
   // 第三次起就别再念字段名了——客户已经在说话了，只是说法对不上关键词表
   for (const field of ["厨房尺寸", "布局", "风格", "预算", "所在省份"]) {
     assert.equal(third.includes(field), false, `第三轮不该再点名「${field}」：${third}`);
     assert.equal(fourth.includes(field), false, `第四轮不该再点名「${field}」：${fourth}`);
   }
+});
+
+test("兜底转人工时给真实邮箱，不编造联系方式", async () => {
+  const ctx = { conversationId: "cv", requirements: "", history: [] };
+  const withContact = await orchestratorReply(undefined, ctx, "想换厨房",
+    { ...optionsFor("consumer"), repeatedAsk: 3, language: "zh", supportContact: "quotes@rta-hub.test" });
+  assert.match(withContact.content, /quotes@rta-hub\.test/, "配了兜底邮箱就该用真实地址，不是含糊的“联系我们”");
+
+  const withoutContact = await orchestratorReply(undefined, ctx, "想换厨房",
+    { ...optionsFor("consumer"), repeatedAsk: 3, language: "zh" });
+  assert.doesNotMatch(withoutContact.content, /@/, "没配邮箱时不该编一个出来");
+  assert.match(withoutContact.content, /留言/, "没配邮箱时退化为“可以留言”，而不是假装能转人工");
 });
 
 test("无 LLM 降级路径：本轮刚记下的数字用结构化摘要复述，不是含糊的\"记下了\"", async () => {
