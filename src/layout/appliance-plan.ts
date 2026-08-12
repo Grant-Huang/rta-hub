@@ -231,6 +231,12 @@ export function planAppliances(
   //
   // 这块占位只用于**给家电找位置**，不进 splitIntoSegments 的 reserved——
   // 水槽柜正是要排到这里来。
+  //
+  // 洗碗机紧邻水槽落位，但挨左还是挨右是 generate.ts 后面才决定的事（由那时候
+  // 两侧实际剩多少空决定）——这里不预判、不占位，避免两侧都留一份「可能用不上
+  // 的洗碗机宽度」白白吃掉墙长（真实测过：这么留会让本来放得下的第四台家电
+  // 判定放不下）。真正的修法在 generate.ts 洗碗机落位那段：挑边时避开会顶掉
+  // 灶具落台区的那一侧。
   for (const run of runs) {
     const plumbing = run.features.find((f) => f.kind === "plumbing");
     if (!plumbing) continue;
@@ -253,7 +259,7 @@ export function planAppliances(
       ...(hard.get(runId) ?? []),
       ...(tall ? windowSpans(runId) : []),
     ];
-    const spot = findSpot(runs, spec, need, overlapsHere, blockersHere, lang);
+    const spot = findSpot(runs, spec, need, overlapsHere, blockersHere, lang, placed);
     if (!spot) {
       warnings.push({
         kind: spec.kind,
@@ -330,10 +336,27 @@ function findSpot(
   overlaps: (runId: string, x: number, width: number) => boolean,
   blockers: (runId: string) => readonly Span[],
   lang: UiLanguage,
+  placed: readonly PlacedAppliance[],
 ): Spot | undefined {
-  const fits = (run: WallRun, x: number) =>
-    x >= 0 && x + need <= run.length && !overlaps(run.id, x, need)
-    && landingOk(run, x, need, spec.kind, blockers(run.id));
+  // landingOk 只检查**这台新家电自己**的落台区够不够——它不知道旁边那个
+  // 已经落位、自己也有落台区要求的家电（比如灶具）。一台对落台区要求宽松的
+  // 家电（比如 wallOven 的 secondary=0）完全可能贴着灶具落位，自己的检查
+  // 全过，却把灶具原本满足的落台区顶没了——这正是「排布器把方案排出来，
+  // 又被自己的检查器否掉」那类 bug，只是这次是家电挤家电，不是家电挤水槽。
+  // 所以候选位置还要反过来验证：加上这台新家电当 blocker 之后，
+  // 之前已经落位、且有落台区要求的家电是否仍然满足自己的要求。
+  const fits = (run: WallRun, x: number) => {
+    if (x < 0 || x + need > run.length) return false;
+    if (overlaps(run.id, x, need)) return false;
+    const blockersHere = blockers(run.id);
+    if (!landingOk(run, x, need, spec.kind, blockersHere)) return false;
+    const withThis = [...blockersHere, { x, width: need }];
+    for (const p of placed) {
+      if (p.wallRunId !== run.id || !LANDING[p.spec.kind]) continue;
+      if (!landingOk(run, p.x, p.width, p.spec.kind, withThis)) return false;
+    }
+    return true;
+  };
   const name = applianceLabel(spec.kind, lang);
 
   // ① 户型上的对应特征——现场事实，压过偏好
