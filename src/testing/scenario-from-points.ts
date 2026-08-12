@@ -4,8 +4,8 @@
  */
 import type {
   CustomerFacts, TestMissionIntent, UserPersona,
-} from "../../scripts/user-agent.mts";
-import { personaForCaseIndex } from "../../scripts/user-agent.mts";
+} from "./user-agent.js";
+import { personaForCaseIndex } from "./user-agent.js";
 import type { TestPoint } from "./types.js";
 
 export interface TestWall {

@@ -5,7 +5,7 @@
  * **不知道**系统检查表；不按写死剧本推进。
  * 系统/厂商必须通过引导提问收集信息；本 agent 在引导下即兴发挥。
  */
-import type { CompletionClient } from "../src/agents/types.js";
+import type { CompletionClient } from "../agents/types.js";
 
 /** 用户身份人设 —— 影响主动程度、术语、是否会 @ 厂商。 */
 export type UserPersona = "beginner" | "familiar" | "trade_pro";
