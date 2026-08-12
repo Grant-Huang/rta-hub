@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import type { CompletionClient } from "../agents/types.js";
 import {
   userAgentTurn, type UserAgentSource, type UserUiAction,
-} from "../../scripts/user-agent.mts";
+} from "./user-agent.js";
 import type { TestScenarioBlueprint } from "./scenario-from-points.js";
 import type { TestCaseResult } from "./types.js";
 import type { TestFetch } from "./http-client.js";
@@ -376,7 +376,7 @@ async function runUiAction(
     return;
   }
 
-  if (action === "revise_plan") {
+  if (action === "vague_revision") {
     if (!p.planViewOk) {
       notes.push("ui:revise_wait");
       return;
@@ -558,7 +558,7 @@ export async function runTestCase(input: RunCaseInput): Promise<TestCaseResult> 
       status: errors.length ? "failed" : "passed",
       conversationId,
       startedAt,
-      finishedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
       notes: [...notes, `userAgent:${userAgentSource}`],
       errors,
     };
@@ -572,7 +572,7 @@ export async function runTestCase(input: RunCaseInput): Promise<TestCaseResult> 
       status: "failed",
       conversationId,
       startedAt,
-      finishedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
       notes,
       errors: [...errors, msg],
     };
