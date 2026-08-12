@@ -122,7 +122,9 @@ test("窗贴着墙角时，水槽让位给台面工作区（硬约束压过对�
       { id: "f_pl12", kind: "plumbing", offset: 12, width: 24 },
     ],
   });
-  const layout = generateLayout(geometryOf(wall), pilotModules, { ceilingHeight: 96 });
+  // 这个用例只关心水槽落位，appliances: [] 关掉默认冰箱/灶具假设——
+  // 84" 窄墙放不下默认推定的家电宽度，会产生与本测试无关的 APPLIANCE_NO_ROOM。
+  const layout = generateLayout(geometryOf(wall), pilotModules, { ceilingHeight: 96, appliances: [] });
 
   const sink = layout.placements.find((p) => p.label === "sink");
   assert.ok(sink, "应当排出水槽柜");

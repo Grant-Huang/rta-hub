@@ -445,10 +445,11 @@ test("补齐户型 → 出方案 → 四视图 → 转报价（完整 MVP-2 链�
   });
   const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
 
-  // 手动补齐
+  // 手动补齐——204"：144" 放不下冰箱(38 含净空)+灶(30)+洗碗机(24)三件套还要
+  // 避开中段 24" 的上下水占位（两段可用区各自都不够），204" 才是真放得下
   const added = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+    body: JSON.stringify({ addRun: { label: "北墙", length: 204 } }),
   });
   const runId = (await added.json() as {
     floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };
@@ -1332,7 +1333,8 @@ test("有户型图后才出预算题，区间按尺寸锚定", async () => {
 
   const budget = body.questions.find((q) => q.key === "budgetBand");
   assert.ok(budget, "有户型图就该能给出预算区间");
-  assert.match(budget!.prompt, /144"/);
+  // seedDesignIntake 里的墙长是 204"（PR #26 改的夹具，这处断言当时漏改）
+  assert.match(budget!.prompt, /204"/);
   assert.equal(body.note, undefined);
 });
 

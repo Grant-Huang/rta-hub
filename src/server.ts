@@ -1293,7 +1293,15 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     const switchOnly = Boolean(switched) && isLanguageSwitchOnly(text);
     const fitReplyThisTurn = replies.some((r) =>
       /空间不够|Space check|appliances_fit|墙长超过|need more wall/i.test(r.content));
-    if (!switchOnly && !fitReplyThisTurn) {
+    // 「这句话里的信息要不要记进 designRequirements」与「要不要再叠一句收集
+    // 话术」是两件不相关的事——之前耦合在同一个 if 里，本轮已经报过「空间
+    // 不够」或只是切语言时，客户这句话里的风格/预算/省份等其余内容会被
+    // 整段丢弃（连 nextReqs 都没算），下一轮问就诊读到相同的缺口，反复卡在
+    // collecting。合并要无条件做，只有「要不要再问一句」才看这两个旗标。
+    const nextReqs = designRequirementsAfter(conv, text);
+    if (switchOnly || fitReplyThisTurn) {
+      designRequirements = nextReqs;
+    } else {
       // 日常轮次走轻量模型，只有确定性触发才上主力（model-tiers.ts）。
       // 「连续几轮没进展」是兜底：轻量模型可能在原地打转，客户已经说了三轮
       // 却一个字段都没被收集到。
@@ -1303,7 +1311,6 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
         justParsedFloorPlan: false,
       });
   // Pass intake status into LLM for friendlier collection
-      const nextReqs = designRequirementsAfter(conv, text);
       const readinessPre = (() => {
         // provisional: merge next reqs into a shallow copy for status
         const shadow = { ...conv, designRequirements: nextReqs };
