@@ -668,11 +668,16 @@ test("别人的户型图读不到", async () => {
 const TRADE = "ca_demo_trade";
 
 /** 建一个补齐了户型、出过方案的会话，供后面的 PDF / 修订链测试复用。 */
-/** 满足 FR-15 出图前检查表：几何 + 上下水 + 意图 + 已确认家电宽度（尺寸不可后定）。 */
+/**
+ * 满足 FR-15 出图前检查表：几何 + 上下水 + 意图 + 已确认家电宽度（尺寸不可后定）。
+ *
+ * 墙长给 192"——见 fr17-fr18-session.test.ts 同名函数上的注释：144" 留了上下水
+ * 净空后放不下冰箱+灶具，这是家电落位算法的正确行为，不是 bug。
+ */
 async function seedDesignIntake(conversationId: string, accountId: string, floorPlanId: string) {
   const added = await req(`/api/floorplans/${floorPlanId}/resolve`, {
     method: "POST", accountId,
-    body: JSON.stringify({ addRun: { label: "North", length: 144 } }),
+    body: JSON.stringify({ addRun: { label: "North", length: 204 } }),
   });
   const runId = (await added.json() as {
     floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };

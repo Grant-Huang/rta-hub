@@ -91,11 +91,19 @@ test("户型有有效墙长后 quickReplies 不含 kitchen size / layout", async
   assert.ok(!(body.quickReplies ?? []).some((q) => q.field === "layout"));
 });
 
-/** 关键现场/意图项齐备，足以问「要不要出图」（seller 非关键）。 */
+/**
+ * 关键现场/意图项齐备，足以问「要不要出图」（seller 非关键）。
+ *
+ * 墙长给 192"——144" 那面墙留了 60"/24" 的上下水后，NKBA 两侧落台净空一算，
+ * 冰箱(38")+灶具(30") 实际放不下（这是家电落位算法本身的正确行为，不是
+ * bug）。之前这个夹缝能凑过是因为 historyBlob 污染 bug 会把助手示例文案里的
+ * "East 108"" 当成客户又报了一段墙，平白多出一段墙来兜底——修掉那个数据
+ * 污染 bug 后，这里必须给一段真的装得下的墙长，不能再依赖那个副作用。
+ */
 async function seedDesignIntake(conversationId: string, floorPlanId: string) {
   const add = await req(`/api/floorplans/${floorPlanId}/resolve`, {
     method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({ addRun: { label: "North", length: 144 } }),
+    body: JSON.stringify({ addRun: { label: "North", length: 204 } }),
   });
   const { floorPlan } = await add.json() as {
     floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };

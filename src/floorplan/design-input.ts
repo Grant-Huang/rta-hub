@@ -299,21 +299,25 @@ export function applyDesignInput(
 
 // ── 导出 ──────────────────────────────────────────────────────────────────
 
-function wallRunProvenance(plan: FloorPlan, wallRunId: string): Provenance {
+/**
+ * 这段墙的长度是否已确认（无待处理项）——导出用，也被 `chat-site-answers.ts`
+ * 的"确认锁"复用：已确认的字段不许被聊天解析静默覆盖（见 `confirm-lock.ts`）。
+ */
+export function wallRunProvenance(plan: FloorPlan, wallRunId: string): Provenance {
   const pending = plan.unresolvedItems.some(
     (u) => !u.resolved && u.target.kind === "wallRun" && u.target.id === wallRunId,
   );
   return pending ? "assumed" : "customer";
 }
 
-function featureProvenance(plan: FloorPlan, featureId: string): Provenance {
+export function featureProvenance(plan: FloorPlan, featureId: string): Provenance {
   const pending = plan.unresolvedItems.some(
     (u) => !u.resolved && u.target.kind === "feature" && u.target.id === featureId,
   );
   return pending ? "assumed" : "customer";
 }
 
-function ceilingHeightProvenance(plan: FloorPlan): Provenance {
+export function ceilingHeightProvenance(plan: FloorPlan): Provenance {
   const pending = plan.unresolvedItems.some(
     (u) => !u.resolved && u.target.kind === "global" && u.field === "ceilingHeight",
   );

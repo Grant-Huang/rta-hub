@@ -12,6 +12,9 @@
 import type { SpecBundle } from "../spec/bundle.js";
 import { stripPriceFields } from "../spec/validation.js";
 import { resolveModuleSellUnit } from "../spec/sku-semantics.js";
+import {
+  formatModulePriceHint, priceSummaryForModule, standardAutoQuotableDiscount,
+} from "../pricing/informal-quote.js";
 import type { CompanyCodingRules, CompanyEngagementHandoff } from "../domain/types.js";
 import { interactionProfile, type TradeInteractionProfile } from "../trade/interaction.js";
 import type { AgentContext, AgentReply, CompletionClient, DesignIntent } from "./types.js";
@@ -62,7 +65,11 @@ function orchestratorSystem(
       "已有户型图且尺寸齐时，不必再问尺寸/布局；改为确认风格、预算、省份等。",
       "",
       "引导小白（多数客户不知道该先说什么）：",
-      "- **开场先问有没有户型图**；没有则引导按示例手绘（墙长+开口+层高）上传；可选再问有无初步设计草图。",
+      "- **开场同等优先地给两条路**：① 上传户型图/手绘草图（按示例标墙长+开口+层高）；② 直接从5种常见布局"
+        + "（单壁型/走廊型/L型/L型+岛台/U型）里点「我家像这个」。两条路都不用先问客户是哪种形状——系统会自己判断，不要开口问「你家是L型还是U型」。",
+      "- 客户上传的草图如果像5种布局里的一种，系统会先认出来、按该布局的具体墙段（如U型的西墙/北墙/东墙）标出图上已经读到的尺寸，"
+        + "剩下追问的也只是这个布局里没读到的那几段——不是从零开始问「你家几段墙」。追问时**点名具体墙段**，不要泛泛地说「墙长不齐」。",
+      "- 客户直接选了某个布局模板后，后续追问尺寸/位置时同样要点名该布局的具体墙段，不要泛泛地问。",
       "- 上传后系统会给出「柜块拼接」讨论图：请客户对照图上尺寸/开口与 Q# 讨论；置信度很低时请其补标注后**重新上传**。",
       "- 每轮用一句话说明**为什么问这项**（例如：省份用来算税；墙长用来排布柜体）。",
       "- 给**简短示例答法**（如「安大略省 / 预算大概 1–2 万加币 / 现代一字门」），降低开口成本。",
@@ -81,9 +88,10 @@ function orchestratorSystem(
       "- 这个平台卖的是 **RTA 板式待组装橱柜**，不是全定制。",
       "  尺寸只有厂家的固定档、板件平装发货需要组装、不含上门安装。",
       "  客户把它当成定制来理解时**要当场纠正**——等到货到了再解释就是投诉了。",
-      "- 你只掌握通用橱柜知识。**不要报出任何具体公司的价格或型号**。",
+      "- 你只掌握通用橱柜知识。**在这条主线程里绝对不要报任何价格数字或区间——连「行业典型区间」也不要**，"
+        + "只描述产品/清单信息（型号大类、常见配置、注意事项）。报价是厂商 Agent 的事：客户一问到钱，"
+        + "就提示他 @公司名，由那家公司的助手用该公司真实规格库报价。",
       "- 客户想问某家公司的具体产品时，提示他用 @公司名 点名，由那家公司的助手来答。",
-      "- 需要给价格感觉时，只能说「行业典型区间」，且必须说明这不是任何公司的真实报价。",
       "",
       languageRuleForLlm(lang),
       "",
@@ -115,7 +123,12 @@ function orchestratorSystem(
     "If a floor plan is already uploaded with sizes confirmed, do not re-ask size/layout; focus on style, budget, province, etc.",
     "",
     "Guide beginners (most customers do not know what to ask when):",
-    "- **Open by asking for a floor plan**; if none, guide a hand sketch from the example (lengths + openings + ceiling) and upload; optionally ask for a design-idea sketch.",
+    "- **Open with two equally good paths**: (1) upload a floor plan / hand sketch (lengths + openings + ceiling, per the example); "
+      + "(2) directly pick one of the 5 common layouts (one-wall/galley/L-shape/L-shape+island/U-shape) by tapping \"looks like mine\". "
+      + "Never ask the customer to name their shape (\"is it L or U?\") — the system classifies it.",
+    "- If an uploaded sketch matches one of the 5 layouts, the system recognizes it first and annotates that layout's specific wall runs "
+      + "(e.g. West/North/East for a U-shape) with whatever it read from the sketch; only ask about the specific walls it didn't read — never a generic \"sizes are incomplete\".",
+    "- Once a layout template is picked directly, phrase follow-up dimension/position questions around that layout's specific wall names too, not generically.",
     "- After upload, the system shows an editable **block run diagram** — discuss dims/openings and Q# on that figure; if confidence is low, ask them to annotate and **re-upload**.",
     "- Each turn, briefly say **why** you need the item (e.g. province → tax; wall lengths → layout).",
     "- Offer a **short example answer** (e.g. \"Ontario / about CAD $10–20k / modern shaker\") to lower friction.",
@@ -137,9 +150,11 @@ function orchestratorSystem(
     "- This platform sells **RTA (ready-to-assemble) cabinets**, not fully custom.",
     "  Sizes come in manufacturer fixed steps, they ship flat-packed and need assembly, install is not included.",
     "  If the customer treats this as custom, **correct that immediately** — explaining after delivery is a complaint.",
-    "- You only have generic cabinet knowledge. **Never quote a specific company's price or SKU**.",
+    "- You only have generic cabinet knowledge. **In this main thread, never state any price number or range — not "
+      + "even a \"typical industry range\".** Describe products/catalog information only (broad SKU categories, "
+      + "common configurations, things to watch for). Pricing is the seller agent's job: the moment money comes up, "
+      + "point them to @ the company name so that seller's agent can quote from its real catalog.",
     "- When they want a specific seller, tell them to @ the company name so that company's agent can answer.",
-    "- For ballpark pricing, only say \"typical industry ranges\" and make clear it is not any seller's real quote.",
     "",
     languageRuleForLlm(lang),
     "",
@@ -205,6 +220,13 @@ export interface OrchestratorOptions {
     readyToAskDesign: boolean;
     /** 已确认项短摘要，禁止再问 */
     confirmedBriefs?: readonly string[];
+    /**
+     * **这一轮**刚从"未确认"变成"已确认"的具体数字（墙长/层高/家电宽度），
+     * 由 `design/confirm-recap.ts` 算出。与 `confirmedBriefs`（全量、用于
+     * "别再问"）不同——这个只报变化量，用于让回复先简短复述一句
+     * "北墙168寸、层高96寸，记下了"，起弱确认作用（不是门禁，只是回声）。
+     */
+    justConfirmed?: readonly string[];
   };
   /** FR-22：已发布 handbook 正文（由服务端从 knowledge cards 渲染）。 */
   platformHandbook?: string;
@@ -392,25 +414,32 @@ function intakeStatusNote(
   const open = (status.openAsks?.length ? status.openAsks : status.missing.map((f) => fieldLabel(f, lang)))
     .slice(0, 3);
   const confirmed = (status.confirmedBriefs ?? []).slice(0, 6);
+  const justConfirmed = (status.justConfirmed ?? []).slice(0, 6);
   if (lang === "zh") {
+    const recap = justConfirmed.length
+      ? `本轮刚记下：${justConfirmed.join("、")}——先用一句话简短复述这几个数字（弱确认，不是提问），再继续。`
+      : "";
     if (status.readyToAskDesign) {
-      return "【状态】必要信息已齐，户型可用。请主动友好地问：是否要根据目前需求生成设计方案？未同意前不要说已经出图。";
+      return `${recap ? `${recap} ` : ""}【状态】必要信息已齐，户型可用。请主动友好地问：是否要根据目前需求生成设计方案？未同意前不要说已经出图。`;
     }
     const miss = open.join("；") || "（无）";
     const done = confirmed.length ? `已确认勿再问：${confirmed.join("；")}。` : "";
-    return `【状态】户型${status.floorPlanReady ? "已就绪" : "未就绪"}。${done}`
+    return `${recap ? `${recap} ` : ""}【状态】户型${status.floorPlanReady ? "已就绪" : "未就绪"}。${done}`
       + `本轮最多追问 1 项仍缺信息：${miss}。`
       + `若客户答非所问：先简短确认已记下的内容，再换一种问法或请其点快捷选项——禁止原样重复上一问。`
       + `不要贴户型草图；用纯文字提问。`
       + `未就绪时禁止：声称信息已齐、邀请出图、改问抽屉/五金等偏好。`
       + `信息未齐时不要提议出完整方案。`;
   }
+  const recap = justConfirmed.length
+    ? `Just recorded this turn: ${justConfirmed.join(", ")} — briefly restate these numbers first (a soft confirmation, not a question), then continue.`
+    : "";
   if (status.readyToAskDesign) {
-    return "[Status] Intake is complete and the floor plan is ready. Proactively and warmly ask whether to generate a design from what they've shared. Do not claim a drawing exists until they agree.";
+    return `${recap ? `${recap} ` : ""}[Status] Intake is complete and the floor plan is ready. Proactively and warmly ask whether to generate a design from what they've shared. Do not claim a drawing exists until they agree.`;
   }
   const miss = open.join("; ") || "(none)";
   const done = confirmed.length ? `Already confirmed (do NOT re-ask): ${confirmed.join("; ")}. ` : "";
-  return `[Status] Floor plan ${status.floorPlanReady ? "ready" : "not ready"}. ${done}`
+  return `${recap ? `${recap} ` : ""}[Status] Floor plan ${status.floorPlanReady ? "ready" : "not ready"}. ${done}`
     + `Ask at most ONE still-missing item this turn: ${miss}. `
     + `If their reply is off-topic: briefly acknowledge what you have, then rephrase or point to quick options — never repeat the same question verbatim. `
     + `Text-only questions (no floor-plan sketches). `
@@ -477,6 +506,25 @@ function fallbackPrompt(
   lang: UiLanguage = DEFAULT_LANGUAGE,
   intakeStatus?: OrchestratorOptions["intakeStatus"],
 ): string {
+  // 弱确认复述：只在这一轮真的有新东西被记下时才加这一句前缀——没有
+  // `justConfirmed`（现有全部调用方都没传）时这句是空字符串，行为与之前
+  // 完全一致，不会动到既有测试断言的原文案。
+  const justConfirmed = intakeStatus?.justConfirmed ?? [];
+  const recapPrefix = justConfirmed.length
+    ? (lang === "zh"
+      ? `记下了：${justConfirmed.join("、")}。`
+      : `Got it — ${justConfirmed.join(", ")}. `)
+    : "";
+  return recapPrefix + fallbackPromptCore(requirements, profile, repeatedAsk, lang, intakeStatus);
+}
+
+function fallbackPromptCore(
+  requirements: string,
+  profile: TradeInteractionProfile,
+  repeatedAsk: number | boolean = 0,
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+  intakeStatus?: OrchestratorOptions["intakeStatus"],
+): string {
   const missing = intakeStatus?.missing
     ? [...intakeStatus.missing]
     : missingFields(requirements);
@@ -522,7 +570,7 @@ function fallbackPrompt(
   }
   if (repeats >= 2) {
     return "I won't repeat the same question — tap a quick option below, or send wall lengths like "
-      + "`North 84\", ceiling 96\"`. If the model timed out, just reply once more; no need to re-confirm answered items.";
+      + "`<wall name> <inches>\", ceiling <inches>\"`. If the model timed out, just reply once more; no need to re-confirm answered items.";
   }
   if (repeats === 1) {
     return `I may not have asked clearly. Please answer: ${ask.join("; ")}. `
@@ -565,10 +613,17 @@ export function buildCompanyAgentSystem(
       return u === "combo" || u === "standalone" || m.sellUnit === undefined;
     })
     .slice(0, 80)
-    .map((m) => language === "zh"
-      ? `${m.code}(${m.type} 宽:${m.widthOptions.join("/")} 高:${m.heightOptions.join("/")} 深:${m.depthOptions.join("/")})`
-      : `${m.code}(${m.type} W:${m.widthOptions.join("/")} H:${m.heightOptions.join("/")} D:${m.depthOptions.join("/")})`)
+    .map((m) => {
+      const dims = language === "zh"
+        ? `${m.type} 宽:${m.widthOptions.join("/")} 高:${m.heightOptions.join("/")} 深:${m.depthOptions.join("/")}`
+        : `${m.type} W:${m.widthOptions.join("/")} H:${m.heightOptions.join("/")} D:${m.depthOptions.join("/")}`;
+      // 价格必须在这算好——Agent 只转述数字，不允许自己做加减乘除
+      const priceSummary = priceSummaryForModule(bundle, m);
+      const price = priceSummary ? ` · ${formatModulePriceHint(priceSummary, language)}` : "";
+      return `${m.code}(${dims})${price}`;
+    })
     .join(join);
+  const standardDiscount = standardAutoQuotableDiscount(bundle);
   const doors = bundle.doorStyles.map((d) => d.name).join(join);
   const hardware = bundle.hardwareOptions.map((h) => h.name).join(join);
   const accessories = bundle.accessoryOptions.map((a) => a.name).join(join);
@@ -586,6 +641,10 @@ export function buildCompanyAgentSystem(
     return [
       `你是「${companyName}」的产品助手。只能基于下面这份本公司规格库回答问题。`,
       "",
+      standardDiscount
+        ? `本店标准折扣：消费者统一 -${standardDiscount.value}%（已算进下面每个型号的参考价）。`
+        : "本店暂无标准折扣——报价即 MSRP 原价。",
+      "",
       `可供型号：${modules || none}`,
       `门板样式：${doors || none}`,
       `五金选项：${hardware || none}`,
@@ -595,14 +654,18 @@ export function buildCompanyAgentSystem(
       "硬性规则：",
       "1. 只回答上面列出的型号与选项。列表里没有的，直接说本公司不提供，**不要编，也不要提别家公司**。",
       "2. 尺寸只能取型号对应的候选值，不要给「接近的尺寸」。",
-      "3. **绝对不要报价格。** 价格由系统按规格库计算，你说的任何金额都会被丢弃。",
+      "3. **可以报价。** 每个型号后面已经标好参考价（如有标准折扣，已经算进去了），"
+        + "直接引用那个数字即可——**不要自己加减乘除，也不要编造清单外没标出的价格**。"
+        + "没标折扣就是这家公司没有标准折扣，别暗示「还能再优惠」——那是厂商员工接手后才能决定的事，"
+        + "不是你能承诺的。正式成交价以系统出的报价单为准，这里给的是参考价。",
       "4. 不确定就说不确定，让客户联系公司确认。",
       "5. 解释型号码时只用本公司前缀规则，禁止套用其他厂商的 B12/DB12 含义。",
       "",
       "引导（答完产品问题后仍要帮小白往前走）：",
       "- **结合【当前户型几何】**：谈转角柜/懒人转盘/大宽度柜时，用实际墙长判断是否放得下（例如单墙约 84\" 时转角柜往往不合适，要直说）。",
       "- 用一句白话解释该型号是否适合客户已透露的厨房形状/墙长。",
-      "- 主动提示下一步：缺尺寸→请上传户型或按 Q# 报墙长/层高；家电宽度未确认→请按图上 Q# 确认或说「推定可以」；需要正式价→出图后由系统报价（勿口报卖家价）。",
+      "- 主动提示下一步：缺尺寸→请上传户型或按 Q# 报墙长/层高；家电宽度未确认→请按图上 Q# 确认或说「推定可以」；"
+        + "客户想要一份能发出去的正式报价单→出图后由系统出具（这里给的参考价可以先聊，但不是那份正式单）。",
       "- 客户显然不懂术语时，先给一句话解释再给型号名；已问过的字段不要重复追问。",
       "",
       languageRuleForLlm(language),
@@ -611,6 +674,10 @@ export function buildCompanyAgentSystem(
 
   return [
     `You are the product assistant for "${companyName}". Answer only from this seller's catalog below.`,
+    "",
+    standardDiscount
+      ? `Standard discount: -${standardDiscount.value}% for consumers (already folded into each SKU's reference price below).`
+      : "No standard discount on file for this seller — prices below are MSRP.",
     "",
     `SKUs: ${modules || none}`,
     `Door styles: ${doors || none}`,
@@ -621,14 +688,20 @@ export function buildCompanyAgentSystem(
     "Hard rules:",
     "1. Only answer about SKUs/options listed above. If it is not listed, say this seller does not offer it — **do not invent, and do not mention other sellers**.",
     "2. Sizes must be from that SKU's option lists — do not suggest “close” sizes.",
-    "3. **Never quote prices.** The system prices from the catalog; any amount you invent is discarded.",
+    "3. **You may quote prices.** Each SKU above already shows a reference price (standard discount already "
+      + "applied, if this seller has one) — read that number directly. **Do not do your own arithmetic, and never "
+      + "invent a price not shown.** No discount shown means this seller has no standard discount — don't imply "
+      + "further negotiation is possible; that call belongs to seller staff, not you. The formal price is whatever "
+      + "the system's quote states; what you give here is a reference only.",
     "4. If unsure, say so and suggest contacting the seller.",
     "5. When explaining SKU codes, use ONLY this seller's prefix guide — never another company's B12/DB12 meaning.",
     "",
     "Guidance (after answering the product question, keep beginners moving):",
     "- **Use [Kitchen geometry] when present**: for corner bases / lazy susans / wide units, judge fit against actual wall lengths (e.g. a ~84\" single run often cannot take a corner unit — say so).",
     "- In one plain sentence, relate the SKU to the customer's kitchen shape/wall lengths.",
-    "- Next steps: missing sizes → upload a floor plan or answer wall/ceiling Q#; unconfirmed appliance widths → confirm via Q# or say \"assumed widths are fine\"; formal price → system quote after drawings (never invent seller prices).",
+    "- Next steps: missing sizes → upload a floor plan or answer wall/ceiling Q#; unconfirmed appliance widths → "
+      + "confirm via Q# or say \"assumed widths are fine\"; a formal quote document is generated by the system after "
+      + "drawings (the reference price above is fine to discuss now, it just isn't that formal document).",
     "- Define jargon briefly for non-technical customers; do not re-ask fields already stated.",
     "",
     languageRuleForLlm(language),
@@ -754,15 +827,17 @@ export function deterministicSpecAnswer(
   const q = question.toUpperCase();
   const hits = bundle.modules.filter((m) => q.includes(m.code));
   if (hits.length > 0) {
-    return hits.map((m) =>
-      msg(lang,
+    return hits.map((m) => {
+      const priceSummary = priceSummaryForModule(bundle, m);
+      const priceLine = priceSummary ? ` ${formatModulePriceHint(priceSummary, lang)}.` : "";
+      return msg(lang,
         `${companyName} ${m.code}: ${m.type}, widths ${m.widthOptions.join("/")}", ` +
         `heights ${m.heightOptions.join("/")}", depths ${m.depthOptions.join("/")}", ` +
-        `assembly ${m.assemblyOptions.join(" / ")}.`,
+        `assembly ${m.assemblyOptions.join(" / ")}.${priceLine}`,
         `${companyName} 的 ${m.code}：${m.type}，宽 ${m.widthOptions.join("/")}"，` +
         `高 ${m.heightOptions.join("/")}"，深 ${m.depthOptions.join("/")}"，` +
-        `可选 ${m.assemblyOptions.join(" / ")}。`),
-    ).join("\n");
+        `可选 ${m.assemblyOptions.join(" / ")}。${priceLine}`);
+    }).join("\n");
   }
 
   // 尺寸类提问：「有 36 寸的转角柜吗」

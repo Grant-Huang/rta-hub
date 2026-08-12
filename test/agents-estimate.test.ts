@@ -23,6 +23,8 @@ import { SEED_TAX_RULES } from "../src/pricing/tax.js";
 import { genericCatalog } from "../src/app/seed.js";
 import type { EmailSubscription, GenericCatalog } from "../src/domain/types.js";
 import { importSpecTemplates } from "../src/spec/import.js";
+import type { SpecBundle } from "../src/spec/bundle.js";
+import { formatModulePriceHint, priceSummaryForModule, standardAutoQuotableDiscount } from "../src/pricing/informal-quote.js";
 
 const AT = "2026-06-01T00:00:00.000Z";
 
@@ -99,17 +101,72 @@ test("贸易账号得到更直给的话术", async () => {
 
 // ── 公司 Agent ────────────────────────────────────────────────────────────
 
-test("公司 Agent 的 system prompt 只含本公司规格且禁止报价", () => {
+test("公司 Agent 的 system prompt 只含本公司规格且允许报 MSRP 参考价", () => {
   const sys = buildCompanyAgentSystem("Maple Ridge", bundle);
   assert.match(sys, /B30/);
-  assert.match(sys, /Never quote prices|绝对不要报价格/i);
+  assert.match(sys, /You may quote prices/i);
+  assert.match(sys, /MSRP/);
   assert.match(sys, /do not invent|不要编/i);
 });
 
 test("明确 language=zh 时公司 Agent prompt 为中文", () => {
   const sys = buildCompanyAgentSystem("Maple Ridge", bundle, "zh");
-  assert.match(sys, /绝对不要报价格/);
+  assert.match(sys, /可以报价/);
   assert.match(sys, /不要编，也不要提别家公司/);
+});
+
+test("无标准折扣时，模块参考价就是 MSRP 原价", () => {
+  const b30 = bundle.modules.find((m) => m.code === "B30")!;
+  const summary = priceSummaryForModule(bundle, b30);
+  assert.ok(summary);
+  assert.equal(summary!.minListPrice, fromDollars("245.50"));
+  assert.equal(summary!.standardDiscountPercent, undefined);
+  assert.match(formatModulePriceHint(summary!), /no standard discount/i);
+});
+
+test("有 autoQuotable 标准折扣时，参考价包含折后价", () => {
+  const discounted: SpecBundle = {
+    ...bundle,
+    discountRules: [{
+      id: "disc_std", specVersionId: "sv1", companyId: "co_1",
+      audience: "consumer", kind: "percentOffList", value: 10, stackable: false,
+      description: "Standard -10%", autoQuotable: true,
+    }],
+  };
+  const b30 = discounted.modules.find((m) => m.code === "B30")!;
+  const summary = priceSummaryForModule(discounted, b30);
+  assert.equal(summary!.standardDiscountPercent, 10);
+  // 245.50 的 10% 折后是 220.95 —— 必须是算出来的数字，不是随便一个非零值
+  assert.equal(summary!.minDiscountedPrice, fromDollars("220.95"));
+  assert.match(formatModulePriceHint(summary!), /standard 10% off/);
+});
+
+test("按价格组细分或非 percentOffList 的折扣，不进厂商 Agent 的口头参考价", () => {
+  const scoped: SpecBundle = {
+    ...bundle,
+    discountRules: [{
+      id: "disc_scoped", specVersionId: "sv1", companyId: "co_1",
+      audience: "consumer", kind: "percentOffList", value: 10, stackable: false,
+      description: "Only door style A", autoQuotable: true, appliesToPriceGroupIds: ["pg_a"],
+    }],
+  };
+  assert.equal(standardAutoQuotableDiscount(scoped), undefined);
+
+  const tiered: SpecBundle = {
+    ...bundle,
+    discountRules: [{
+      id: "disc_tiered", specVersionId: "sv1", companyId: "co_1",
+      audience: "consumer", kind: "tieredByOrderValue", stackable: false,
+      description: "Volume discount", autoQuotable: true,
+      tiers: [{ minSubtotal: fromDollars("1000"), percentOff: 5 }],
+    }],
+  };
+  assert.equal(standardAutoQuotableDiscount(tiered), undefined);
+});
+
+test("公司 Agent system prompt 里每个 SKU 都带着算好的参考价，不是让模型自己算", () => {
+  const sys = buildCompanyAgentSystem("Maple Ridge", bundle);
+  assert.match(sys, /B30\([^)]*\)\s*·\s*MSRP/);
 });
 
 test("规格问答只答本公司有的型号", () => {

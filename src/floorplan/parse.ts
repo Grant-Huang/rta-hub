@@ -51,6 +51,13 @@ export interface RawExtraction {
   overallConfidence?: number;
   /** 模型自己说不确定的地方。 */
   notes?: string[];
+  /**
+   * 视觉模型对"这张草图像不像 5 种标准布局（`samples/templates.ts`）里的哪一种"
+   * 的猜测——猜中且置信度够时，`createFloorPlanWithOutcome` 会用该模板的墙段
+   * 框架去锚定下面的 `wallRuns`（见 `template-match.ts`），而不是完全自由抽取。
+   * 没猜、猜错、或置信度不够时，照旧走原有的自由抽取路径。
+   */
+  templateGuess?: { id: string; confidence: number };
 }
 
 const FEATURE_KINDS = ["window", "door", "plumbing", "gas", "electrical", "obstruction"] as const;
@@ -278,10 +285,23 @@ export function createChatSourcedFloorPlan(
   };
 }
 
+/**
+ * 按识别出的模板类型归一化——由调用方注入，`parse.ts` 本身不认识
+ * `samples/templates.ts` 里的 5 种标准布局（避免 parse.ts ↔ template-match.ts
+ * 循环引用）。匹配不上/置信度不够时返回 undefined，退回下面的自由抽取路径。
+ * 实际实现见 `floorplan/template-match.ts` 的 `matchesKnownTemplate` +
+ * `normalizeExtractionWithTemplate`，由 `server.ts` 组装后传入。
+ */
+export type TemplateAnchor = (
+  raw: RawExtraction | undefined,
+  language: UiLanguage,
+) => ParseResult | undefined;
+
 export async function createFloorPlanWithOutcome(
   input: CreateFloorPlanInput,
   image: string | undefined,
   extractor: VisionExtractor | undefined,
+  templateAnchor?: TemplateAnchor,
 ): Promise<CreateFloorPlanResult> {
   let raw: RawExtraction | undefined;
   let extraction: ExtractionOutcome =
@@ -301,7 +321,8 @@ export async function createFloorPlanWithOutcome(
     }
   }
 
-  const { geometry, unresolved } = normalizeExtraction(raw, input.language ?? DEFAULT_LANGUAGE);
+  const lang = input.language ?? DEFAULT_LANGUAGE;
+  const { geometry, unresolved } = templateAnchor?.(raw, lang) ?? normalizeExtraction(raw, lang);
   return {
     plan: {
       id: newId("fp"),
@@ -507,6 +528,41 @@ export function addFeature(
       wallRuns: plan.parsedGeometry.wallRuns.map((r) =>
         r.id === wallRunId
           ? { ...r, features: [...r.features, { ...feature, id: newId("wf"), offset: quantize(feature.offset), width: quantize(feature.width) }] }
+          : r),
+    },
+    updatedAt: at,
+  };
+}
+
+/**
+ * 改一个已存在特征（窗/门/上下水）的位置/宽度——`addFeature` 只会新加一个,
+ * 改"已确认"面板上现有的一条要用这个。找不到墙段/特征时原样返回,不静默创建。
+ */
+export function updateFeature(
+  plan: FloorPlan,
+  wallRunId: string,
+  featureId: string,
+  patch: { offset?: number; width?: number },
+  at: string,
+): FloorPlan {
+  const run = plan.parsedGeometry.wallRuns.find((r) => r.id === wallRunId);
+  if (!run || !run.features.some((f) => f.id === featureId)) return plan;
+  return {
+    ...plan,
+    parsedGeometry: {
+      ...plan.parsedGeometry,
+      wallRuns: plan.parsedGeometry.wallRuns.map((r) =>
+        r.id === wallRunId
+          ? {
+              ...r,
+              features: r.features.map((f) => (f.id === featureId
+                ? {
+                    ...f,
+                    ...(patch.offset !== undefined ? { offset: quantize(patch.offset) } : {}),
+                    ...(patch.width !== undefined ? { width: quantize(patch.width) } : {}),
+                  }
+                : f)),
+            }
           : r),
     },
     updatedAt: at,

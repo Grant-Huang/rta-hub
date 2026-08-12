@@ -9,14 +9,17 @@
  */
 import type { FloorPlan } from "../floorplan/types.js";
 import {
-  applianceFrom, normalizeAppliances, type ApplianceKind, type ApplianceSpec,
+  applianceFrom, applianceLabel, normalizeAppliances, type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
+import type { BlockedEdit } from "./confirm-lock.js";
 
 export type ChatApplianceApplyKind = "kinds" | "widths" | "confirmAssumed" | "defer";
 
 export interface ChatApplianceApplyResult {
   plan: FloorPlan;
   applied: ChatApplianceApplyKind[];
+  /** 被"确认锁"拦下的修改尝试（已确认的家电宽度被聊天新数值撞上，未写入）。 */
+  blockedEdits: BlockedEdit[];
 }
 
 const DEFER_RE =
@@ -119,6 +122,7 @@ export function applyChatApplianceAnswers(
 ): ChatApplianceApplyResult | undefined {
   const parsed = parseAppliancesFromChat(text);
   const applied: ChatApplianceApplyKind[] = [];
+  const blockedEdits: BlockedEdit[] = [];
   let next = plan;
   let list = [...(next.appliances ?? [])];
 
@@ -128,15 +132,7 @@ export function applyChatApplianceAnswers(
   }
 
   if (parsed.appliances.length > 0) {
-    // 新解析优先；已有 customer 宽度不被无宽度的 assumed 覆盖
-    const byKind = new Map<ApplianceKind, ApplianceSpec>();
-    for (const a of list) byKind.set(a.kind, a);
-    for (const a of parsed.appliances) {
-      const prev = byKind.get(a.kind);
-      if (prev?.provenance === "customer" && a.provenance === "assumed") continue;
-      byKind.set(a.kind, a);
-    }
-    const merged = normalizeAppliances([...byKind.values()]);
+    const merged = mergeAppliancesWithLock(list, parsed.appliances, blockedEdits);
     if (JSON.stringify(merged) !== JSON.stringify(list)) {
       list = merged;
       applied.push(
@@ -159,7 +155,65 @@ export function applyChatApplianceAnswers(
     }
   }
 
-  if (applied.length === 0) return undefined;
+  if (applied.length === 0 && blockedEdits.length === 0) return undefined;
+  if (applied.length === 0) return { plan: next, applied, blockedEdits };
   next = { ...next, appliances: list, updatedAt: new Date().toISOString() };
-  return { plan: next, applied };
+  return { plan: next, applied, blockedEdits };
+}
+
+/**
+ * 合并新解析出的家电清单，同时应用"确认锁"：已确认（provenance customer）的
+ * 宽度不被新解析出的不同数值静默覆盖——无论新解析是 customer 还是 assumed，
+ * 都算"想改已确认的"，记入 blocked，交给已确认面板去改（见 confirm-lock.ts）。
+ * 正则路径（`applyChatApplianceAnswers`）与 LLM 路径（`applyExtractedAppliances`）
+ * 共用这一份逻辑，保证两条路径下的锁行为完全一致。
+ */
+function mergeAppliancesWithLock(
+  list: readonly ApplianceSpec[],
+  incoming: readonly ApplianceSpec[],
+  blocked: BlockedEdit[],
+): ApplianceSpec[] {
+  const byKind = new Map<ApplianceKind, ApplianceSpec>();
+  for (const a of list) byKind.set(a.kind, a);
+  for (const a of incoming) {
+    const prev = byKind.get(a.kind);
+    if (prev?.provenance === "customer" && a.width !== prev.width) {
+      blocked.push({
+        kind: "appliance",
+        label: applianceLabel(a.kind, "en"),
+        current: prev.width,
+        attempted: a.width,
+      });
+      continue;
+    }
+    if (prev?.provenance === "customer" && a.provenance === "assumed") continue;
+    byKind.set(a.kind, a);
+  }
+  return normalizeAppliances([...byKind.values()]);
+}
+
+/**
+ * 把 LLM 结构化抽取（`llm-extract.ts`）的家电结果写入 FloorPlan——与正则路径
+ * 共用同一把"确认锁"（见 `mergeAppliancesWithLock`）。
+ */
+export function applyExtractedAppliances(
+  plan: FloorPlan,
+  extracted: readonly { kind: ApplianceKind; widthInches?: number }[],
+  confirmAssumed: boolean,
+  blockedOut?: BlockedEdit[],
+): FloorPlan {
+  const blocked: BlockedEdit[] = [];
+  let list = [...(plan.appliances ?? [])];
+
+  if (extracted.length > 0) {
+    const incoming = extracted.map((a) => applianceFrom({ kind: a.kind, width: a.widthInches }));
+    list = mergeAppliancesWithLock(list, incoming, blocked);
+  }
+
+  if (confirmAssumed && list.length === 0) {
+    list = normalizeAppliances(DEFAULT_ASSUMED_KINDS.map((kind) => applianceFrom({ kind })));
+  }
+
+  if (blockedOut) blockedOut.push(...blocked);
+  return { ...plan, appliances: list, updatedAt: new Date().toISOString() };
 }

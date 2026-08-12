@@ -18,7 +18,8 @@ import type { Context, Next } from "hono";
 
 import { fromDollars, format } from "./domain/money.js";
 import type {
-  CabinetCompany, ChatMessage, CompanyEngagement, Conversation, CritiqueStatus, CustomerAccount, ModuleType, Quote,
+  CabinetCompany, ChatMessage, CompanyEngagement, CompanyStaffMessage, CompanyStaffThread, Conversation,
+  CritiqueStatus, CustomerAccount, ModuleType, Quote, ServiceType,
 } from "./domain/types.js";
 import type { FloorPlan } from "./floorplan/types.js";
 import type { GeneratedLayout } from "./layout/generate.js";
@@ -39,6 +40,7 @@ import {
 } from "./routing/mention.js";
 import {
   buildSendDisclosure, confirm, createQuoteFromLlmOutput, recordSendResult,
+  recordServiceConfirmation, recordServiceRequest,
 } from "./app/quote-service.js";
 import { openDispute, resolveDispute } from "./billing/lead-events.js";
 import { quoteContentHash, verifySnapshot } from "./quote/state.js";
@@ -92,27 +94,34 @@ import { quickRepliesFor } from "./agents/quick-replies.js";
 import {
   buildEstimateDraft, buildIllustratedEstimate, catalogToPseudoModules, estimateCountsFromText, renderEstimateText,
 } from "./estimate/generic.js";
-import { buildQuoteEmail, deIdentifySignal, resolveSenderIdentity, sendEmail } from "./email/sender.js";
+import {
+  buildQuoteEmail, buildServiceConfirmationEmail, buildServiceRequestEmail,
+  deIdentifySignal, resolveSenderIdentity, sendEmail,
+} from "./email/sender.js";
 import { buildHtmlQuoteEmail } from "./email/html-quote.js";
 import { buildComparison, renderComparisonHtml, renderComparisonText } from "./quote/comparison.js";
 import {
   addFeature, addWallRun, createChatSourcedFloorPlan, createFloorPlanWithOutcome, extractionNote,
   interpretationSummary, pendingQuestions, resolveCeilingHeight, resolveItem,
-  resolveWallLength,
+  resolveWallLength, updateFeature,
 } from "./floorplan/parse.js";
 import {
   applyDesignInput, DesignInputError, exportDesignInput, validateDesignInputDocument,
 } from "./floorplan/design-input.js";
 import { isLayoutReady, isIsland, type WallFeature } from "./floorplan/types.js";
 import { buildSiteQuestions, geometrySuppressesIntake } from "./design/site-questions.js";
-import { applyChatSiteAnswers, chatMentionsGeometry } from "./design/chat-site-answers.js";
+import { applyChatSiteAnswers, applyExtractedWalls, chatMentionsGeometry } from "./design/chat-site-answers.js";
 import {
-  applyChatApplianceAnswers, chatMentionsApplianceKinds, isConfirmAssumedAppliances,
+  applyChatApplianceAnswers, applyExtractedAppliances, chatMentionsApplianceKinds, isConfirmAssumedAppliances,
 } from "./design/chat-appliance-answers.js";
+import { extractGeometryFromChat } from "./design/llm-extract.js";
+import { justConfirmedNotes } from "./design/confirm-recap.js";
+import type { BlockedEdit } from "./design/confirm-lock.js";
 import { renderSiteDiagram } from "./render/site-diagram.js";
 import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
 import { floorplanTemplateById } from "./samples/templates.js";
+import { matchesKnownTemplate, normalizeExtractionWithTemplate } from "./floorplan/template-match.js";
 import {
   floorplanFirstWelcome, intakeSampleCards, reuploadPrompt, shouldSuggestReupload,
 } from "./floorplan/intake.js";
@@ -162,6 +171,11 @@ import {
   startSession, type OnboardingSession, type QuestionAnswer,
 } from "./spec/onboarding.js";
 import { blankTemplates, type ImportSources } from "./spec/import.js";
+import { parseJsonCatalog, parseXlsxCatalog, type JsonCatalogPayload, type UploadParseResult } from "./spec/catalog-upload.js";
+import { parsePdfCatalog, PdfCatalogExtractError } from "./spec/pdf-catalog-extract.js";
+import {
+  applyStandardDiscountPatch, companyStaffAgentReply, renderNextQuestionPrompt,
+} from "./agents/company-staff-agent.js";
 import type { CompanyOverrides } from "./render/templates.js";
 import { rtaIntro, rtaQuoteNote } from "./quote/rta-disclosure.js";
 import {
@@ -1150,6 +1164,10 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
 
   let designRequirements = conv.designRequirements;
 
+  // 本轮"刚记下"的具体数字（弱确认复述用）——在下面的块里算出来，
+  // 块结束后传给 orchestratorReply 的 intakeStatus。
+  let justConfirmedThisTurn: string[] = [];
+
   // 对话确认 Q# / 现场特征 / 家电 → 写入 FloorPlan
   // （无图时也要建壳；助手复述里的墙长/「推定可以」也要从历史回填，否则 Confirmed 空）
   {
@@ -1170,18 +1188,70 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       planChat = createChatSourcedFloorPlan(conv.id, at);
       await appCtx.repos.floorPlans.upsert(planChat);
     }
+    // 本轮开始前的快照——用来算"这一轮到底新记下了什么"（弱确认复述），
+    // 不是全量已确认清单（那个用 confirmedBriefs，下面已经在用）。
+    const planBeforeThisTurn = planChat;
+    // 本轮被"确认锁"拦下的修改尝试——不管是 LLM 抽取还是正则解析触发的，
+    // 都汇总到这一份列表里，用于下面推一句委婉拒绝+引导去已确认面板改。
+    const blockedEditsThisTurn: BlockedEdit[] = [];
     if (planChat) {
+      // LLM 结构化解析先"抢答"墙长/层高/家电——喂给它的是按角色打行标的
+      // 干净记录（CUSTOMER/ASSISTANT），不是下面 combined 那种把历史文本整段
+      // 拼起来的东西，这正是为了不让助手自己的举例/警告文案被当成数据
+      // （见 llm-extract.ts 头部注释的根因说明）。没配 LLM、或抽取失败/
+      // 返回不合法时，extractGeometryFromChat 原样返回 undefined，照旧退回
+      // 下面的正则解析——两条路径共用同一把"确认锁"（confirm-lock.ts），
+      // 已确认的字段谁都不能覆盖。
+      if (appCtx.llm) {
+        const turns = [...conv.messages.slice(-24).map(toHistory), { role: "user" as const, content: text }];
+        const extracted = await extractGeometryFromChat(appCtx.llm, turns);
+        if (extracted) {
+          if (extracted.wallRuns.length > 0 || extracted.ceilingHeightInches !== undefined) {
+            planChat = applyExtractedWalls(
+              planChat, extracted.wallRuns, extracted.ceilingHeightInches, at, blockedEditsThisTurn,
+            );
+            await appCtx.repos.floorPlans.upsert(planChat);
+          }
+          if (extracted.appliances.length > 0 || extracted.confirmAssumedAppliances) {
+            planChat = applyExtractedAppliances(
+              planChat, extracted.appliances, extracted.confirmAssumedAppliances, blockedEditsThisTurn,
+            );
+            await appCtx.repos.floorPlans.upsert(planChat);
+          }
+        }
+      }
+
       const siteQs = buildSiteQuestions(planChat, combined, language).questions;
       const siteApply = applyChatSiteAnswers(planChat, combined, at, siteQs);
       if (siteApply) {
         await appCtx.repos.floorPlans.upsert(siteApply.plan);
         planChat = siteApply.plan;
+        blockedEditsThisTurn.push(...siteApply.blockedEdits);
       }
       // 用累计文本：历史里的「assumed widths are fine」也能在本轮落库
       const appApply = applyChatApplianceAnswers(planChat, combined);
       if (appApply) {
         await appCtx.repos.floorPlans.upsert(appApply.plan);
         planChat = appApply.plan;
+        blockedEditsThisTurn.push(...appApply.blockedEdits);
+      }
+      // 客户想在对话里改一个已经确认过的数字——委婉拒绝，引导去"已确认"
+      // 面板手动改，不静默套用、也不假装没看见这次修改尝试。
+      if (blockedEditsThisTurn.length > 0) {
+        const lines = blockedEditsThisTurn.map((b) => language === "zh"
+          ? `${b.label}：已确认为 ${b.current}"，暂时没法在对话里直接改成 ${b.attempted}"`
+          : `${b.label}: already confirmed at ${b.current}", can't change it to ${b.attempted}" here`);
+        replies.push({
+          role: "assistant",
+          content: (language === "zh"
+            ? "这几项已经确认过了，对话里没法直接改：\n"
+            : "These are already confirmed and can't be changed in chat:\n")
+            + lines.join("\n")
+            + (language === "zh"
+              ? "\n如果确实要改，请到右边「已确认」面板里手动修改。"
+              : "\nIf you really need to change it, please edit it directly in the Confirmed panel on the right."),
+          at,
+        });
       }
       // 墙长 + 家电一旦齐：立刻报空间不足（禁止「收齐再拒绝」）
       if (planChat) {
@@ -1207,6 +1277,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
         }
       }
     }
+    justConfirmedThisTurn = justConfirmedNotes(planBeforeThisTurn, planChat, language);
   }
 
   // FR-22.2：可识别的会话纠错 → 该公司 L1 draft（禁写 L0 / published 价）
@@ -1291,6 +1362,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
               confirmedBriefs,
               floorPlanReady: planReady,
               readyToAskDesign: readinessPre.readyToAskDesign,
+              ...(justConfirmedThisTurn.length ? { justConfirmed: justConfirmedThisTurn } : {}),
             },
           });
         designRequirements = reply.requirements ?? designRequirements;
@@ -2416,6 +2488,159 @@ app.get("/api/quotes/:id/pdf", requireAccount, (c) => {
   });
 });
 
+/**
+ * 厂商会话 Type1 落地——客户请求到店/上门。
+ *
+ * 只促成一次邮件：把联系方式和已发出的报价一起递给厂商 `quoteEmail`，
+ * 不排班、不做地理覆盖校验，双方线下联系。只能对已经 `sent` 的报价发起——
+ * 发出前厂商压根没收到这个客户的线索，谈"到店/上门"没有意义。
+ */
+app.post("/api/quotes/:id/service-request", requireAccount, async (c) => {
+  const account = c.get("account");
+  const q = ownedQuote(c, param(c, "id"));
+  if (!q) return c.json({ error: "Quote not found" }, 404);
+  if (q.status !== "sent") {
+    return c.json({ error: `Quote status is ${q.status}; the quote must be sent to the seller first` }, 409);
+  }
+  if (q.serviceRequest) {
+    return c.json({ error: "A service request already exists for this quote", serviceRequest: q.serviceRequest }, 409);
+  }
+
+  const body = await jsonBody<{ serviceType: ServiceType; phone: string; email: string; note: string }>(c);
+  if (body.serviceType !== "showroom_visit" && body.serviceType !== "onsite_visit") {
+    return c.json({ error: "serviceType must be showroom_visit or onsite_visit" }, 400);
+  }
+  const phone = body.phone?.trim();
+  const email = body.email?.trim();
+  if (!phone && !email) {
+    return c.json({ error: "Provide at least a phone or an email so the seller can reach you" }, 400);
+  }
+  const customerContact = { ...(phone ? { phone } : {}), ...(email ? { email } : {}) };
+
+  const company = appCtx.repos.companies.byId(q.companyId);
+  const sender = resolveSenderIdentity();
+  const plan = planForConversation(q.conversationId);
+  const layout = plan ? storedLayoutFor(plan.id, q.companyId) : undefined;
+  const pdf = plan && layout ? renderQuotePdf(q, plan, layout, account) : undefined;
+
+  const outbound = buildServiceRequestEmail({
+    companyName: company?.name ?? q.companyId,
+    customerName: account.displayName,
+    customerAccountEmail: account.email,
+    serviceType: body.serviceType,
+    customerContact,
+    ...(body.note?.trim() ? { note: body.note.trim() } : {}),
+    quoteId: q.id,
+    quoteText: renderQuoteText(q),
+  }, sender);
+  outbound.to = company?.quoteEmail ?? "";
+  if (pdf) {
+    outbound.attachments = [{
+      filename: quoteFilename(q),
+      contentType: "application/pdf",
+      content: pdf.pdf.toString("base64"),
+      encoding: "base64",
+    }];
+  }
+
+  const sendResult = await sendEmail(outbound, {
+    sender,
+    ...(appCtx.mailTransport ? { transport: appCtx.mailTransport } : {}),
+  });
+  const at = now();
+  let outcome;
+  try {
+    outcome = recordServiceRequest(
+      q,
+      { serviceType: body.serviceType, customerContact, ...(body.note?.trim() ? { note: body.note.trim() } : {}) },
+      sendResult.delivered
+        ? { delivered: true }
+        : { delivered: false, error: "error" in sendResult ? sendResult.error : "Unknown error" },
+      at,
+    );
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+  await appCtx.repos.quotes.update(outcome.quote.id, outcome.quote);
+  for (const e of outcome.events) await appCtx.repos.auditEvents.insert(e);
+
+  return c.json({
+    quote: outcome.quote,
+    dryRun: sendResult.dryRun,
+    ...(sendResult.delivered ? {} : { sendError: "error" in sendResult ? sendResult.error : "Unknown error" }),
+  });
+});
+
+/**
+ * 厂商员工确认到店/上门请求——发第二封邮件给客户。
+ *
+ * 鉴权走 `requireCompany`：先证明是这家公司，再操作它自己的报价单。
+ */
+app.post("/api/company/:companyId/quotes/:id/confirm-service", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const q = appCtx.repos.quotes.byId(param(c, "id"));
+  if (!q || q.companyId !== companyId) return c.json({ error: "Quote not found" }, 404);
+  if (!q.serviceRequest) return c.json({ error: "This quote has no service request to confirm" }, 409);
+  if (q.serviceRequest.confirmedAt) {
+    return c.json({ error: "Already confirmed", serviceRequest: q.serviceRequest }, 409);
+  }
+
+  const company = appCtx.repos.companies.byId(companyId);
+  const account = appCtx.repos.accounts.byId(q.customerAccountId);
+  const to = q.serviceRequest.customerContact.email ?? account?.email;
+  if (!to) {
+    return c.json({ error: "Customer left no email; confirm by phone directly and note it offline" }, 409);
+  }
+
+  const sender = resolveSenderIdentity();
+  const plan = planForConversation(q.conversationId);
+  const layout = plan ? storedLayoutFor(plan.id, companyId) : undefined;
+  const pdf = plan && layout && account ? renderQuotePdf(q, plan, layout, account) : undefined;
+
+  const outbound = buildServiceConfirmationEmail({
+    companyName: company?.name ?? companyId,
+    customerName: account?.displayName ?? "there",
+    serviceType: q.serviceRequest.serviceType,
+    ...(company?.storeAddress ? { storeAddress: company.storeAddress } : {}),
+    quoteId: q.id,
+  }, sender);
+  outbound.to = to;
+  if (pdf) {
+    outbound.attachments = [{
+      filename: quoteFilename(q),
+      contentType: "application/pdf",
+      content: pdf.pdf.toString("base64"),
+      encoding: "base64",
+    }];
+  }
+
+  const sendResult = await sendEmail(outbound, {
+    sender,
+    ...(appCtx.mailTransport ? { transport: appCtx.mailTransport } : {}),
+  });
+  const at = now();
+  let outcome;
+  try {
+    outcome = recordServiceConfirmation(
+      q,
+      sendResult.delivered
+        ? { delivered: true }
+        : { delivered: false, error: "error" in sendResult ? sendResult.error : "Unknown error" },
+      at,
+    );
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+  await appCtx.repos.quotes.update(outcome.quote.id, outcome.quote);
+  for (const e of outcome.events) await appCtx.repos.auditEvents.insert(e);
+
+  return c.json({
+    quote: outcome.quote,
+    dryRun: sendResult.dryRun,
+    ...(sendResult.delivered ? {} : { sendError: "error" in sendResult ? sendResult.error : "Unknown error" }),
+  });
+});
+
 app.get("/api/quotes/:id/audit", requireAccount, (c) => {
   const q = ownedQuote(c, param(c, "id"));
   if (!q) return c.json({ error: "Quote not found" }, 404);
@@ -2485,6 +2710,14 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
       },
       file.image,
       appCtx.vision,
+      // 草图先判断像不像 5 种标准布局之一（FLOORPLAN_TEMPLATES）；猜中且够可信，
+      // 就按该布局的墙段框架去标注图上已读到的尺寸、只追问框架里缺的那几段——
+      // 而不是把草图当完全自由的墙段列表从零问起。猜不中/没猜/置信度不够时
+      // 返回 undefined，parse.ts 原样退回既有的自由抽取路径。
+      (raw, lang) => {
+        const template = matchesKnownTemplate(raw);
+        return template ? normalizeExtractionWithTemplate(raw!, template, lang) : undefined;
+      },
     );
     plan = outcome.plan;
     extraction = outcome.extraction;
@@ -2524,10 +2757,10 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
   if (needsManual) {
     assistantBits.push(msg(fpLang,
       "Answer in text only — send wall lengths and ceiling in one message "
-        + "(e.g. `North 84\", East 108\", ceiling 96\"`). "
+        + "(e.g. `<wall name> <inches>\", <wall name> <inches>\", ceiling <inches>\"`). "
         + "Then confirm each appliance with its width so we can ask whether to draw.",
       "请只用文字回答——一条消息补齐墙长和层高"
-        + "（例如：`North 84\"，East 108\"，层高 96\"`）。"
+        + "（例如：`<墙名> <英寸数>寸，<墙名> <英寸数>寸，层高 <英寸数>寸`）。"
         + "随后确认家电（或说「家电后定」），即可问你要不要出图。"));
   } else if (sitePrompts.length) {
     assistantBits.push(msg(fpLang,
@@ -2811,6 +3044,8 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
       kind?: "wall" | "island"; depth?: number;
     };
     addFeature: { wallRunId: string; kind: WallFeature["kind"]; offset: number; width: number };
+    /** 改一个已存在特征的位置/宽度（已确认面板用，不是新加一个）。 */
+    editFeature: { wallRunId: string; featureId: string; offset?: number; width?: number };
     /**
      * 这个厨房里的家电（FR-3.2）。
      *
@@ -2850,6 +3085,22 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
       next = addFeature(next, f.wallRunId, {
         kind: f.kind, offset: f.offset, width: f.width,
       }, now());
+    }
+    if (body.editFeature) {
+      const e = body.editFeature;
+      const run = next.parsedGeometry.wallRuns.find((r) => r.id === e.wallRunId);
+      if (!run) return c.json({ error: `Wall run ${e.wallRunId} not found` }, 400);
+      const feature = run.features.find((f) => f.id === e.featureId);
+      if (!feature) return c.json({ error: `Feature ${e.featureId} not found on ${run.label}` }, 400);
+      const offset = e.offset ?? feature.offset;
+      const width = e.width ?? feature.width;
+      if (offset < 0 || offset + width > run.length) {
+        return c.json({
+          error: `${feature.kind} at ${formatInches(offset)}–${formatInches(offset + width)} ` +
+            `is outside ${run.label} (${formatInches(run.length)})`,
+        }, 400);
+      }
+      next = updateFeature(next, e.wallRunId, e.featureId, { offset: e.offset, width: e.width }, now());
     }
     if (body.appliances) {
       if (!Array.isArray(body.appliances)) {
@@ -3782,6 +4033,195 @@ app.post("/api/company/:companyId/spec/sessions/:sessionId/publish", requireComp
     canQuote: blockers.length === 0,
     ...(blockers.length ? { blockers } : {}),
     specCompleteness: readiness,
+  }, 201);
+});
+
+// ── 厂商员工会话（Type2 A）——对话式初始化 ──────────────────────────────────
+//
+// 不是上面表单 API 的替代——是同一套底层状态机的另一个入口。员工在这里聊出来
+// 的答案，落地方式跟表单提交完全一样（同一个 ingestTemplates/answerQuestion）。
+// 这里只是把"数据怎么递进来"从"填表"换成"聊天 + 发文件"。厂商注册后没有
+// 单独的表单页面——门店地址、标准折扣、产品目录都是从这条入口进来的。
+
+function staffThreadFor(companyId: string): CompanyStaffThread {
+  return appCtx.repos.companyStaffThreads.byId(companyId)
+    ?? { id: companyId, companyId, messages: [], updatedAt: now() };
+}
+
+app.get("/api/company/:companyId/staff-chat", requireCompany, (c) => {
+  return c.json({ thread: staffThreadFor(param(c, "companyId")) });
+});
+
+/** 员工发一句话；后台 Agent 答复，并把能落地的意图（地址/折扣/追问答案）直接写库。 */
+app.post("/api/company/:companyId/staff-chat/messages", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const company = appCtx.repos.companies.byId(companyId);
+  if (!company) return c.json({ error: "Company not found" }, 404);
+  const body = await jsonBody<{ text: string }>(c);
+  const text = body.text?.trim();
+  if (!text) return c.json({ error: "text is required" }, 400);
+
+  const thread = staffThreadFor(companyId);
+  const at = now();
+  const language = inferLanguageFromText(text) ?? DEFAULT_LANGUAGE;
+
+  const session = thread.activeOnboardingSessionId
+    ? appCtx.repos.onboardingSessions.byId(thread.activeOnboardingSessionId)
+    : undefined;
+  const bundle = session ? appCtx.repos.specBundles.byId(session.specVersionId) : undefined;
+
+  const outcome = await companyStaffAgentReply(
+    { client: appCtx.llm, company, session, bundle, language }, text, at,
+  );
+
+  let updatedCompany = company;
+  if (outcome.patch?.companyUpdate) {
+    updatedCompany = { ...company, ...outcome.patch.companyUpdate };
+    await appCtx.repos.companies.update(companyId, outcome.patch.companyUpdate);
+  }
+  if (outcome.patch?.discountRule) {
+    const specVersionId = company.currentPublishedSpecVersionId ?? session?.specVersionId;
+    const existingBundle = specVersionId ? appCtx.repos.specBundles.byId(specVersionId) : undefined;
+    if (!specVersionId || !existingBundle) {
+      return c.json({
+        error: "This company has no draft or published spec yet — import a catalog before setting a discount",
+      }, 409);
+    }
+    const discountRules = applyStandardDiscountPatch(
+      existingBundle.discountRules, specVersionId, companyId, outcome.patch.discountRule,
+    );
+    await appCtx.repos.specBundles.upsert({ ...existingBundle, discountRules });
+  }
+  let nextSession = session;
+  if (outcome.patch?.onboardingAnswer) {
+    nextSession = outcome.patch.onboardingAnswer.session;
+    await appCtx.repos.onboardingSessions.update(nextSession.id, nextSession);
+    await appCtx.repos.specBundles.upsert(outcome.patch.onboardingAnswer.bundle);
+  }
+
+  const staffMsg: CompanyStaffMessage = { role: "staff", content: text, at };
+  const assistantMsg: CompanyStaffMessage = {
+    role: "assistant",
+    content: outcome.reply,
+    at: now(),
+    ...(outcome.patch ? {
+      action: {
+        kind: outcome.patch.companyUpdate ? "profileUpdated" as const
+          : outcome.patch.discountRule ? "discountUpdated" as const
+          : "questionsAnswered" as const,
+      },
+    } : {}),
+  };
+  const nextThread: CompanyStaffThread = {
+    ...thread,
+    messages: [...thread.messages, staffMsg, assistantMsg],
+    updatedAt: assistantMsg.at,
+    ...(nextSession ? { activeOnboardingSessionId: nextSession.id } : {}),
+  };
+  await appCtx.repos.companyStaffThreads.upsert(nextThread);
+
+  return c.json({ thread: nextThread, company: updatedCompany });
+});
+
+/**
+ * 批量目录/价目表上传——Excel(.xlsx)/JSON 一等公民，PDF 走 LLM 抽取兜底。
+ * Word/.txt 不支持：没有可依赖的表格结构，宁可让商家转存成 Excel。
+ *
+ * 接 multipart（字段名 `file`）或直接 JSON body（四/五张表的对象数组）。
+ */
+app.post("/api/company/:companyId/staff-chat/catalog", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const company = appCtx.repos.companies.byId(companyId);
+  if (!company) return c.json({ error: "Company not found" }, 404);
+
+  let parsed: UploadParseResult;
+  let filename = "upload.json";
+  try {
+    const contentType = c.req.header("content-type") ?? "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await c.req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) return c.json({ error: "No file field found in the upload (expected \"file\")" }, 400);
+      filename = file.name || filename;
+      const buffer = Buffer.from(await file.arrayBuffer());
+      if (/\.xlsx?$/i.test(filename)) {
+        parsed = parseXlsxCatalog(buffer);
+      } else if (/\.pdf$/i.test(filename)) {
+        parsed = await parsePdfCatalog(buffer, appCtx.llm);
+      } else if (/\.json$/i.test(filename)) {
+        parsed = parseJsonCatalog(JSON.parse(buffer.toString("utf-8")) as JsonCatalogPayload);
+      } else {
+        return c.json({
+          error: `Unsupported file type for "${filename}" — please upload .xlsx, .json, or .pdf. ` +
+            "Word/.txt are not supported: there is no reliable table structure to parse from them.",
+        }, 400);
+      }
+    } else {
+      parsed = parseJsonCatalog(await jsonBody<JsonCatalogPayload>(c));
+    }
+  } catch (e) {
+    if (e instanceof PdfCatalogExtractError) return c.json({ error: e.message, code: e.code }, 422);
+    return c.json({ error: `Could not read this file: ${e instanceof Error ? e.message : String(e)}` }, 400);
+  }
+
+  if (parsed.missingRequiredSheets.length) {
+    return c.json({
+      error: `Missing required tables: ${parsed.missingRequiredSheets.join(", ")}`,
+      unmatchedSheets: parsed.unmatchedSheets,
+    }, 422);
+  }
+
+  const thread = staffThreadFor(companyId);
+  let session = thread.activeOnboardingSessionId
+    ? appCtx.repos.onboardingSessions.byId(thread.activeOnboardingSessionId)
+    : appCtx.repos.onboardingSessions.all().find((s) => s.companyId === companyId && s.status !== "published");
+
+  if (!session) {
+    const versions = appCtx.repos.specVersions.all().filter((v) => v.companyId === companyId);
+    const started = startSession(companyId, now(), versions);
+    session = started.session;
+    await appCtx.repos.specVersions.insert(started.draftVersion);
+    await appCtx.repos.onboardingSessions.insert(session);
+  }
+
+  const previous = company.currentPublishedSpecVersionId
+    ? appCtx.repos.specBundles.byId(company.currentPublishedSpecVersionId)
+    : undefined;
+
+  let ingestResult;
+  try {
+    ingestResult = ingestTemplates(session, parsed.sources, now(), {
+      ...(previous ? { knownModules: previous.modules } : {}),
+    });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409);
+  }
+  await appCtx.repos.onboardingSessions.update(ingestResult.session.id, ingestResult.session);
+  await appCtx.repos.specBundles.upsert(ingestResult.bundle);
+
+  const summary = `Parsed "${filename}": ${ingestResult.importResult.stats.modulesImported} SKUs, ` +
+    `${ingestResult.importResult.stats.priceMatrixImported} price rows, ` +
+    `${ingestResult.session.unresolved.length} item(s) need review.` +
+    (parsed.unmatchedSheets.length ? ` (unrecognized tabs/keys: ${parsed.unmatchedSheets.join(", ")})` : "");
+  const systemMsg: CompanyStaffMessage = {
+    role: "system", content: summary, at: now(), action: { kind: "catalogImported" },
+  };
+  const assistantMsg: CompanyStaffMessage = {
+    role: "assistant", content: renderNextQuestionPrompt(ingestResult.session, DEFAULT_LANGUAGE), at: now(),
+  };
+  const nextThread: CompanyStaffThread = {
+    ...thread,
+    messages: [...thread.messages, systemMsg, assistantMsg],
+    activeOnboardingSessionId: ingestResult.session.id,
+    updatedAt: assistantMsg.at,
+  };
+  await appCtx.repos.companyStaffThreads.upsert(nextThread);
+
+  return c.json({
+    thread: nextThread,
+    session: ingestResult.session,
+    stats: ingestResult.importResult.stats,
+    unmatchedSheets: parsed.unmatchedSheets,
   }, 201);
 });
 

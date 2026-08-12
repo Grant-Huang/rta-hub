@@ -54,7 +54,10 @@ export type CallSite =
   | "layoutRevision"        // 自然语言修改要求 → 对排布的调整
   | "specTemplateParse"     // 非结构化价目表兜底解析（FR-2 降级路径）
   | "floorPlanExtract"      // 户型图抽取（FR-3）
-  | "designCritique";       // 运营侧 DesignCritic 挑刺（FR-21）
+  | "geometryExtract"       // 聊天里的墙长/层高/家电结构化抽取——正则解析引擎的 LLM 主路径
+  | "designCritique"        // 运营侧 DesignCritic 挑刺（FR-21）
+  | "companyStaffOnboardingAnswer" // 厂商员工会话：追问答案 → faceTemplateId/roles（Type2 A）
+  | "companyStaffProfileIntent";   // 厂商员工会话：门店地址/标准折扣意图抽取（Type2 A）
 
 /**
  * 调用点 → 层级。
@@ -69,7 +72,15 @@ export const CALL_SITE_TIER: Record<CallSite, ModelTier> = {
   layoutRevision: "reasoning",
   specTemplateParse: "reasoning",
   floorPlanExtract: "vision",
+  // 解析错了直接进几何数据（墙长/家电尺寸），代价与 designIntent/layoutRevision
+  // 是同一等级——排不下家电、装不上墙，客户要等出图才发现。
+  geometryExtract: "reasoning",
   designCritique: "reasoning",
+  // 答错脸型/能力标签会让排布算法每一版都错，与 geometryExtract 同一等级
+  companyStaffOnboardingAnswer: "reasoning",
+  // 标准折扣一旦记错，厂商 Agent 会直接把错的折后价说给真实客户——同样是
+  // 「错了不报错，只是一直错」的那类代价，不能按闲聊对待
+  companyStaffProfileIntent: "reasoning",
 };
 
 export interface TierConfig {

@@ -104,8 +104,8 @@ export function buildSiteQuestions(
       kind: "ceiling",
       mark: "Ceiling?",
       promptFor: (q) => msg(lang,
-        `Q${q}: What is the ceiling height in inches? (Reply e.g. "Q${q}: 96" or "ceiling 96")`,
-        `Q${q}: 层高多少英寸？（可直接回「Q${q}: 96」或「层高 96」）`),
+        `Q${q}: What is the ceiling height in inches? (Reply e.g. "Q${q}: <inches>" or "ceiling <inches>")`,
+        `Q${q}: 层高多少英寸？（可直接回「Q${q}: <英寸数>」或「层高 <英寸数>」）`),
     });
   }
 
@@ -193,10 +193,10 @@ export function buildSiteQuestions(
       mark: "Appliances?",
       promptFor: (q) => msg(lang,
         `Q${q}: Which appliances will be in this kitchen? `
-          + `Give each with width — e.g. fridge 33", stove 30", dishwasher 24" `
+          + `Give each with width — e.g. \`<appliance> <inches>"\` `
           + `(sizes are required before design).`,
         `Q${q}: 这间厨房有哪些家电？`
-          + `请带宽度，例如：冰箱 33"、灶具 30"、洗碗机 24"（出图前必须明确尺寸）。`),
+          + `请带宽度，例如：\`<家电名称> <英寸数>寸\`（出图前必须明确尺寸）。`),
     });
   } else {
     for (const a of assumedOnes(appliances)) {

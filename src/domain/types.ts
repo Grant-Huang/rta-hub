@@ -147,6 +147,39 @@ export interface CompanyEngagement {
   messages: EngagementMessage[];
 }
 
+// ── 厂商员工会话（Type2）─────────────────────────────────────────────────
+//
+// 跟 CompanyEngagement（厂商 ↔ 某个客户项目的协作）是两回事：这是厂商员工
+// 自己跟后台 Agent 聊天的地方——用来登记基本信息（门店地址、标准折扣）、
+// 上传/复核产品目录，以及（后续）配置 Agent 人设与知识库。厂商注册后没有
+// 单独的表单页面，登记信息这件事本身就是在这里聊出来的。
+//
+// 每家公司只有一条常驻线程（不是每次开新的），复核入驻队列时用同一条线程
+// 接着聊，符合「昨天填到一半，今天回来接着填」的真实使用节奏。
+
+export type CompanyStaffMessageRole = "staff" | "assistant" | "system";
+
+export interface CompanyStaffMessage {
+  role: CompanyStaffMessageRole;
+  content: string;
+  at: Timestamp;
+  /** 本条消息触发的结构化动作（供前端渲染/审计，不是必须字段）。 */
+  action?: {
+    kind: "profileUpdated" | "discountUpdated" | "catalogImported" | "questionsAnswered";
+    detail?: string;
+  };
+}
+
+export interface CompanyStaffThread {
+  /** 等于 companyId——一家公司一条常驻线程,用同一个值兼作仓储主键。 */
+  id: string;
+  companyId: string;
+  messages: CompanyStaffMessage[];
+  /** 正在跟进的入驻/规格录入会话——有它时，员工的自然语言答案会被路由去答队列里的追问。 */
+  activeOnboardingSessionId?: string;
+  updatedAt: Timestamp;
+}
+
 /** 会话来源——生产 / 端到端模拟 / 集成测试（FR-21）。 */
 export type SessionOrigin = "production" | "simulate" | "test";
 
@@ -333,6 +366,14 @@ export interface CabinetCompany {
   quoteEmail: string;
   website?: string;
   contactName?: string;
+  /**
+   * 门店/展厅地址——「到店」场景要给客户一个能去的地方。
+   *
+   * 不建 Store/ServiceArea 之类的结构化地理模型：预约落地这一版刻意做得很轻
+   * （见 docs 里厂商会话 Type1 的设计），到店/上门都是系统牵线发一封邮件，
+   * 双方线下联系，所以这里只需要一段能直接印在邮件里的地址文本。
+   */
+  storeAddress?: string;
   province: Province;
   serviceAreas: string[];
   billingPlan: BillingPlan;
@@ -623,6 +664,16 @@ export interface DiscountRule {
   appliesToPriceGroupIds?: string[];
   stackable: boolean;
   description: string;
+  /**
+   * 厂商 Agent 在没有正式报价单时，可以主动引用这条规则给出折后参考价。
+   *
+   * 只对 `audience: "consumer"` + `kind: "percentOffList"` + 未按价格组细分
+   * （`appliesToPriceGroupIds` 留空）的规则有意义——厂商的「标准折扣」按设计
+   * 只支持全店统一一档，不支持分品类，所以每家公司至多一条规则该被标 true。
+   * 分档/按价格组细分的折扣只在正式 Quote 流程里参与计算，Agent 不会拿来
+   * 口头报价。
+   */
+  autoQuotable?: boolean;
 }
 
 export type ShippingRule =
@@ -761,18 +812,35 @@ export interface Quote {
   createdAt: Timestamp;
   validUntil: Timestamp;
   status: QuoteStatus;
+  /** 厂商会话 Type1：到店/上门落地请求（不做排班，只牵线两封邮件）。 */
+  serviceRequest?: QuoteServiceRequest;
+}
+
+/** 到店看样品，还是上门量尺——两者都不由系统排班，只促成一次邮件牵线。 */
+export type ServiceType = "showroom_visit" | "onsite_visit";
+
+export interface QuoteServiceRequest {
+  serviceType: ServiceType;
+  customerContact: { phone?: string; email?: string };
+  /** 客户发起请求时给厂商的一句话（如首选时间段），纯文本传达，系统不解析。 */
+  note?: string;
+  requestedAt: Timestamp;
+  /** 厂商员工确认后系统才发第二封邮件给客户；未确认前留空。 */
+  confirmedAt?: Timestamp;
 }
 
 export type QuoteAuditAction =
   | "created" | "revised" | "validationRejected" | "confirmed"
-  | "sent" | "sendFailed" | "suppressedDuplicateBilling" | "expired";
+  | "sent" | "sendFailed" | "suppressedDuplicateBilling" | "expired"
+  | "serviceRequested" | "serviceRequestFailed" | "serviceConfirmed" | "serviceConfirmFailed";
 
 export interface QuoteAuditEvent {
   id: string;
   quoteId: string;
   companyId: string;
   at: Timestamp;
-  actor: "customer" | "system" | "operator";
+  /** "company" = 厂商员工在厂商工作台/员工会话里做的动作（如确认到店/上门）。 */
+  actor: "customer" | "system" | "operator" | "company";
   action: QuoteAuditAction;
   /** 当时报价内容的哈希，事后争议裁定的凭据。 */
   contentHash: string;

@@ -8,13 +8,23 @@
  */
 import type { FloorPlan, WallFeatureKind, WallRun } from "../floorplan/types.js";
 import { addFeature, addWallRun, resolveCeilingHeight, resolveItem, resolveWallLength } from "../floorplan/parse.js";
+import { wallRunProvenance } from "../floorplan/design-input.js";
 import { compassWallsAdjacent } from "../layout/plan-model.js";
 import type { SiteQuestion } from "./site-questions.js";
+import type { BlockedEdit } from "./confirm-lock.js";
 
 const DEFAULT_PLUMBING_WIDTH = 24;
 const DEFAULT_WINDOW_WIDTH = 36;
 const DEFAULT_DOOR_WIDTH = 32;
 const DEFAULT_PLUMBING_OFFSET_RATIO = 0.4;
+
+/**
+ * 墙名/方位与数字之间容许的口语插入词——"North **about** 7 ft" 这类含糊表述
+ * 不该因为中间多了一个 "about"/"大概" 就让整段墙长解析失败（beginner 人设的
+ * 真实说法，见测试报告 Bug②）。
+ */
+const HEDGE_WORDS = "\\s*(?:(?:is|are|was|were|about|around|roughly|approx(?:imately)?|"
+  + "maybe|probably|like|大概|大约|差不多|将近|好像|可能)\\s*)?";
 
 export interface ParsedFeatureAnswer {
   wallRunId: string;
@@ -31,6 +41,8 @@ export type ChatSiteApplyKind = "plumbing" | "window" | "door" | "ceiling" | "wa
 export interface ChatSiteApplyResult {
   plan: FloorPlan;
   applied: ChatSiteApplyKind[];
+  /** 被"确认锁"拦下的修改尝试（已确认字段被聊天新数值撞上，未写入）。 */
+  blockedEdits: BlockedEdit[];
 }
 
 /** 从客户话术解析上下水位置；能落到某段墙才返回。 */
@@ -224,16 +236,41 @@ const ORIENT_LABEL: Record<string, string> = {
 };
 
 /**
+ * 已确认（无待处理项）的墙长被聊天新解析出的不同数值撞上时，不静默覆盖——
+ * 记一条 `BlockedEdit`，由上层引导客户去"已确认"面板手动改（见 `confirm-lock.ts`）。
+ * 墙段还没定长（`length === 0`）或还挂着待确认项时，照常写入，不算"改已确认的"。
+ */
+function tryResolveWallLength(
+  plan: FloorPlan,
+  runId: string,
+  inches: number,
+  at: string,
+  blocked: BlockedEdit[],
+): { plan: FloorPlan; changed: boolean } {
+  const run = plan.parsedGeometry.wallRuns.find((r) => r.id === runId);
+  if (!run || run.length === inches) return { plan, changed: false };
+  if (run.length > 0 && wallRunProvenance(plan, runId) === "customer") {
+    blocked.push({ kind: "wallLength", label: run.label, current: run.length, attempted: inches });
+    return { plan, changed: false };
+  }
+  return { plan: resolveWallLength(plan, runId, inches, at), changed: true };
+}
+
+/**
  * 手输墙长：`North 84"` / `left wall 12ft` / `南墙 120"` —— 识图失败或无图对话的主路径。
  * 若计划里还没有对应墙段，会按口语方向新建（L 型 left+back 等）。
+ *
+ * `blockedOut` 可选——传入一个数组来接收被"确认锁"拦下的修改尝试（不传不影响行为）。
  */
 export function applyChatWallLengths(
   plan: FloorPlan,
   text: string,
   at: string,
+  blockedOut?: BlockedEdit[],
 ): FloorPlan | undefined {
   let next = plan;
   let changed = false;
+  const blocked: BlockedEdit[] = [];
 
   // 1) 更新已有 label 匹配的墙
   for (const run of next.parsedGeometry.wallRuns) {
@@ -241,7 +278,7 @@ export function applyChatWallLengths(
     if (!lab) continue;
     const esc = lab.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(
-      `(?:^|[^\\w])${esc}\\s*(?:墙|wall|leg)?\\s*[:=]?\\s*(\\d+(?:\\.\\d+)?)`
+      `(?:^|[^\\w])${esc}\\s*(?:墙|wall|leg)?${HEDGE_WORDS}[:=]?\\s*(\\d+(?:\\.\\d+)?)`
         // 单位前的空白必须跟单位绑在一起，否则会吞掉「East 120 North 144」里下一墙前的空格
         + `(?:\\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm))?`
         + `(?!\\s*(?:["″]\\s*)?from)`,
@@ -250,17 +287,19 @@ export function applyChatWallLengths(
     const m = text.match(re);
     if (!m) continue;
     const n = parseWallLengthInches(m[1]!, m[2]);
-    if (n === undefined || run.length === n) continue;
-    next = resolveWallLength(next, run.id, n, at);
-    changed = true;
+    if (n === undefined) continue;
+    const r = tryResolveWallLength(next, run.id, n, at, blocked);
+    next = r.plan;
+    if (r.changed) changed = true;
   }
 
   // 2) 口语方向：left/back/long leg 等 → 新建或更新
   const mentionRe = new RegExp(
     `(?:^|[^\\w])(?:(left|right|back|front|long|short|north|south|east|west)\\s*(?:wall|leg)?`
-      + `|(?:wall\\s*)?([A-D])`
+      // 「wall A」「A墙」「A 墙」——字母后可选紧跟中文「墙」（口语常见写法，非「wall A: 120」不受影响）
+      + `|(?:wall\\s*)?([A-D])\\s*墙?`
       + `|([东西南北左右前后])(?:侧)?墙)`
-      + `\\s*[:=]?\\s*(\\d+(?:\\.\\d+)?)`
+      + `${HEDGE_WORDS}[:=]?\\s*(\\d+(?:\\.\\d+)?)`
       + `(?:\\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm))?`
       + `(?!\\s*(?:["″]\\s*)?from)`,
     "gi",
@@ -279,10 +318,9 @@ export function applyChatWallLengths(
       r.label.toLowerCase() === label.toLowerCase()
       || (key && new RegExp(`^${key}\\b`, "i").test(r.label)));
     if (existing) {
-      if (existing.length !== inches) {
-        next = resolveWallLength(next, existing.id, inches, at);
-        changed = true;
-      }
+      const r = tryResolveWallLength(next, existing.id, inches, at, blocked);
+      next = r.plan;
+      if (r.changed) changed = true;
       continue;
     }
     next = addWallRun(next, {
@@ -312,10 +350,9 @@ export function applyChatWallLengths(
         const existing = next.parsedGeometry.wallRuns.find((r) =>
           r.label.toLowerCase() === label.toLowerCase());
         if (existing) {
-          if (existing.length !== inches) {
-            next = resolveWallLength(next, existing.id, inches, at);
-            changed = true;
-          }
+          const r = tryResolveWallLength(next, existing.id, inches, at, blocked);
+          next = r.plan;
+          if (r.changed) changed = true;
         } else {
           next = addWallRun(next, {
             label,
@@ -348,10 +385,9 @@ export function applyChatWallLengths(
           const existing = next.parsedGeometry.wallRuns.find((r) =>
             r.label.toLowerCase() === label.toLowerCase());
           if (existing) {
-            if (existing.length !== inches) {
-              next = resolveWallLength(next, existing.id, inches, at);
-              changed = true;
-            }
+            const r = tryResolveWallLength(next, existing.id, inches, at, blocked);
+            next = r.plan;
+            if (r.changed) changed = true;
           } else {
             next = addWallRun(next, {
               label,
@@ -377,7 +413,61 @@ export function applyChatWallLengths(
     }
   }
 
+  if (blockedOut) {
+    // 同一面墙可能同时命中「标签匹配」与「口语方位」两条规则，被拦下的是
+    // 同一次修改尝试——按 (墙名, 想改成的值) 去重，不重复上报。
+    const seen = new Set<string>();
+    for (const b of blocked) {
+      const key = `${b.label} ${b.attempted}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      blockedOut.push(b);
+    }
+  }
   return changed ? next : undefined;
+}
+
+/**
+ * 把 LLM 结构化抽取（`llm-extract.ts`）的墙长/层高结果写入 FloorPlan——
+ * 与正则路径（`applyChatWallLengths`）共用同一把"确认锁"，已确认的墙长
+ * 不会被 LLM 的结果覆盖，跟被正则覆盖一样都要拦下来。
+ *
+ * 层高沿用现有规则：只在还没设置时才写入（一旦设置过，聊天路径——不管
+ * 正则还是 LLM——都不再碰它，见 `applyChatSiteAnswers` 里对应的判断）。
+ */
+export function applyExtractedWalls(
+  plan: FloorPlan,
+  wallRuns: readonly { label: string; lengthInches: number }[],
+  ceilingHeightInches: number | undefined,
+  at: string,
+  blockedOut?: BlockedEdit[],
+): FloorPlan {
+  let next = plan;
+  const blocked: BlockedEdit[] = [];
+
+  for (const w of wallRuns) {
+    const existing = next.parsedGeometry.wallRuns.find(
+      (r) => r.label.toLowerCase() === w.label.toLowerCase(),
+    );
+    if (existing) {
+      const r = tryResolveWallLength(next, existing.id, w.lengthInches, at, blocked);
+      next = r.plan;
+    } else {
+      next = addWallRun(next, {
+        label: w.label,
+        length: w.lengthInches,
+        startsAtCorner: shouldJoinNewWall(next, w.label),
+        endsAtCorner: false,
+      }, at);
+    }
+  }
+
+  if (ceilingHeightInches !== undefined && next.parsedGeometry.ceilingHeight == null) {
+    next = resolveCeilingHeight(next, ceilingHeightInches, at);
+  }
+
+  if (blockedOut) blockedOut.push(...blocked);
+  return next;
 }
 
 /** 罗盘相对墙（东西对望）不得当成内墙角相接，否则会画出假 L 并把方位画反。 */
@@ -397,6 +487,8 @@ export function chatMentionsGeometry(text: string): boolean {
   }
   if (/[东西南北左右前后](?:侧)?墙/.test(text) && /\d/.test(text)) return true;
   if (/\b(?:wall\s*)?[A-D]\b\s*[:=]?\s*\d+/i.test(text)) return true;
+  // 「A墙120」——字母直接接中文「墙」，不带空格/冒号（口语常见，非「wall A」也非方位墙）
+  if (/\b[A-D]\s*墙/i.test(text) && /\d/.test(text)) return true;
   if (/\b(?:North|South|East|West)\s*[:=]?\s*\d+/i.test(text)) return true;
   // 快捷回答：One wall ~12 ft / 两面墙各 10 尺
   if (/(?:one\s+wall|two\s+walls?|一面墙|两面墙)/i.test(text) && /\d/.test(text)) return true;
@@ -417,6 +509,7 @@ export function applyChatSiteAnswers(
 ): ChatSiteApplyResult | undefined {
   let next = plan;
   const applied: ChatSiteApplyKind[] = [];
+  const blockedEdits: BlockedEdit[] = [];
 
   if (siteQuestions && siteQuestions.length > 0) {
     const numbered = applyNumberedSiteAnswers(next, text, at, siteQuestions);
@@ -428,7 +521,7 @@ export function applyChatSiteAnswers(
     }
   }
 
-  const walls = applyChatWallLengths(next, text, at);
+  const walls = applyChatWallLengths(next, text, at, blockedEdits);
   if (walls) {
     next = walls;
     applied.push("wallLength");
@@ -477,8 +570,8 @@ export function applyChatSiteAnswers(
     }
   }
 
-  if (applied.length === 0) return undefined;
-  return { plan: next, applied };
+  if (applied.length === 0 && blockedEdits.length === 0) return undefined;
+  return { plan: next, applied, blockedEdits };
 }
 
 /**
@@ -577,7 +670,7 @@ function applyNumberedSiteAnswers(
   }
 
   if (applied.length === 0) return undefined;
-  return { plan: next, applied };
+  return { plan: next, applied, blockedEdits: [] };
 }
 
 function mentionsPlumbing(text: string): boolean {

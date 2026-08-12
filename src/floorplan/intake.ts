@@ -47,17 +47,21 @@ export function shouldSuggestReupload(
 /** 开场欢迎语：先问户型图 / 手绘 / 设计草图。 */
 export function floorplanFirstWelcome(lang: UiLanguage = DEFAULT_LANGUAGE): string {
   return msg(lang,
-    "Hi — I'm your cabinet design assistant. Let's start with the kitchen site:\n"
-      + "1. Do you have a floor plan / photo of the kitchen layout? If yes, tap + to upload.\n"
-      + "2. If not, you can hand-sketch from the example (wall lengths + openings + ceiling) and upload.\n"
-      + "3. Optional: already have a rough design idea (fridge / sink / cooktop)? Upload a sketch too — see the design example.\n\n"
-      + "We'll turn your sketch into an editable block diagram to discuss. Style, budget, and province can come next.\n"
+    "Hi — I'm your cabinet design assistant. Let's start with the kitchen site — two equally good ways to begin, pick whichever is faster for you:\n"
+      + "1. **Upload a floor plan / hand sketch** — tap + (see the example below for what to mark: wall lengths + openings + ceiling). "
+      + "If it matches one of the 5 common layouts, we'll spot that and only ask about what the sketch didn't show clearly.\n"
+      + "2. **Or just pick the layout that looks like yours** — tap \"looks like mine\" on one of the 5 layout examples below "
+      + "(one-wall / galley / L-shape / L-shape + island / U-shape). No sketching needed — we'll ask for that layout's specific wall lengths next.\n"
+      + "Optional: already have a rough design idea (fridge / sink / cooktop)? Upload a sketch too — see the design example.\n\n"
+      + "We'll turn what we get into an editable block diagram to discuss. Style, budget, and province can come next.\n"
       + "For a specific seller, @ the company name.",
-    "你好，我是橱柜设计顾问。先从厨房现场开始：\n"
-      + "1. 有户型图/平面照片吗？有的话点 + 上传。\n"
-      + "2. 没有的话，可对照示例手绘简图（墙长、开口、层高）再上传。\n"
-      + "3. 可选：已有初步布置想法（冰箱/水槽/灶台）？也可上传设计草图——见设计示例。\n\n"
-      + "上传后我会用统一的柜块拼接图复述现场，方便一起改尺寸和布局。风格、预算、省份稍后再聊。\n"
+    "你好，我是橱柜设计顾问。先从厨房现场开始——两种方式同样好用，哪个方便就用哪个：\n"
+      + "1. **上传户型图/手绘简图** —— 点 + 上传（下面有示例，标注墙长、开口、层高）。"
+      + "如果看起来像 5 种常见布局里的一种，系统会认出来，只追问草图上没读清楚的部分。\n"
+      + "2. **或者直接选一个最像自己家的布局** —— 在下面 5 张布局示例上点「我家像这个」"
+      + "（单壁型 / 走廊型 / L型 / L型+岛台 / U型）。不用手绘，选完直接问这个布局对应的具体墙长。\n"
+      + "可选：已有初步布置想法（冰箱/水槽/灶台）？也可上传设计草图——见设计示例。\n\n"
+      + "拿到信息后我会用统一的柜块拼接图复述现场，方便一起改尺寸和布局。风格、预算、省份稍后再聊。\n"
       + "点名某家公司用 @公司名。");
 }
 

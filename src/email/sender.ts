@@ -12,7 +12,7 @@
  *     `EmailSubscription.status === "active"` 的地址；
  *   - `LeadEmail` 是客户主动发起的一次性询价，不需要退订链接，但仍需身份披露。
  */
-import type { EmailSubscription } from "../domain/types.js";
+import type { EmailSubscription, ServiceType } from "../domain/types.js";
 
 export type EmailKind = "lead" | "invite" | "mailing";
 
@@ -311,6 +311,102 @@ export function buildInviteEmail(input: InviteEmailInput, sender: SenderIdentity
     subject: "RTA-Hub partnership opportunity",
     text,
     unsubscribeUrl: input.unsubscribeUrl,
+  };
+}
+
+function serviceTypeLabel(kind: ServiceType): string {
+  return kind === "showroom_visit" ? "Showroom visit" : "On-site measurement";
+}
+
+export interface ServiceRequestEmailInput {
+  companyName: string;
+  customerName: string;
+  /** 客户平台账号邮箱——即便客户在这条请求里留了别的联系方式，也一并给出作为兜底。 */
+  customerAccountEmail: string;
+  serviceType: ServiceType;
+  customerContact: { phone?: string; email?: string };
+  note?: string;
+  quoteId: string;
+  quoteText: string;
+}
+
+/**
+ * 厂商会话 Type1 落地——客户请求到店/上门（发给厂商 quoteEmail）。
+ *
+ * 系统只负责牵线：把客户联系方式和已确认报价一起递过去，后续约时间
+ * 由双方线下联系，这里不做任何排班。
+ */
+export function buildServiceRequestEmail(
+  input: ServiceRequestEmailInput,
+  sender: SenderIdentity,
+): OutboundEmail {
+  const label = serviceTypeLabel(input.serviceType);
+  const text = [
+    `Hello ${input.companyName} team,`,
+    "",
+    `A customer (${input.customerName}) confirmed quote ${input.quoteId} and requested: ${label}.`,
+    "",
+    ...(input.note?.trim() ? [`Customer note: ${input.note.trim()}`, ""] : []),
+    "Customer contact:",
+    ...(input.customerContact.phone ? [`Phone: ${input.customerContact.phone}`] : []),
+    ...(input.customerContact.email ? [`Email: ${input.customerContact.email}`] : []),
+    `Platform account email: ${input.customerAccountEmail}`,
+    "",
+    "Quote details:",
+    input.quoteText,
+    "",
+    "Please reach out to the customer directly to arrange a time — this platform does not manage scheduling. " +
+      "Once arranged, confirm the request from your company dashboard so the customer gets a confirmation email.",
+    "",
+    "———",
+    `${sender.name}`,
+    sender.contact ? `Contact: ${sender.contact}` : "",
+    sender.email ? `Email: ${sender.email}` : "",
+  ].filter((l) => l !== undefined).join("\n");
+
+  return {
+    kind: "lead",
+    to: "",
+    subject: `[${label} request] Quote ${input.quoteId}`,
+    text,
+  };
+}
+
+export interface ServiceConfirmationEmailInput {
+  companyName: string;
+  customerName: string;
+  serviceType: ServiceType;
+  storeAddress?: string;
+  quoteId: string;
+}
+
+/** 厂商员工确认到店/上门请求后，发给客户的确认邮件（附件在调用方拼）。 */
+export function buildServiceConfirmationEmail(
+  input: ServiceConfirmationEmailInput,
+  sender: SenderIdentity,
+): OutboundEmail {
+  const label = serviceTypeLabel(input.serviceType);
+  const text = [
+    `Hello ${input.customerName},`,
+    "",
+    `${input.companyName} has confirmed your ${label.toLowerCase()} request for quote ${input.quoteId}.`,
+    ...(input.serviceType === "showroom_visit" && input.storeAddress?.trim()
+      ? [`Store address: ${input.storeAddress.trim()}`]
+      : []),
+    "",
+    "They will reach out directly to arrange a time — this platform does not manage scheduling.",
+    "",
+    "———",
+    `${sender.name}`,
+    sender.contact ? `Contact: ${sender.contact}` : "",
+    sender.email ? `Email: ${sender.email}` : "",
+  ].filter((l) => l !== undefined).join("\n");
+
+  return {
+    kind: "lead",
+    to: "",
+    subject: `[Confirmed] ${label} · Quote ${input.quoteId}`,
+    text,
   };
 }
 
