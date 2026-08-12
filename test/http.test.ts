@@ -679,10 +679,12 @@ const TRADE = "ca_demo_trade";
  * 墙长给 192"——见 fr17-fr18-session.test.ts 同名函数上的注释：144" 留了上下水
  * 净空后放不下冰箱+灶具，这是家电落位算法的正确行为，不是 bug。
  */
-async function seedDesignIntake(conversationId: string, accountId: string, floorPlanId: string) {
+async function seedDesignIntake(
+  conversationId: string, accountId: string, floorPlanId: string, wallLength = 204,
+) {
   const added = await req(`/api/floorplans/${floorPlanId}/resolve`, {
     method: "POST", accountId,
-    body: JSON.stringify({ addRun: { label: "North", length: 204 } }),
+    body: JSON.stringify({ addRun: { label: "North", length: wallLength } }),
   });
   const runId = (await added.json() as {
     floorPlan: { parsedGeometry: { wallRuns: { id: string }[] } };
@@ -715,7 +717,7 @@ async function seedDesignIntake(conversationId: string, accountId: string, floor
   return runId;
 }
 
-async function readyProject(accountId: string, appliances?: unknown[]) {
+async function readyProject(accountId: string, appliances?: unknown[], wallLength = 204) {
   const convRes = await req("/api/conversations", { method: "POST", accountId });
   const { conversation } = await convRes.json() as { conversation: { id: string } };
   const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
@@ -723,11 +725,20 @@ async function readyProject(accountId: string, appliances?: unknown[]) {
     body: JSON.stringify({ fileName: "k.png", mimeType: "image/png", sizeBytes: 1 }),
   });
   const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
-  await seedDesignIntake(conversation.id, accountId, floorPlan.id);
+  await seedDesignIntake(conversation.id, accountId, floorPlan.id, wallLength);
   if (appliances) {
     await req(`/api/floorplans/${floorPlan.id}/resolve`, {
       method: "POST", accountId, body: JSON.stringify({ appliances }),
     });
+    // 客户没给宽度的家电走推定值——这不该静默放行，也不该卡死出图；
+    // 「已确认」面板的确认动作落地成这句话（与真实客户在聊天里说
+    // 「assumed widths are fine」走同一条路径，见 chat-appliance-answers.ts）。
+    if (appliances.some((a) => !(a as { width?: number }).width)) {
+      await req(`/api/conversations/${conversation.id}/messages`, {
+        method: "POST", accountId,
+        body: JSON.stringify({ text: "Assumed widths are fine." }),
+      });
+    }
   }
   // 走完整阶段：客户点头 → 全局俯视图 → 认可排布 → 才出四视图
   await advance(conversation.id, accountId, "consent");
@@ -832,10 +843,12 @@ test("推定的家电尺寸要跟着**报价单**一起走，不能只写在图�
   // SCENARIOS 场景 J：客户对烤箱选了「我不确定」→ 走常见默认值，但**报价单上
   // 要如实写「烤箱按 30" 预留」**。报价单是客户拿去下单的那一份；只在图纸说明里
   // 说过一次，订柜的人看不到，柜子做出来装不进去。
+  // 204" 是放 fridge+range+dishwasher 三件套的下限（见 seedDesignIntake 注释）；
+  // 这里在同一面墙上还要加一台烤箱，204" 放不下，给一面更长的墙
   const { conversationId, layout } = await readyProject(CONSUMER, [
     { kind: "refrigerator", width: 33 },  // 客户给的尺寸
     { kind: "wallOven" },                 // 「不确定」→ 推定
-  ]);
+  ], 264);
   const res = await req("/api/quotes", {
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({
