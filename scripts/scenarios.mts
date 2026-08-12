@@ -568,12 +568,17 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
     },
     {
       id: "D", name: "大开间 · 一字型（尺寸上界）+ 门洞", shape: "一字型",
-      covers: "很长的单墙（216 英寸）、墙上有门洞、没有窗（不能编一个不存在的参照物）",
+      covers: "很长的单墙（252 英寸）、墙上有门洞、没有窗（不能编一个不存在的参照物）",
       accountType: "consumer",
-      turns: ["老房子改造，厨房是个长条", "一面墙十八尺，中间有个门通餐厅", "预算还没想好"],
+      turns: ["老房子改造，厨房是个长条", "一面墙二十一尺，中间有个门通餐厅", "预算还没想好"],
       ceilingHeight: 96,
       walls: [{
-        label: "南墙", length: 216,
+        // 门把墙劈成两段可用区：门前一段留给水槽（含上下水），门后一段留给
+        // 冰箱+灶具——216" 时门后只剩 ~85"，冰箱(38"含落台)+灶具(57"含两侧落台)
+        // 最少要 ~98" 才放得下，差着一口气放不下，这是户型本身给得不够，
+        // 不是排布算法的问题（同类先例见场景 C 的墙长注释）。加长墙、门的
+        // 相对位置不变，"很长的单墙+门洞"这个测试点不受影响。
+        label: "南墙", length: 252,
         features: [
           { kind: "door", offset: 96, width: 32 },
           { kind: "plumbing", offset: 30, width: 24 },
@@ -669,13 +674,18 @@ function deterministicScenarios(input: GenerateInput): Scenario[] {
       accountType: "consumer",
       turns: [
         "老公寓厨房，进门就是灶台",
-        "L 型，长边十二尺，短边七尺半，进门的门洞紧挨着墙角",
+        "L 型，长边二十四尺，短边七尺半，进门的门洞紧挨着墙角",
         "北欧风，预算一万以内，BC 省",
       ],
       ceilingHeight: 96,
       walls: [
         {
-          label: "西墙", length: 144,
+          // 窗+上下水占了 66"-96" 这一段，墙角再让掉一段转角柜虚位——留给
+          // 冰箱+灶具的只有窗前 66" 和窗后到墙角前的一截。原来 144" 时窗后
+          // 剩的那一截连灶具最少需要的 57" 落台区都不够，两台家电压根凑不出
+          // 合格位置，会在出图前就被拦住，测不到本场景真正要测的 SR-G4/SR-G5
+          // 门洞顶墙角。加长这面墙，短边门洞的位置和让位关系都不变。
+          label: "西墙", length: 288,
           features: [
             { kind: "window", offset: 66, width: 30 },
             { kind: "plumbing", offset: 72, width: 24 },

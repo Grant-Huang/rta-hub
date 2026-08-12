@@ -239,6 +239,32 @@ export function planAppliances(
     push(soft, run.id, x, w); // 家电不能占，但它是台面——落台区可以延伸过去
   }
 
+  /**
+   * 新家电占的这块地方，会不会把**已经落位**的家电的落台区挤穿。
+   *
+   * `findSpot` 落位新家电时只校验它自己的落台区（`landingOk`），从不回头看
+   * 已经放好的家电——贪心逐个摆的代价：冰箱先落位时两侧空间够、通过校验，
+   * 灶具后落位时只顾自己的次要侧够 12"，正好占掉冰箱和灶具之间的公共缝隙，
+   * 把冰箱唯一的落台区压到 15" 门槛以下——而这发生在冰箱早就"通过"之后，
+   * 没有人会再查一遍。落位阶段必须双向校验，否则这条硬约束只对"先摆的赢"。
+   */
+  const breaksExistingLanding = (runId: string, x: number, width: number): boolean => {
+    const run = runs.find((r) => r.id === runId);
+    if (!run) return false;
+    for (const p of placed) {
+      if (p.wallRunId !== runId) continue;
+      const req = LANDING[p.spec.kind];
+      if (!req) continue;
+      const blockers = [
+        ...(hard.get(runId) ?? []),
+        ...(TALL_APPLIANCE.has(p.spec.kind) ? windowSpans(runId) : []),
+        { x, width },
+      ];
+      if (!landingOk(run, p.x, p.width, p.spec.kind, blockers)) return true;
+    }
+    return false;
+  };
+
   for (const spec of appliances) {
     if (PLACED_WITH_SINK.includes(spec.kind)) continue; // 由水槽带着走
     if (spec.kind === "rangeHood") continue;            // 跟着灶台，最后处理
@@ -248,7 +274,8 @@ export function planAppliances(
     const tall = TALL_APPLIANCE.has(spec.kind);
     const overlapsHere = (runId: string, x: number, width: number) =>
       overlaps(runId, x, width)
-      || (tall && windowSpans(runId).some((t) => x < t.x + t.width && x + width > t.x));
+      || (tall && windowSpans(runId).some((t) => x < t.x + t.width && x + width > t.x))
+      || breaksExistingLanding(runId, x, width);
     const blockersHere = (runId: string) => [
       ...(hard.get(runId) ?? []),
       ...(tall ? windowSpans(runId) : []),

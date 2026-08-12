@@ -303,10 +303,14 @@ export function applyChatWallLengths(
   }
 
   // 2) 口语方向：left/back/long leg 等 → 新建或更新
+  //
+  // 光秃秃的字母（不带 wall/墙）必须紧跟一个分隔符（空格/墙/冒号/等号）才算墙名——
+  // 否则厂商规格问答报出的型号列表（"B12、B15、B18…"）会被当成「墙 B 长 12」，
+  // 制造出一段不存在的假墙，把整份几何搞坏（型号紧挨数字，中间没有任何分隔）。
   const mentionRe = new RegExp(
     `(?:^|[^\\w])(?:(left|right|back|front|long|short|north|south|east|west)\\s*(?:wall|leg)?`
-      // 「wall A」「A墙」「A 墙」——字母后可选紧跟中文「墙」（口语常见写法，非「wall A: 120」不受影响）
-      + `|(?:wall\\s*)?([A-D])\\s*墙?`
+      + `|wall\\s*([A-D])\\s*墙?`
+      + `|([A-D])(?:\\s+|墙|[:=])`
       + `|([东西南北左右前后])(?:侧)?墙)`
       + `${HEDGE_WORDS}[:=]?\\s*(\\d+(?:\\.\\d+)?)`
       + `(?:\\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm))?`
@@ -315,9 +319,9 @@ export function applyChatWallLengths(
   );
   let m: RegExpExecArray | null;
   while ((m = mentionRe.exec(text)) !== null) {
-    const key = (m[1] ?? m[3] ?? "").toLowerCase();
-    const letter = (m[2] ?? "").toUpperCase();
-    const inches = parseWallLengthInches(m[4]!, m[5]);
+    const key = (m[1] ?? m[4] ?? "").toLowerCase();
+    const letter = (m[2] ?? m[3] ?? "").toUpperCase();
+    const inches = parseWallLengthInches(m[5]!, m[6]);
     if (inches === undefined) continue;
 
     let label = key ? (ORIENT_LABEL[key] ?? key) : (letter ? `Wall ${letter}` : "");

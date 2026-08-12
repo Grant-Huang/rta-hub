@@ -302,31 +302,21 @@ async function main(): Promise<void> {
     {
       const snap = await call(`/api/floorplans/${floorPlanId}`, { acct });
       const existing = (snap.floorPlan?.parsedGeometry?.wallRuns ?? []) as Json[];
-      const usableVision = existing.length > 0 && existing.length <= k.walls.length + 1;
-      if (k.sourceImage && usableVision) {
-        for (let i = 0; i < k.walls.length; i++) {
-          const w = k.walls[i]!;
-          const run = existing[i];
-          if (run?.id) {
-            await call(`/api/floorplans/${floorPlanId}/resolve`, {
-              method: "POST", acct,
-              body: JSON.stringify({ wallRunId: run.id, length: w.length }),
-            });
-          } else {
-            await call(`/api/floorplans/${floorPlanId}/resolve`, {
-              method: "POST", acct,
-              body: JSON.stringify({
-                addRun: {
-                  label: w.label, length: w.length,
-                  ...(w.kind ? { kind: w.kind } : {}),
-                  ...(w.depth !== undefined ? { depth: w.depth } : {}),
-                },
-              }),
-            });
-          }
-        }
-      } else {
-        for (const w of k.walls) {
+      // 不管有没有真实图，都先按序号对齐已有的墙段（多半是引导追问阶段聊天已经
+      // 落库的）再补长度——盲目 addRun 会在同一面墙上叠出第二段：一段带着聊天
+      // 解析出的英文标签，一段是这里刚加的中文标签，长度一样、却是两个不相连
+      // 的 wallRunId。后面家电落位挂到其中一段，水槽/柜子排布挂到另一段，
+      // 于是「同一面墙」在检查器眼里变成两面互不知情的墙——SR-E1/SR-G3 之类
+      // 的假阳性就是这么来的，看着像排布算法错了，其实是这里种下的重复墙。
+      for (let i = 0; i < k.walls.length; i++) {
+        const w = k.walls[i]!;
+        const run = existing[i];
+        if (run?.id) {
+          await call(`/api/floorplans/${floorPlanId}/resolve`, {
+            method: "POST", acct,
+            body: JSON.stringify({ wallRunId: run.id, length: w.length }),
+          });
+        } else {
           await call(`/api/floorplans/${floorPlanId}/resolve`, {
             method: "POST", acct,
             // 岛台要带上 kind/depth——不带的话它会被当成一段普通的墙接到上一段后面，
