@@ -19,7 +19,7 @@ import type { Context, Next } from "hono";
 import { fromDollars, format } from "./domain/money.js";
 import type {
   CabinetCompany, ChatMessage, CompanyEngagement, CompanyStaffMessage, CompanyStaffThread, Conversation,
-  CritiqueStatus, CustomerAccount, ModuleType, Quote, ServiceType,
+  CritiqueStatus, CustomerAccount, ModuleType, Province, Quote, ServiceType,
 } from "./domain/types.js";
 import type { FloorPlan } from "./floorplan/types.js";
 import type { GeneratedLayout } from "./layout/generate.js";
@@ -555,6 +555,11 @@ function layoutKnowledgeOpts() {
   );
 }
 
+/** 账号注册时必填的省份（定价用）——设计 intake 不必再靠聊天正则重新确认一遍。 */
+function accountProvinceFor(customerAccountId: string): Province | undefined {
+  return appCtx.repos.accounts.byId(customerAccountId)?.province;
+}
+
 function designReadinessFor(conversationId: string, companyId?: string) {
   const conv = appCtx.repos.conversations.byId(conversationId);
   if (!conv) {
@@ -575,6 +580,7 @@ function designReadinessFor(conversationId: string, companyId?: string) {
     ...(companyId ? { companyId } : {}),
     ...(co ? { companyName: co.name } : {}),
     language: resolveLanguage(conv.preferences?.shared),
+    accountProvince: accountProvinceFor(conv.customerAccountId),
   });
 }
 
@@ -1259,6 +1265,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
           conversation: { ...conv, designRequirements: priorReq },
           plan: planChat,
           language,
+          accountProvince: account.province,
         }).items.find((i) => i.id === "appliances_fit" && i.status === "missing");
         if (fitAsk) {
           const already = [...conv.messages, ...replies]
@@ -1312,6 +1319,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
           conversation: shadow,
           plan,
           language,
+          accountProvince: account.province,
         });
       })();
       const intakeMiss = intakeMissing(conv.id).length
@@ -1376,6 +1384,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
           conversation: { ...conv, designRequirements: nextReqs },
           plan: planForConversation(conv.id),
           language,
+          accountProvince: account.province,
         });
         const nextHint = afterFail.readyToAskDesign
           ? undefined
@@ -1664,6 +1673,7 @@ function engagementConfirmedPayload(conv: Conversation, eg: CompanyEngagement) {
     companyId: eg.companyId,
     ...(company ? { companyName: company.name } : {}),
     language: lang,
+    accountProvince: accountProvinceFor(conv.customerAccountId),
   });
   const panels = confirmedPanels(conv, eg);
   const doorId = panels.companySpecific.doorStyleId;
@@ -2736,6 +2746,32 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
   if (carriedAppliances.length > 0 && !(plan!.appliances?.length)) {
     plan = { ...plan!, appliances: carriedAppliances, updatedAt: at };
     await appCtx.repos.floorPlans.upsert(plan);
+  }
+  // 重传同样不应丢掉已确认的墙长/层高——新图没读出来时才补旧图的（新图读出来的
+  // 数据以新图为准，不做合并，避免新旧墙段混在一起对不上号）。
+  if (!plan!.parsedGeometry.wallRuns.some((r) => r.length > 0)) {
+    const carriedWallRuns = previousPlans.flatMap((p) => p.parsedGeometry.wallRuns);
+    if (carriedWallRuns.some((r) => r.length > 0)) {
+      plan = {
+        ...plan!,
+        parsedGeometry: { ...plan!.parsedGeometry, wallRuns: carriedWallRuns },
+        updatedAt: at,
+      };
+      await appCtx.repos.floorPlans.upsert(plan);
+    }
+  }
+  if (plan!.parsedGeometry.ceilingHeight == null) {
+    const carriedCeiling = previousPlans
+      .map((p) => p.parsedGeometry.ceilingHeight)
+      .find((h) => h != null);
+    if (carriedCeiling != null) {
+      plan = {
+        ...plan!,
+        parsedGeometry: { ...plan!.parsedGeometry, ceilingHeight: carriedCeiling },
+        updatedAt: at,
+      };
+      await appCtx.repos.floorPlans.upsert(plan);
+    }
   }
   for (const old of previousPlans) {
     await appCtx.repos.floorPlans.remove(old.id);

@@ -207,3 +207,29 @@ test("风格 brief 写出标准术语，禁止「已记在需求里」", () => {
   assert.doesNotMatch(style!.brief, /已记在需求里/);
   assert.doesNotMatch(r.confirmationText, /noted in your requirements/i);
 });
+
+test("账号已有省份（注册必填）时，不必在聊天里重复说一遍才算已确认", () => {
+  const plan = readyPlan();
+  plan.appliances = [{
+    kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer",
+  }];
+  const withoutAccount = evaluateDesignReadiness({
+    conversation: conv({ designRequirements: "Modern style\nBudget CAD $10-20k\nNo windows\nFridge 36\"" }),
+    plan,
+    language: "en",
+  });
+  const province0 = withoutAccount.items.find((i) => i.id === "province");
+  assert.equal(province0?.status, "missing", "没有账号省份、聊天也没提，仍应视为缺失");
+  assert.equal(withoutAccount.readyToAskDesign, false);
+
+  const withAccount = evaluateDesignReadiness({
+    conversation: conv({ designRequirements: "Modern style\nBudget CAD $10-20k\nNo windows\nFridge 36\"" }),
+    plan,
+    language: "en",
+    accountProvince: "ON",
+  });
+  const province1 = withAccount.items.find((i) => i.id === "province");
+  assert.equal(province1?.status, "ok", "账号上已有省份，不该继续追问");
+  assert.match(province1!.brief, /Ontario|ON/);
+  assert.equal(withAccount.readyToAskDesign, true);
+});

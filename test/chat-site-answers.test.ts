@@ -49,6 +49,12 @@ test("Q# 纯数字答层高（根治层高失忆）", () => {
   assert.equal(parseCeilingFromChat("96")?.height, 96);
 });
 
+test("数字在关键词前面的自然说法也要认得（\"a 9ft ceiling\"，不止\"ceiling 9ft\"）", () => {
+  assert.equal(parseCeilingFromChat("a 9ft ceiling")?.height, 108);
+  assert.equal(parseCeilingFromChat("and a 9ft ceiling (108 in)")?.height, 108);
+  assert.equal(parseCeilingFromChat("9尺层高")?.height, 108);
+});
+
 test("解析上下水到指定墙", () => {
   const p = parsePlumbingFromChat(
     "Q2: plumbing on the North wall, about 60\" from the corner",
