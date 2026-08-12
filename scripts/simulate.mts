@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import {
   BUILTIN_SCENARIO_COUNT, generateScenarios, type Scenario, type ScenarioSet,
 } from "./scenarios.mts";
-import { userAgentTurn, type UserAgentSource, type ConversationTurn } from "./user-agent.mts";
+import { userAgentTurn, type UserAgentSource, type ConversationTurn } from "../src/testing/user-agent.js";
 import {
   assertNoteMatchesLayout, resolveRevisionIntent, type CabinetIndexEntry,
 } from "../src/layout/revision-intents.js";

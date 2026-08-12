@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   deterministicReply, factsFromScenario, personaForCaseIndex, userAgentTurn,
-} from "../scripts/user-agent.mts";
+} from "../src/testing/user-agent.js";
 
 const mission = {
   brief: "Explore kitchen cabinets under assistant guidance.",
