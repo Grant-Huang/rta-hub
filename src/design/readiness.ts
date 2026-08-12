@@ -13,6 +13,7 @@ import { missingFields, fieldLabel } from "../agents/orchestrator.js";
 import { geometrySuppressesIntake } from "./site-questions.js";
 import { chatConfirmedPlumbing } from "./chat-site-answers.js";
 import { isConfirmAssumedAppliances } from "./chat-appliance-answers.js";
+import { matchProvince, provinceByCode } from "./province-match.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export type CheckStatus = "ok" | "missing" | "needs_confirm" | "deferred" | "assumed";
@@ -623,18 +624,6 @@ function buildConfirmedFacts(
   return facts;
 }
 
-function statusToSection(
-  status: CheckStatus,
-): DesignBriefSection["status"] {
-  switch (status) {
-    case "ok": return "locked";
-    case "deferred": return "provisional";
-    case "needs_confirm":
-    case "assumed": return "clarify";
-    case "missing": return "untouched";
-  }
-}
-
 function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSection[] {
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
   const pick = (...ids: string[]) => ids.map((id) => byId[id]).filter(Boolean) as ReadinessItem[];
@@ -651,24 +640,26 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
     titleZh: string,
     group: ReadinessItem[],
   ): DesignBriefSection => {
-    const worst: CheckStatus = group.some((g) => g.status === "missing")
-      ? "missing"
-      : group.some((g) => g.status === "needs_confirm")
-        ? "needs_confirm"
-        : group.some((g) => g.status === "assumed")
-          ? "assumed"
-          : group.some((g) => g.status === "deferred")
-            ? "deferred"
-            : "ok";
+    // 整组只有「全部都没谈过」才算 untouched——组里哪怕只有一项已经 ok
+    // （比如上下水已确认、只是窗户还没谈），body 里就会带出真实数据，
+    // 徽标却说"还没聊"就自相矛盾了。所以徽标状态单独算，不能直接拿
+    // "组里最差的一项" 当整组状态用：一项缺不代表整组没讨论过。
     const untouched = group.every((g) => g.status === "missing");
     const body = untouched
       ? msg(lang, "Not discussed yet.", "还没聊。")
       : group.map((g) => g.brief).join(lang === "zh" ? "\n" : "\n");
+    const sectionStatus: DesignBriefSection["status"] = untouched
+      ? "untouched"
+      : group.some((g) => g.status === "missing" || g.status === "needs_confirm" || g.status === "assumed")
+        ? "clarify"
+        : group.some((g) => g.status === "deferred")
+          ? "provisional"
+          : "locked";
     return {
       id,
       title: msg(lang, titleEn, titleZh),
       body,
-      status: statusToSection(worst),
+      status: sectionStatus,
     };
   };
 
@@ -746,7 +737,7 @@ export function describeIntentField(
   }
 
   if (field === "province") {
-    const hit = matchProvince(text) ?? PROVINCES.find((p) => p.code === accountProvince);
+    const hit = matchProvince(text) ?? (accountProvince ? provinceByCode(accountProvince) : undefined);
     if (hit) {
       return msg(lang,
         `Province: ${hit.en} (${hit.code}).`,
@@ -796,65 +787,7 @@ function matchStyle(text: string, lang: UiLanguage): string {
   return (first ?? msg(lang, "as described", "如所述")).slice(0, 48);
 }
 
-/**
- * 省份匹配。
- *
- * 绝不能用裸的 `\bon\b`：英文里 “sink on left wall / based on …” 会把整段需求
- * 误判成 Ontario，覆盖客户已说的「BC省」。两字母省码只认大写或「XX省」。
- */
-const PROVINCES: {
-  code: string;
-  en: string;
-  zh: string;
-  /** 全名 / 城市 / 「XX省」——可大小写不敏感。 */
-  nameRe: RegExp;
-  /** 两字母省码：仅匹配大写（避免 on/ab 等英语词）。 */
-  codeRe: RegExp;
-}[] = [
-  {
-    code: "BC", en: "British Columbia", zh: "不列颠哥伦比亚省",
-    nameRe: /british\s*columbia|不列颠|温哥华|bc\s*省/i,
-    codeRe: /(?:^|[^A-Za-z])BC(?:[^A-Za-z]|$)/,
-  },
-  {
-    code: "AB", en: "Alberta", zh: "阿尔伯塔省",
-    nameRe: /alberta|阿尔伯塔|卡尔加里|ab\s*省/i,
-    codeRe: /(?:^|[^A-Za-z])AB(?:[^A-Za-z]|$)/,
-  },
-  {
-    code: "QC", en: "Quebec", zh: "魁北克省",
-    nameRe: /quebec|québec|魁北克|蒙特利尔|qc\s*省/i,
-    codeRe: /(?:^|[^A-Za-z])QC(?:[^A-Za-z]|$)/,
-  },
-  {
-    code: "ON", en: "Ontario", zh: "安大略省",
-    nameRe: /ontario|安大略|多伦多|渥太华|on\s*省/i,
-    codeRe: /(?:^|[^A-Za-z])ON(?:[^A-Za-z]|$)/,
-  },
-];
-
-/** @internal 导出供单测断言省份解析。 */
-export function matchProvince(text: string): { code: string; en: string; zh: string } | undefined {
-  // 全名优先；多个命中时取最后一次出现（后说的省份覆盖前面的）
-  let best: { code: string; en: string; zh: string; index: number } | undefined;
-  for (const p of PROVINCES) {
-    const nameHit = p.nameRe.exec(text);
-    if (nameHit && nameHit.index !== undefined) {
-      if (!best || nameHit.index >= best.index) {
-        best = { code: p.code, en: p.en, zh: p.zh, index: nameHit.index };
-      }
-    }
-    const codeHit = p.codeRe.exec(text);
-    if (codeHit && codeHit.index !== undefined) {
-      // 省码权重略低：同一位置全名赢；更靠后的省码仍可覆盖
-      const idx = codeHit.index;
-      if (!best || idx > best.index) {
-        best = { code: p.code, en: p.en, zh: p.zh, index: idx };
-      }
-    }
-  }
-  return best ? { code: best.code, en: best.en, zh: best.zh } : undefined;
-}
+export { matchProvince };
 
 function doorStyleNameFromPrefs(
   prefs: Conversation["preferences"],

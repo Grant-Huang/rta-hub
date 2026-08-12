@@ -69,6 +69,16 @@ test("英文介词 on 不能让 missingFields 认为省份已填", () => {
   assert.ok(!missingFields("Modern style\nBC省\nbudget CAD $10k").includes("province"));
 });
 
+test("客户直接说英文城市名（不带省名/省码）也要认得——之前只收了城市的中文名", () => {
+  assert.equal(hasProvinceMention("I live in Toronto"), true);
+  assert.equal(matchProvince("I live in Toronto")?.code, "ON");
+  assert.equal(hasProvinceMention("I'm in Vancouver"), true);
+  assert.equal(matchProvince("based in Calgary")?.code, "AB");
+  assert.equal(matchProvince("we're in Montreal")?.code, "QC");
+  assert.equal(matchProvince("Halifax, NS")?.code, "NS");
+  assert.equal(matchProvince("Winnipeg")?.code, "MB");
+});
+
 test("对话确认 sink on left wall 写入 plumbing feature", () => {
   const fp = planTwoWalls();
   const parsed = parsePlumbingFromChat("sink on left wall", fp);

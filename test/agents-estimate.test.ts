@@ -83,6 +83,31 @@ test("追问同一批字段的话术会逐轮退让，不会一字不差地重�
   }
 });
 
+test("无 LLM 降级路径：本轮刚记下的数字用结构化摘要复述，不是含糊的\"记下了\"", async () => {
+  const ctx = { conversationId: "cv", requirements: "想换厨房", history: [] };
+  const en = await orchestratorReply(undefined, ctx, "North 120\", ceiling 96\"",
+    {
+      ...optionsFor("consumer"), language: "en",
+      intakeStatus: {
+        missing: ["style"], openAsks: [], confirmedBriefs: [],
+        floorPlanReady: false, readyToAskDesign: false,
+        justConfirmed: ['North 120"', 'ceiling 96"'],
+      },
+    });
+  assert.match(en.content, /^✅ Recorded: North 120", ceiling 96"\. /);
+
+  const zh = await orchestratorReply(undefined, ctx, "北墙120寸，层高96寸",
+    {
+      ...optionsFor("consumer"), language: "zh",
+      intakeStatus: {
+        missing: ["style"], openAsks: [], confirmedBriefs: [],
+        floorPlanReady: false, readyToAskDesign: false,
+        justConfirmed: ["北墙 120寸", "层高 96寸"],
+      },
+    });
+  assert.match(zh.content, /^✅ 已记录：北墙 120寸、层高 96寸。/);
+});
+
 test("布尔形式的 repeatedAsk 仍按「第二次」处理，旧调用方不会退化", async () => {
   const ctx = { conversationId: "cv", requirements: "", history: [] };
   const bool = await orchestratorReply(undefined, ctx, "想换厨房",
