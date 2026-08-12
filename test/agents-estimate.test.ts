@@ -69,9 +69,13 @@ test("追问同一批字段的话术会逐轮退让，不会一字不差地重�
   const third = await say(2);
   const fourth = await say(3);
 
-  assert.equal(new Set([first, second, third, fourth]).size, 4,
-    "连着几轮回同一句话，正是这条规则要治的病");
-  assert.ok(second.includes("下面直接选就行"), "第二次该改用选择题");
+  // 三个阶段：正常问 → 软化+指向选项 → 放弃再造词、稳定指向选项。
+  // 追问两次还没结果就该停下（见 OrchestratorOptions.repeatedAsk 文档注释）——
+  // 第三次起是稳定终态文案，不需要每轮都造一句新说法，第三轮和第四轮理应相同。
+  assert.equal(new Set([first, second, third]).size, 3,
+    "问 → 软化 → 换选择题，这三个阶段的话术应该不同");
+  assert.equal(third, fourth, "追问两次已经停下换选择题，第三次不必再造一种新说法");
+  assert.match(second, /点.*选项|下面.*选/, "第二次该指向可点选的选项");
   // 第三次起就别再念字段名了——客户已经在说话了，只是说法对不上关键词表
   for (const field of ["厨房尺寸", "布局", "风格", "预算", "所在省份"]) {
     assert.equal(third.includes(field), false, `第三轮不该再点名「${field}」：${third}`);

@@ -355,9 +355,12 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
           "Appliances: still needed — sizes cannot be deferred before design.",
           "家电：仍需确认——出图前尺寸不可后定。")
         : msg(lang, "Which appliances will be in this kitchen?", "这间厨房会有哪些家电？"),
+      // 举例格式用占位符，不写真实家电种类+数字——不然这句提示一旦被系统自己
+      // 复述进对话历史，下一轮就会被 `parseAppliancesFromChat` 当成客户真报了
+      // 一台家电（PR #26 同类根因：助手自己的举例被误认成客户数据）。
       askHint: msg(lang,
-        "List each appliance with width in chat — e.g. fridge 33\", stove 30\", dishwasher 24\".",
-        "请在对话里列出每台家电及宽度，例如：冰箱 33\"、灶具 30\"、洗碗机 24\"。"),
+        "List each appliance with width in chat — e.g. `<appliance> <inches>\"`, one per appliance.",
+        "请在对话里逐条列出每台家电及宽度，例如：`<家电> <英寸数>寸`。"),
     });
   }
 
@@ -372,8 +375,8 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
         "Appliance sizes: required before design (cannot defer).",
         "家电尺寸：出图前必须明确（不可后定）。"),
       askHint: msg(lang,
-        "Give measured widths with each appliance (e.g. fridge 36\").",
-        "请随家电一并给出实测宽度（如冰箱 36\"）。"),
+        "Give measured widths with each appliance (e.g. `<appliance> <inches>\"`).",
+        "请随家电一并给出实测宽度（如 `<家电> <英寸数>寸`）。"),
     });
   } else {
     const assumed = assumedOnes(appliances);

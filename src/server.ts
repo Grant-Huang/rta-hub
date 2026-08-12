@@ -1331,7 +1331,6 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
         : [];
       // prefer checklist open critical asks when geometry exists
       const planReady = readinessPre.items.some((i) => i.id === "walls_ceiling" && i.status === "ok");
-      const repeatedAsk = askedSameFieldsBefore(conv, nextReqs);
       const openAsks = readinessPre.openItems
         .filter((i) => i.critical && (i.status === "missing" || i.status === "needs_confirm"))
         .sort((a, b) => {
@@ -1341,6 +1340,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
         })
         .map((i) => i.askHint || i.brief)
         .slice(0, 3);
+      const repeatedAsk = askedSameFieldsBefore(conv, nextReqs, openAsks);
       const confirmedBriefs = [
         ...readinessPre.confirmedFacts
           .filter((f) => f.status === "ok" || f.status === "needs_confirm" || f.status === "deferred")
@@ -5626,21 +5626,23 @@ function isLanguageSwitchOnly(text: string): boolean {
 }
 
 /**
- * 上一轮助手是否已经问过同样的缺失字段。
- *
- * 判据是「缺失字段集合没变，且上一轮助手确实提过这些字段」——说明客户答了，
- * 但说法对不上我们的关键词（"质感优先" 匹配不到 "风格"）。这时候原样再问
- * 一遍最伤：客户会觉得没在听。
- */
-/**
  * 已经连着几轮在问同样的缺失字段。
  *
  * 返回**次数**而不是布尔值：只知道"重复了"没法决定该说什么，第二次和第五次
  * 该说的话不一样（见 orchestrator.ts 的 fallbackPrompt）。
+ *
+ * `currentAsks` 是这一轮实际会问出口的那几句话（检查表 openAsks 的
+ * askHint/brief，或者兜底的字段名）——不能只看 `missingFields()`：
+ * 户型/上下水这类检查表缺口走的是 `openAsks`，跟 style/budget/province
+ * 这套自由文本字段是两条不同的判断，只查后者会漏掉前者反复问同一句的情况
+ * （客户已经报了尺寸/布局，checklist 卡在"上传户型图/上下水"上无限重复，
+ * 但 style/budget 这层永远看不出"问过"）。
  */
-function askedSameFieldsBefore(conv: Conversation, nextRequirements: string): number {
+function askedSameFieldsBefore(
+  conv: Conversation, nextRequirements: string, currentAsks: readonly string[] = [],
+): number {
   const stillMissing = missingFields(nextRequirements);
-  if (stillMissing.length === 0) return 0;
+  if (stillMissing.length === 0 && currentAsks.length === 0) return 0;
 
   // 数的是**总共问过几次**，不是"连着问了几次"。
   //
@@ -5648,10 +5650,13 @@ function askedSameFieldsBefore(conv: Conversation, nextRequirements: string): nu
   // 这句话本身会把连续计数打断，于是下一轮又从"第一次问"开始，客户会看到
   // 「问 → 换选择题 → 软化 → 又问」的循环。问过两次就是问过两次。
   return conv.messages.filter(
-    (m) => m.role === "assistant" && !m.companyId && stillMissing.some((f) =>
-      m.content.includes(f)
-      || m.content.includes(fieldLabel(f, "en"))
-      || m.content.includes(fieldLabel(f, "zh"))),
+    (m) => m.role === "assistant" && !m.companyId && (
+      stillMissing.some((f) =>
+        m.content.includes(f)
+        || m.content.includes(fieldLabel(f, "en"))
+        || m.content.includes(fieldLabel(f, "zh")))
+      || currentAsks.some((a) => a.trim() && m.content.includes(a))
+    ),
   ).length;
 }
 

@@ -331,7 +331,7 @@ export const pilotDiscounts: DiscountRule[] = [
       { minSubtotal: fromDollars("8000.00"), percentOff: 7 },
       { minSubtotal: fromDollars("15000.00"), percentOff: 10 },
     ],
-    stackable: true, description: "整厨满额折扣",
+    stackable: true, description: "Whole-kitchen spend discount",
   },
 ];
 
