@@ -234,6 +234,12 @@ export interface OrchestratorOptions {
   dialogueOverlay?: {
     maxQuestionsPerTurn?: number;
   };
+  /**
+   * 追问到第三次仍未收集齐时，兜底联系方式（真实存在的邮箱，来自
+   * `email/sender.ts` 的发件人身份，不是新建的留资/客服入口）。
+   * 不传时这一档就不提联系方式，只说"需要时可以联系我们"。
+   */
+  supportContact?: string;
 }
 
 /** 只有账号类型、没有 profile 时的便捷入口（测试与脚本用）。 */
@@ -281,7 +287,7 @@ export async function orchestratorReply(
     && userRequestsDesignGeneration(userText)
   ) {
     const content = fallbackPrompt(
-      requirements, opts.profile, opts.repeatedAsk, lang, opts.intakeStatus,
+      requirements, opts.profile, opts.repeatedAsk, lang, opts.intakeStatus, opts.supportContact,
     );
     if (!client) {
       recordSkipped({ callSite: "orchestratorChat", prompt: userText, reply: content });
@@ -306,7 +312,9 @@ export async function orchestratorReply(
   if (!client) {
     // 降级路径也记一笔：真实 token 是 0，但"本来会调一次、prompt 有多大"是可测的。
     // 不记的话，场景测试跑一百遍也回答不了「上线之后一个客户多少钱」。
-    const content = fallbackPrompt(requirements, opts.profile, opts.repeatedAsk, lang, opts.intakeStatus);
+    const content = fallbackPrompt(
+      requirements, opts.profile, opts.repeatedAsk, lang, opts.intakeStatus, opts.supportContact,
+    );
     recordSkipped({
       callSite: "orchestratorChat",
       prompt: orchestratorSystem(opts.profile, lang, systemExtras) + renderForEstimate(ctx.history) + userText,
@@ -328,9 +336,11 @@ export async function orchestratorReply(
     callSite: tierForTurn(decision) === "reasoning" ? "layoutRevision" : "orchestratorChat",
   });
   const trimmed = raw.trim()
-    || fallbackPrompt(requirements, opts.profile, opts.repeatedAsk ?? 0, lang, opts.intakeStatus);
+    || fallbackPrompt(
+      requirements, opts.profile, opts.repeatedAsk ?? 0, lang, opts.intakeStatus, opts.supportContact,
+    );
   let content = guardPrematureDesignOffer(
-    trimmed, requirements, opts.profile, opts.repeatedAsk ?? 0, lang, opts.intakeStatus,
+    trimmed, requirements, opts.profile, opts.repeatedAsk ?? 0, lang, opts.intakeStatus, opts.supportContact,
   );
   // 资料已齐却空转「请稍候 / 团队制作中」→ 改成明确出图邀约（勿假装已在画）
   if (opts.intakeStatus?.readyToAskDesign && isPoliteDesignStall(content)) {
@@ -397,12 +407,13 @@ export function guardPrematureDesignOffer(
   repeatedAsk: number | boolean,
   lang: UiLanguage,
   intakeStatus?: OrchestratorOptions["intakeStatus"],
+  supportContact?: string,
 ): string {
   if (!intakeStatus || intakeStatus.readyToAskDesign) return content;
   if (!claimsPrematureDesignReady(content) && !/shall i generate|需要我.*生成设计/i.test(content)) {
     return content;
   }
-  return fallbackPrompt(requirements, profile, repeatedAsk, lang, intakeStatus);
+  return fallbackPrompt(requirements, profile, repeatedAsk, lang, intakeStatus, supportContact);
 }
 
 /** 把 intake 状态写成模型可读的短注，避免幻觉「已齐 / 未齐」。 */
@@ -505,6 +516,7 @@ function fallbackPrompt(
   repeatedAsk: number | boolean = 0,
   lang: UiLanguage = DEFAULT_LANGUAGE,
   intakeStatus?: OrchestratorOptions["intakeStatus"],
+  supportContact?: string,
 ): string {
   // 弱确认复述：只在这一轮真的有新东西被记下时才加这一句前缀——没有
   // `justConfirmed`（现有全部调用方都没传）时这句是空字符串，行为与之前
@@ -515,7 +527,8 @@ function fallbackPrompt(
       ? `记下了：${justConfirmed.join("、")}。`
       : `Got it — ${justConfirmed.join(", ")}. `)
     : "";
-  return recapPrefix + fallbackPromptCore(requirements, profile, repeatedAsk, lang, intakeStatus);
+  return recapPrefix
+    + fallbackPromptCore(requirements, profile, repeatedAsk, lang, intakeStatus, supportContact);
 }
 
 function fallbackPromptCore(
@@ -524,6 +537,7 @@ function fallbackPromptCore(
   repeatedAsk: number | boolean = 0,
   lang: UiLanguage = DEFAULT_LANGUAGE,
   intakeStatus?: OrchestratorOptions["intakeStatus"],
+  supportContact?: string,
 ): string {
   const missing = intakeStatus?.missing
     ? [...intakeStatus.missing]
@@ -546,13 +560,22 @@ function fallbackPromptCore(
       return "文字需求已经比较齐了。接下来上传一张户型图，或在对话里把墙长和层高补上，" +
         "齐了之后我会问你要不要开始出设计。";
     }
-    if (repeats >= 2) {
+    if (repeats >= 3) {
+      // 连着三轮都没收集到——不再靠对话本身，给一条真实存在的兜底联系方式
+      // （email/sender.ts 的发件人身份，不是新建的留资/客服系统）。
+      return "这几轮好像一直没聊到点子上。" +
+        (supportContact
+          ? `不想继续对着屏幕折腾的话，直接发邮件到 ${supportContact}，我们同事会跟进；`
+          : "不想继续对着屏幕折腾的话，可以先留言，我们同事会跟进；") +
+        "当然也欢迎继续在这里补充，或者点下面的选项。";
+    }
+    if (repeats === 2) {
       return "我先不重复刚才那句了——下面点快捷选项，或按「墙名 英寸，层高 英寸」补尺寸；" +
         "若模型刚才超时，直接再发一句即可，不用重新确认已答过的项。";
     }
     if (repeats === 1) {
-      return `可能是我没问清楚。请直接回答：${ask.join("；")}。` +
-        `也可以点下面的选项，比打字省事。`;
+      return `可能是我刚才没问清楚——下面直接选就行，或者按「墙名 英寸，层高 英寸」这样告诉我：` +
+        `${ask.join("；")}。`;
     }
     if (!profile.explainJargon) {
       return `还需要：${ask.join("、")}。一次给全就行。`;
@@ -568,13 +591,22 @@ function fallbackPromptCore(
     return "Your written requirements look complete. Next, upload a floor plan or enter wall lengths and ceiling height in chat — " +
       "once those are set, I'll ask whether to start a design.";
   }
-  if (repeats >= 2) {
+  if (repeats >= 3) {
+    // Three rounds with no progress — offer a real fallback contact instead of
+    // looping the chat (the sender identity from email/sender.ts, not a new intake system).
+    return "We may not be getting anywhere in this chat. "
+      + (supportContact
+        ? `If you'd rather not keep going back and forth here, email ${supportContact} and our team will follow up. `
+        : "If you'd rather not keep going back and forth here, feel free to leave a note and our team will follow up. ")
+      + "You're also welcome to keep adding details or tap an option below.";
+  }
+  if (repeats === 2) {
     return "I won't repeat the same question — tap a quick option below, or send wall lengths like "
       + "`<wall name> <inches>\", ceiling <inches>\"`. If the model timed out, just reply once more; no need to re-confirm answered items.";
   }
   if (repeats === 1) {
-    return `I may not have asked clearly. Please answer: ${ask.join("; ")}. `
-      + `Or tap an option below.`;
+    return `I may not have asked clearly — tap an option below, or send wall lengths like `
+      + `\`<wall name> <inches>", ceiling <inches>"\`. Or answer directly: ${ask.join("; ")}.`;
   }
   if (!profile.explainJargon) {
     return `Still need: ${ask.join(", ")}. You can send them all at once.`;

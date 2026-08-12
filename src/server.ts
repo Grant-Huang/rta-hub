@@ -1330,16 +1330,16 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
         : [];
       // prefer checklist open critical asks when geometry exists
       const planReady = readinessPre.items.some((i) => i.id === "walls_ceiling" && i.status === "ok");
-      const repeatedAsk = askedSameFieldsBefore(conv, nextReqs);
-      const openAsks = readinessPre.openItems
+      const openAsksFull = readinessPre.openItems
         .filter((i) => i.critical && (i.status === "missing" || i.status === "needs_confirm"))
         .sort((a, b) => {
           if (a.id === "appliances_fit") return -1;
           if (b.id === "appliances_fit") return 1;
           return 0;
         })
-        .map((i) => i.askHint || i.brief)
-        .slice(0, 3);
+        .map((i) => i.askHint || i.brief);
+      const repeatedAsk = askedSameFieldsBefore(conv, nextReqs, openAsksFull);
+      const openAsks = openAsksFull.slice(0, 3);
       const confirmedBriefs = [
         ...readinessPre.confirmedFacts
           .filter((f) => f.status === "ok" || f.status === "needs_confirm" || f.status === "deferred")
@@ -1359,6 +1359,9 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
             escalation,
             repeatedAsk,
             language,
+            ...(resolveSenderIdentity().email
+              ? { supportContact: resolveSenderIdentity().email }
+              : {}),
             ...(handbook ? { platformHandbook: handbook } : {}),
             ...(pk.overlays.dialogue
               ? { dialogueOverlay: pk.overlays.dialogue }
@@ -5609,9 +5612,20 @@ function isLanguageSwitchOnly(text: string): boolean {
  * 返回**次数**而不是布尔值：只知道"重复了"没法决定该说什么，第二次和第五次
  * 该说的话不一样（见 orchestrator.ts 的 fallbackPrompt）。
  */
-function askedSameFieldsBefore(conv: Conversation, nextRequirements: string): number {
+function askedSameFieldsBefore(
+  conv: Conversation, nextRequirements: string, openAskTexts: readonly string[] = [],
+): number {
   const stillMissing = missingFields(nextRequirements);
-  if (stillMissing.length === 0) return 0;
+  // openAskTexts 是本轮真正会问出去的那几句话（来自 readiness.ts 的检查表，
+  // 覆盖户型/上下水/家电这类不在 missingFields 那份窄字段表里的缺口）。
+  // 只看 missingFields 会漏掉这些——真实 HTTP 对话里大部分追问问的正是
+  // 检查表缺口，不是这五个内部字段名，之前只查窄表导致这个计数在实际对话
+  // 里基本不生效。
+  const needles = [
+    ...stillMissing.flatMap((f) => [f, fieldLabel(f, "en"), fieldLabel(f, "zh")]),
+    ...openAskTexts.filter((t) => t.trim()),
+  ];
+  if (needles.length === 0) return 0;
 
   // 数的是**总共问过几次**，不是"连着问了几次"。
   //
@@ -5619,10 +5633,7 @@ function askedSameFieldsBefore(conv: Conversation, nextRequirements: string): nu
   // 这句话本身会把连续计数打断，于是下一轮又从"第一次问"开始，客户会看到
   // 「问 → 换选择题 → 软化 → 又问」的循环。问过两次就是问过两次。
   return conv.messages.filter(
-    (m) => m.role === "assistant" && !m.companyId && stillMissing.some((f) =>
-      m.content.includes(f)
-      || m.content.includes(fieldLabel(f, "en"))
-      || m.content.includes(fieldLabel(f, "zh"))),
+    (m) => m.role === "assistant" && !m.companyId && needles.some((n) => m.content.includes(n)),
   ).length;
 }
 
