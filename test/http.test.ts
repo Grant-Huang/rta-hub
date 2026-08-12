@@ -364,7 +364,8 @@ test("留存清除返回计划而不是直接执行", async () => {
 });
 
 test("数据主体访问权：导出本账号数据并说明留存规则", async () => {
-  const r = await req("/api/me/export", { accountId: CONSUMER });
+  // 说明文字跟随请求方语言（无 lang 时默认英文）——这里显式要中文
+  const r = await req("/api/me/export?lang=zh", { accountId: CONSUMER });
   assert.equal(r.status, 200);
   const body = await r.json() as { account: { id: string }; notes: string[] };
   assert.equal(body.account.id, CONSUMER);
@@ -383,7 +384,10 @@ test("数据主体删除权：会话删除、报价去标识化保留", async ()
   });
   const { quote } = await quoteRes.json() as { quote: { id: string } };
 
-  const del = await req("/api/me/delete", { method: "POST", accountId: "ca_demo_trade" });
+  // 说明文字跟随请求方语言（无 lang 时默认英文）——这里显式要中文
+  const del = await req("/api/me/delete", {
+    method: "POST", accountId: "ca_demo_trade", body: JSON.stringify({ lang: "zh" }),
+  });
   assert.equal(del.status, 200);
   const body = await del.json() as { outcome: { conversationsDeleted: string[]; quotesDeIdentified: string[]; explanation: string } };
   assert.ok(body.outcome.conversationsDeleted.includes(conversation.id));
