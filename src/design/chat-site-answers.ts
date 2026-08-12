@@ -133,6 +133,15 @@ export function parseCeilingFromChat(text: string): ParsedCeilingAnswer | undefi
       const h = fromUnit(inch[1]!, inch[0].match(/ft|feet|尺|cm/i)?.[0]);
       if (h !== undefined) return { height: h };
     }
+    // 数字在关键词**前面**的自然说法（"a 9ft ceiling"，不是"ceiling 9ft"）——
+    // 上面四条都要求关键词先出现，这类说法此前全部落空，层高永远没写进去。
+    const reversed = text.match(
+      /(\d+(?:\.\d+)?)\s*(ft|feet|'|尺|寸|cm|in(?:ch(?:es)?)?|["″])?\s*(?:ceiling|层高|净高|天花|吊顶)/i,
+    );
+    if (reversed) {
+      const h = fromUnit(reversed[1]!, reversed[2]);
+      if (h !== undefined) return { height: h };
+    }
   }
 
   if (pureNumber) {

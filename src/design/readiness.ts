@@ -4,7 +4,7 @@
  * 系统内部用这份表决定「还缺什么、能不能问要不要出设计」。
  * 客户看到的是叙事 brief + 会话里的白话确认，不是这张表本身。
  */
-import type { Conversation } from "../domain/types.js";
+import type { Conversation, Province } from "../domain/types.js";
 import type { FloorPlan, WallRun } from "../floorplan/types.js";
 import { isIsland, isLayoutReady } from "../floorplan/types.js";
 import { assumedOnes, applianceLabel, type ApplianceKind } from "../floorplan/appliances.js";
@@ -82,6 +82,12 @@ export interface ReadinessInput {
   companyId?: string;
   companyName?: string;
   language?: UiLanguage;
+  /**
+   * 客户账号上已有的省份（注册时必填，定价用——见 domain/types.ts
+   * `CustomerAccount.province`）。传了就不再靠聊天正则去猜客户有没有
+   * "说过"省份：账号上已经有了，逼客户在聊天里再念一遍是无意义的重复收集。
+   */
+  accountProvince?: Province;
 }
 
 const DEFER_PLUMBING =
@@ -159,6 +165,10 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   // FR-17：解读可用后不再把尺寸/形状当 intake 缺口
   if (geometrySuppressesIntake(plan) || (plan && isLayoutReady(plan))) {
     intake = intake.filter((f) => f !== "kitchen size" && f !== "layout");
+  }
+  // 账号上已经有省份（注册必填）——不再要求客户在聊天里也说一遍才算数。
+  if (input.accountProvince) {
+    intake = intake.filter((f) => f !== "province");
   }
 
   const items: ReadinessItem[] = [];
@@ -437,12 +447,13 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   for (const field of ["style", "budget", "province"] as const) {
     const missing = intake.includes(field);
     const fromPref = (field === "budget" && shared.budgetBand !== undefined)
-      || (field === "style" && Boolean(doorStyleName));
+      || (field === "style" && Boolean(doorStyleName))
+      || (field === "province" && Boolean(input.accountProvince));
     const ok = !missing || fromPref;
     const understood = ok
       ? (field === "style" && doorStyleName && missing
         ? msg(lang, `Style: ${doorStyleName}.`, `风格：${doorStyleName}。`)
-        : describeIntentField(field, req, shared.budgetBand, lang))
+        : describeIntentField(field, req, shared.budgetBand, lang, input.accountProvince))
       : "";
     items.push({
       id: field,
@@ -715,6 +726,7 @@ export function describeIntentField(
   requirements: string,
   budgetBand: string | undefined,
   lang: UiLanguage,
+  accountProvince?: Province,
 ): string {
   const text = requirements;
   if (field === "budget") {
@@ -731,7 +743,7 @@ export function describeIntentField(
   }
 
   if (field === "province") {
-    const hit = matchProvince(text);
+    const hit = matchProvince(text) ?? PROVINCES.find((p) => p.code === accountProvince);
     if (hit) {
       return msg(lang,
         `Province: ${hit.en} (${hit.code}).`,

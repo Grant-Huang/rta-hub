@@ -436,6 +436,38 @@ test("户型未补齐时拒绝出方案，并把待办列出来", async () => {
   assert.ok(body.questions.length > 0);
 });
 
+test("重传户型图不应丢掉已确认的墙长/层高（同一会话一户型，家电已有此保护，墙/层高此前没有）", async () => {
+  const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
+  const { conversation } = await convRes.json() as { conversation: { id: string } };
+  const fpRes = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k1.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan } = await fpRes.json() as { floorPlan: { id: string } };
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
+  });
+  await req(`/api/floorplans/${floorPlan.id}/resolve`, {
+    method: "POST", accountId: CONSUMER, body: JSON.stringify({ ceilingHeight: 96 }),
+  });
+
+  // 没有视觉模型，重传同样识别不出墙段——不该因此清空已确认数据
+  const reupload = await req(`/api/conversations/${conversation.id}/floorplan`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ fileName: "k2.png", mimeType: "image/png", sizeBytes: 1 }),
+  });
+  const { floorPlan: afterReupload } = await reupload.json() as {
+    floorPlan: { parsedGeometry: { wallRuns: { label: string; length: number }[]; ceilingHeight?: number } };
+  };
+  assert.deepEqual(
+    afterReupload.parsedGeometry.wallRuns.map((r) => [r.label, r.length]),
+    [["北墙", 144]],
+    "重传没读出墙段时，应保留上一份已确认的墙长",
+  );
+  assert.equal(afterReupload.parsedGeometry.ceilingHeight, 96, "重传不应丢掉已确认层高");
+});
+
 test("补齐户型 → 出方案 → 四视图 → 转报价（完整 MVP-2 链路）", async () => {
   const convRes = await req("/api/conversations", { method: "POST", accountId: CONSUMER });
   const { conversation } = await convRes.json() as { conversation: { id: string } };
