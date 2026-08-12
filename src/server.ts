@@ -1360,6 +1360,9 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
             escalation,
             repeatedAsk,
             language,
+            ...(resolveSenderIdentity().email
+              ? { supportContact: resolveSenderIdentity().email }
+              : {}),
             ...(handbook ? { platformHandbook: handbook } : {}),
             ...(pk.overlays.dialogue
               ? { dialogueOverlay: pk.overlays.dialogue }
