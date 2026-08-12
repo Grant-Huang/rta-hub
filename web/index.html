@@ -301,6 +301,13 @@
       <div class="composer">
         <button type="button" class="icon-btn sdk" id="attachBtn" title="Upload file" data-i18n-title="attachTitle"
                 data-sdk-icon="PlusComposer" data-sdk-title="Upload file"></button>
+        <!-- 常驻挂在 DOM 里，不是每次点击才现造——自动化 UI 回归工具（Playwright 等）
+             靠选择器 input[type=file] 直接 setInputFiles()，创建了不挂上去的元素
+             永远选不到，只能靠原生对话框，脚本没法驱动。 -->
+        <input type="file" id="attachFileInput" hidden multiple
+               accept="image/*,.pdf,application/pdf" tabindex="-1" aria-hidden="true" />
+        <input type="file" id="importDesignFileInput" hidden
+               accept="application/json,.json" tabindex="-1" aria-hidden="true" />
         <div class="composer-field">
           <div id="suggestPop" class="suggest-pop" hidden></div>
           <input id="chatInput" placeholder="Tell us your needs — @company · /doorStyle · +" data-i18n-placeholder="chatPlaceholder" autocomplete="off" />
@@ -852,41 +859,44 @@ async function exportDesignInput() {
  */
 function triggerImportDesign() {
   if (!conversationId) return;
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = 'application/json,.json';
-  input.addEventListener('change', async () => {
-    const file = input.files?.[0];
-    if (!file) return;
-    let doc;
-    try {
-      doc = JSON.parse(await file.text());
-    } catch (err) {
-      factEditErr = t('importParseFail', err.message || String(err));
+  const input = $('importDesignFileInput');
+  if (!input) return;
+  input.value = ''; // 清空——否则连续两次选同一个文件不会再触发 change
+  input.click();
+}
+
+// 常驻 input，change 只绑一次——理由同 attachFileInput。
+$('importDesignFileInput')?.addEventListener('change', async () => {
+  const input = $('importDesignFileInput');
+  const file = input?.files?.[0];
+  if (!file || !conversationId) return;
+  let doc;
+  try {
+    doc = JSON.parse(await file.text());
+  } catch (err) {
+    factEditErr = t('importParseFail', err.message || String(err));
+    renderConfirmed();
+    return;
+  }
+  try {
+    const { ok, body } = await api(`/api/conversations/${conversationId}/design-input`, {
+      method: 'POST', body: JSON.stringify(doc),
+    });
+    if (!ok) {
+      factEditErr = body.error || t('submitFail');
       renderConfirmed();
       return;
     }
-    try {
-      const { ok, body } = await api(`/api/conversations/${conversationId}/design-input`, {
-        method: 'POST', body: JSON.stringify(doc),
-      });
-      if (!ok) {
-        factEditErr = body.error || t('submitFail');
-        renderConfirmed();
-        return;
-      }
-      factEditErr = '';
-      for (const m of body.replies || []) addMsg(m.role, m.content);
-      if (body.designBrief) applyDesignBrief(body.designBrief);
-      await renderFloorPlan(body);
-      await refreshConversations();
-    } catch (err) {
-      factEditErr = t('factSaveFail', err.message || String(err));
-      renderConfirmed();
-    }
-  });
-  input.click();
-}
+    factEditErr = '';
+    for (const m of body.replies || []) addMsg(m.role, m.content);
+    if (body.designBrief) applyDesignBrief(body.designBrief);
+    await renderFloorPlan(body);
+    await refreshConversations();
+  } catch (err) {
+    factEditErr = t('factSaveFail', err.message || String(err));
+    renderConfirmed();
+  }
+});
 
 /** 已确认面板里保存一行手动编辑——直接走 /resolve，这是它本来就有的合法编辑通道，
  * 不受聊天那边的"确认锁"限制（那把锁只挡自由文本解析，不挡这条客户主动点开的路径）。 */
@@ -2342,35 +2352,38 @@ function triggerUpload() {
   if (!conversationId || conversationArchived) return;
   const tray = $('attachTray');
   if (tray) tray.hidden = false;
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = 'image/*,.pdf,application/pdf';
-  input.multiple = true;
-  input.addEventListener('change', async () => {
-    const files = [...(input.files || [])];
-    for (const file of files) {
-      const mime = (file.type || '').toLowerCase();
-      if (mime && !mime.startsWith('image/') && mime !== 'application/pdf') {
-        addMsg('system', t('badMime', file.name));
-        continue;
-      }
-      if (file.size > MAX_UPLOAD_BYTES) {
-        addMsg('system', t('tooBig', (file.size / 1048576).toFixed(1)));
-        continue;
-      }
-      let dataUrl;
-      try { dataUrl = await readAsDataUrl(file); }
-      catch (err) {
-        addMsg('system', t('readFailHint', err.message || err));
-        continue;
-      }
-      pendingAttachments.push({ file, dataUrl });
-    }
-    renderAttachTray();
-    $('chatInput')?.focus();
-  });
+  const input = $('attachFileInput');
+  if (!input) return;
+  input.value = ''; // 清空——否则连续两次选同一个文件不会再触发 change
   input.click();
 }
+
+// 常驻 input 的 change 只绑一次（不是每次点 + 都新建一份），否则自动化工具
+// 用 setInputFiles() 直接改值触发 change 时，只有这一份监听会跑，行为才可预期。
+$('attachFileInput')?.addEventListener('change', async () => {
+  const input = $('attachFileInput');
+  const files = [...(input?.files || [])];
+  for (const file of files) {
+    const mime = (file.type || '').toLowerCase();
+    if (mime && !mime.startsWith('image/') && mime !== 'application/pdf') {
+      addMsg('system', t('badMime', file.name));
+      continue;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      addMsg('system', t('tooBig', (file.size / 1048576).toFixed(1)));
+      continue;
+    }
+    let dataUrl;
+    try { dataUrl = await readAsDataUrl(file); }
+    catch (err) {
+      addMsg('system', t('readFailHint', err.message || err));
+      continue;
+    }
+    pendingAttachments.push({ file, dataUrl });
+  }
+  renderAttachTray();
+  $('chatInput')?.focus();
+});
 
 /** 文字 + 多文件一次 POST /floorplan。 */
 async function sendWithAttachments(text) {
