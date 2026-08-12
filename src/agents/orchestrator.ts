@@ -429,7 +429,9 @@ function intakeStatusNote(
       + `若客户答非所问：先简短确认已记下的内容，再换一种问法或请其点快捷选项——禁止原样重复上一问。`
       + `不要贴户型草图；用纯文字提问。`
       + `未就绪时禁止：声称信息已齐、邀请出图、改问抽屉/五金等偏好。`
-      + `信息未齐时不要提议出完整方案。`;
+      + `信息未齐时不要提议出完整方案。`
+      + `**绝不编造/复述具体的墙长、层高等数字**——只有出现在上面"本轮刚记下"或"已确认"里的数字才是真的写进了系统；`
+      + `客户的描述含糊时（"大概12x8"），直接请他给出每段墙的确切数字，不要自己先编一个数字说"已经加上了"。`;
   }
   const recap = justConfirmed.length
     ? `Just recorded this turn: ${justConfirmed.join(", ")} — briefly restate these numbers first (a soft confirmation, not a question), then continue.`
@@ -444,7 +446,10 @@ function intakeStatusNote(
     + `If their reply is off-topic: briefly acknowledge what you have, then rephrase or point to quick options — never repeat the same question verbatim. `
     + `Text-only questions (no floor-plan sketches). `
     + `FORBIDDEN while not ready: saying everything is confirmed, inviting design generation, or asking optional preferences (drawers/hardware). `
-    + `Do not offer a full design until this Status block says intake is complete.`;
+    + `Do not offer a full design until this Status block says intake is complete. `
+    + `**NEVER invent or restate a specific wall length, ceiling height, or other measurement** — only numbers listed above under `
+    + `"Just recorded" or "Already confirmed" have actually been saved. If their description was vague `
+    + `("roughly 12x8"), ask them for the exact number for each wall instead of stating a number yourself as if it were already added.`;
 }
 
 /** 估算用：把历史拍平成会真的发出去的那串文字。 */

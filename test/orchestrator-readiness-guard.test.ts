@@ -110,3 +110,24 @@ test("LLM 若仍谎称已齐：输出被 guard 掉", async () => {
   assert.doesNotMatch(r.content, /Shall I generate|Everything I need/i);
   assert.match(r.content, /wall length|ceiling|Upload a floor plan/i);
 });
+
+test("未就绪且本轮没抽到任何数字时，系统提示里明确禁止模型编造具体墙长/层高", async () => {
+  let systemSeen = "";
+  const client = {
+    async complete({ system }: { system: string }) {
+      systemSeen = system;
+      return "Got it — noted the layout.";
+    },
+  };
+  await orchestratorReply(
+    client as never,
+    { conversationId: "c1", requirements: "L-shape kitchen, roughly 12x8", history: [] },
+    "L-shape kitchen, roughly 12x8, 9ft ceilings",
+    {
+      profile,
+      language: "en",
+      intakeStatus: { ...intakeNotReady, justConfirmed: [] },
+    },
+  );
+  assert.match(systemSeen, /NEVER invent or restate a specific wall length/i);
+});
