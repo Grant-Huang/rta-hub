@@ -186,6 +186,8 @@
   .chip.alt { background:none; border-style:dashed; color:#8b94a3;
               display:inline-block; max-width:100%; white-space:normal; text-align:left; line-height:1.45; }
   .intake-samples { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0; }
+  .intake-samples-secondary { padding:4px 12px; background:none; opacity:0.85; }
+  .intake-samples-secondary .intake-samples { margin:2px 0; }
   .sample-preview img { max-width:min(100%,420px); margin-top:8px; border-radius:8px; border:1px solid #3a4250; display:block; }
   select, input[type=number] { background:#1c2129; border:1px solid #262b33; color:inherit;
            padding:6px 8px; border-radius:8px; font-size:13px; }
@@ -1518,37 +1520,68 @@ function renderRestoredPlanViews(d) {
 }
 
 /**
- * 开场示例：户型极简图 / 设计想法草图。
- * 点标签 chip → 在会话里展示示例图 + 提示，用户再按示例手绘后用 + 上传。
- * `role: "floorplan"` 的示例额外带一个"我家像这个"按钮（FR-17.4）：
- * 点了直接按该模板预填几何，不必手绘。末尾一个"都不像，其他"对应零墙段现状。
+ * 开场示例：户型极简图（主操作） / 设计想法草图（可选，次要）。
+ * 两类分开渲染成两个独立 chip 组，而不是混在同一行——设计草图只是欢迎语第3段
+ * 的可选项，混进 5 个户型 chip 会被误读成"第6个布局选项"。
+ *
+ * 户型组：点标签 chip → 在会话里展示示例图 + 提示，用户再按示例手绘后用 + 上传；
+ * 每个户型额外带一个"我家像这个"按钮（FR-17.4）：点了直接按该模板预填几何，
+ * 不必手绘。末尾一个"都不像，其他"对应零墙段现状。
+ *
+ * 设计组：只有查看示例图这一个动作，样式弱化，紧跟在对应文案下方。
  */
 function renderIntakeSamples(samples) {
   if (!samples?.length || conversationArchived) return;
-  const prev = document.getElementById('intakeSamples');
-  if (prev) prev.remove();
-  const box = document.createElement('div');
-  box.id = 'intakeSamples';
-  box.className = 'msg assistant';
-  const hasFloorplan = samples.some((s) => s.role === 'floorplan');
-  box.innerHTML = `<div class="intake-samples">${samples.map((s) =>
-    `<button type="button" class="chip" data-sample="${esc(s.file)}" data-hint="${esc(s.hint)}" data-label="${esc(s.label)}">${esc(s.label)}</button>`
-    + (s.role === 'floorplan'
-      ? `<button type="button" class="chip alt" data-template="${esc(s.id)}" data-label="${esc(s.label)}">${esc(t('useThisLayout'))}</button>`
-      : ''),
-  ).join('')}
-  ${hasFloorplan ? `<button type="button" class="chip alt" data-template="other">${esc(t('noneOfThese'))}</button>` : ''}
-  <span class="chip alt" data-upload-hint="1">${esc(t('intakeUploadHint'))}</span></div>`;
-  box.addEventListener('click', (e) => {
-    const upload = e.target.closest('[data-upload-hint]');
-    if (upload) { $('attachBtn')?.click(); return; }
-    const tplBtn = e.target.closest('[data-template]');
-    if (tplBtn) { selectFloorplanTemplate(tplBtn.dataset.template, tplBtn.dataset.label); return; }
+  document.getElementById('intakeSamples')?.remove();
+  document.getElementById('intakeDesignSample')?.remove();
+
+  const floorplanSamples = samples.filter((s) => s.role === 'floorplan');
+  const designSamples = samples.filter((s) => s.role !== 'floorplan');
+
+  const previewHandler = (e) => {
     const btn = e.target.closest('[data-sample]');
     if (!btn) return;
     showSamplePreview(btn.dataset.sample, btn.dataset.label, btn.dataset.hint);
-  });
-  $('chatLog').appendChild(box);
+  };
+
+  if (floorplanSamples.length) {
+    const box = document.createElement('div');
+    box.id = 'intakeSamples';
+    box.className = 'msg assistant';
+    box.innerHTML = `<div class="intake-samples">${floorplanSamples.map((s) =>
+      `<button type="button" class="chip" data-sample="${esc(s.file)}" data-hint="${esc(s.hint)}" data-label="${esc(s.label)}">${esc(s.label)}</button>`
+      + `<button type="button" class="chip alt" data-template="${esc(s.id)}" data-label="${esc(s.label)}">${esc(t('useThisLayout'))}</button>`,
+    ).join('')}
+    <button type="button" class="chip alt" data-template="other">${esc(t('noneOfThese'))}</button>
+    <span class="chip alt" data-upload-hint="1">${esc(t('intakeUploadHint'))}</span></div>`;
+    box.addEventListener('click', (e) => {
+      const upload = e.target.closest('[data-upload-hint]');
+      if (upload) { $('attachBtn')?.click(); return; }
+      const tplBtn = e.target.closest('[data-template]');
+      if (tplBtn) { selectFloorplanTemplate(tplBtn.dataset.template, tplBtn.dataset.label); return; }
+      previewHandler(e);
+    });
+    $('chatLog').appendChild(box);
+  }
+
+  if (designSamples.length) {
+    // 兜底路径（重传建议）可能没有 floorplan 组，这里补上传入口，避免它彻底消失。
+    const needsUploadHint = !floorplanSamples.length;
+    const box = document.createElement('div');
+    box.id = 'intakeDesignSample';
+    box.className = 'msg assistant intake-samples-secondary';
+    box.innerHTML = `<div class="intake-samples">${designSamples.map((s) =>
+      `<button type="button" class="chip alt" data-sample="${esc(s.file)}" data-hint="${esc(s.hint)}" data-label="${esc(s.label)}">${esc(s.label)}</button>`,
+    ).join('')}
+    ${needsUploadHint ? `<span class="chip alt" data-upload-hint="1">${esc(t('intakeUploadHint'))}</span>` : ''}</div>`;
+    box.addEventListener('click', (e) => {
+      const upload = e.target.closest('[data-upload-hint]');
+      if (upload) { $('attachBtn')?.click(); return; }
+      previewHandler(e);
+    });
+    $('chatLog').appendChild(box);
+  }
+
   scrollChatToBottom();
 }
 
