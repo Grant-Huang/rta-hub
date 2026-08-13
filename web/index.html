@@ -1549,7 +1549,7 @@ function renderIntakeSamples(samples) {
   const designSamples = samples.filter((s) => s.role !== 'floorplan');
 
   const cardHtml = (s, withSelect) => `<div class="intake-card" data-sample="${esc(s.file)}" data-hint="${esc(s.hint)}" data-label="${esc(s.label)}">
-    <img src="/samples/${encodeURIComponent(s.file)}" alt="${esc(s.label)}" loading="lazy"/>
+    <img src="${esc(s.thumbUrl || `/samples/${encodeURIComponent(s.file)}`)}" alt="${esc(s.label)}" loading="lazy"/>
     <div class="card-label">${esc(s.label)}</div>
     ${withSelect ? `<button type="button" class="chip alt card-select" data-template="${esc(s.id)}" data-label="${esc(s.label)}">${esc(t('useThisLayout'))}</button>` : ''}
   </div>`;

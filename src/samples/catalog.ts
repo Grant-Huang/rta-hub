@@ -7,8 +7,10 @@ export type SampleRole = "floorplan" | "design";
 
 export interface IntakeSample {
   id: string;
-  /** 磁盘文件名（位于 src/samples/）。 */
+  /** 磁盘文件名（位于 src/samples/），原图——点开放大预览时用这个。 */
   file: string;
+  /** 缩略图文件名（位于 src/samples/），卡片列表里用这个，体积是原图的百分之一量级。 */
+  thumbFile: string;
   role: SampleRole;
   labelEn: string;
   labelZh: string;
@@ -16,10 +18,16 @@ export interface IntakeSample {
   hintZh: string;
 }
 
+/** `xxx.png` → `xxx.thumb.jpg`；缩略图统一转 jpg，体积比 png 小得多。 */
+function thumbFileFor(file: string): string {
+  return `${file.replace(/\.[^.]+$/, "")}.thumb.jpg`;
+}
+
 export const INTAKE_SAMPLES: readonly IntakeSample[] = [
   {
     id: "floorplan-minimal",
     file: "sample-floorplan-minimal.png",
+    thumbFile: thumbFileFor("sample-floorplan-minimal.png"),
     role: "floorplan",
     labelEn: "Floor-plan sketch example",
     labelZh: "户型手绘示例",
@@ -31,6 +39,7 @@ export const INTAKE_SAMPLES: readonly IntakeSample[] = [
   {
     id: "one-wall-kitchen",
     file: "one-wall-kitchen-floorplan.png",
+    thumbFile: thumbFileFor("one-wall-kitchen-floorplan.png"),
     role: "floorplan",
     labelEn: "One-Wall Kitchen",
     labelZh: "单壁型厨房",
@@ -42,6 +51,7 @@ export const INTAKE_SAMPLES: readonly IntakeSample[] = [
   {
     id: "u-shaped-kitchen",
     file: "u-shaped-kitchen-floorplan.png",
+    thumbFile: thumbFileFor("u-shaped-kitchen-floorplan.png"),
     role: "floorplan",
     labelEn: "U-Shaped Kitchen",
     labelZh: "U型厨房",
@@ -53,6 +63,7 @@ export const INTAKE_SAMPLES: readonly IntakeSample[] = [
   {
     id: "l-island-kitchen",
     file: "l-island-kitchen-floorplan.png",
+    thumbFile: thumbFileFor("l-island-kitchen-floorplan.png"),
     role: "floorplan",
     labelEn: "L-Shape + Island Kitchen",
     labelZh: "L型+岛台厨房",
@@ -64,6 +75,7 @@ export const INTAKE_SAMPLES: readonly IntakeSample[] = [
   {
     id: "galley-kitchen",
     file: "galley-kitchen-floorplan.png",
+    thumbFile: thumbFileFor("galley-kitchen-floorplan.png"),
     role: "floorplan",
     labelEn: "Galley Kitchen (Corridor)",
     labelZh: "双排型厨房（走廊式）",
@@ -75,6 +87,7 @@ export const INTAKE_SAMPLES: readonly IntakeSample[] = [
   {
     id: "design-sketch",
     file: "sample-design-sketch.jpg",
+    thumbFile: thumbFileFor("sample-design-sketch.jpg"),
     role: "design",
     labelEn: "Design-idea sketch example",
     labelZh: "设计想法草图示例",
@@ -85,7 +98,7 @@ export const INTAKE_SAMPLES: readonly IntakeSample[] = [
   },
 ] as const;
 
-const ALLOWED = new Set(INTAKE_SAMPLES.map((s) => s.file));
+const ALLOWED = new Set(INTAKE_SAMPLES.flatMap((s) => [s.file, s.thumbFile]));
 
 /** 白名单校验；拒绝路径穿越。 */
 export function isAllowedSampleFile(name: string): boolean {
