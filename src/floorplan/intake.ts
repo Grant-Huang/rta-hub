@@ -82,6 +82,8 @@ export function intakeSampleCards(lang: UiLanguage = DEFAULT_LANGUAGE) {
     file: s.file,
     role: s.role,
     url: `/samples/${s.file}`,
+    /** 卡片列表里显示这个缩略图，不是原图——放大预览才用 url。 */
+    thumbUrl: `/samples/${s.thumbFile}`,
     label: lang === "zh" ? s.labelZh : s.labelEn,
     hint: lang === "zh" ? s.hintZh : s.hintEn,
   }));
