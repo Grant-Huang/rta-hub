@@ -1333,6 +1333,24 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       .filter((s) => Boolean(s?.trim()))
       .join("\n");
     const combined = [priorReq, historyBlob, text].filter((s) => s.trim()).join("\n");
+    // 只给"会真正写入 FloorPlan 的正则解析"看客户自己说过的话——`combined`/
+    // `historyBlob` 不分角色，助手上一轮举的例子（"比如：主墙15'…"/"比如冰箱
+    // 33寸、灶具30寸"）混进去会被正则当成客户刚报的数据，写成"已确认"；等
+    // 客户真的照着回答，反而被当成在改一个从没确认过的值（确认锁误触发）。
+    // LLM 抽取路径（下面 extractGeometryFromChat）早就用按角色区分的 turns
+    // 避开了这个坑，这里给两条会写数据的正则路径（`applyChatSiteAnswers`、
+    // `applyChatApplianceAnswers`）补上同样的隔离。`needShell`/`buildSiteQuestions`
+    // 不写数据，且前者依赖"从历史（含助手复述）回填"的既有行为，不动它们。
+    const customerOnlyCombined = [
+      priorReq,
+      conv.messages
+        .slice(-24)
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .filter((s) => Boolean(s?.trim()))
+        .join("\n"),
+      text,
+    ].filter((s) => s.trim()).join("\n");
     let planChat = planForConversation(conv.id);
     const needShell = !planChat && (
       chatMentionsGeometry(combined)
@@ -1377,14 +1395,16 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       }
 
       const siteQs = buildSiteQuestions(planChat, combined, language).questions;
-      const siteApply = applyChatSiteAnswers(planChat, combined, at, siteQs);
+      const siteApply = applyChatSiteAnswers(planChat, customerOnlyCombined, at, siteQs);
       if (siteApply) {
         await appCtx.repos.floorPlans.upsert(siteApply.plan);
         planChat = siteApply.plan;
         blockedEditsThisTurn.push(...siteApply.blockedEdits);
       }
-      // 用累计文本：历史里的「assumed widths are fine」也能在本轮落库
-      const appApply = applyChatApplianceAnswers(planChat, combined);
+      // 用累计文本：历史里客户说过的「assumed widths are fine」也能在本轮落库；
+      // 用 customerOnlyCombined 而不是 combined——原因同上一句 applyChatSiteAnswers：
+      // 助手自己举的家电宽度例子（"比如冰箱33寸、灶具30寸"）不能被当成客户确认过。
+      const appApply = applyChatApplianceAnswers(planChat, customerOnlyCombined);
       if (appApply) {
         await appCtx.repos.floorPlans.upsert(appApply.plan);
         planChat = appApply.plan;
