@@ -432,13 +432,20 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   // —— 岛台空间——是否有位置做岛台，不是所有厨房都有——
   const islandRun = plan?.parsedGeometry.wallRuns.find((r) => isIsland(r));
   if (islandRun) {
+    const islandPending = plan!.unresolvedItems.some((u) =>
+      !u.resolved && u.target.kind === "wallRun" && u.target.id === islandRun.id);
+    const sizeText = islandRun.depth != null
+      ? `${islandRun.length}×${islandRun.depth}"`
+      : `${islandRun.length}"`;
     items.push({
       id: "island",
       category: "geometry",
       critical: true,
-      status: islandRun.length > 0 ? "ok" : "missing",
+      status: islandRun.length > 0
+        ? (islandPending ? "needs_confirm" : "ok")
+        : "missing",
       brief: islandRun.length > 0
-        ? msg(lang, `Island: ${islandRun.length}".`, `岛台：${islandRun.length}"。`)
+        ? msg(lang, `Island: ${sizeText}.`, `岛台：${sizeText}。`)
         : msg(lang, "Island: size not confirmed yet.", "岛台：尺寸尚未确认。"),
       ...(islandRun.length > 0 ? {} : {
         askHint: msg(lang,
@@ -737,6 +744,8 @@ function buildConfirmedFacts(
         });
       }
     }
+    const pending = (pred: (u: FloorPlan["unresolvedItems"][number]) => boolean) =>
+      plan.unresolvedItems.some((u) => !u.resolved && pred(u));
     for (const r of plan.parsedGeometry.wallRuns) {
       const kind = isIsland(r)
         ? msg(lang, "Island", "岛台")
@@ -744,22 +753,25 @@ function buildConfirmedFacts(
       const depth = r.depth != null
         ? msg(lang, `, depth ${r.depth}"`, `，进深 ${r.depth}"`)
         : "";
+      const lengthPending = pending((u) =>
+        u.target.kind === "wallRun" && u.target.id === r.id && u.field === "length");
       facts.push({
         key: `wall:${r.id}`,
         label: msg(lang, `${kind} ${r.label}`, `${kind} ${r.label}`),
         value: r.length > 0
           ? msg(lang, `${r.length}"${depth}`, `${r.length}"${depth}`)
           : msg(lang, "not set", "未定"),
-        status: r.length > 0 ? "ok" : "missing",
+        status: r.length <= 0 ? "missing" : lengthPending ? "needs_confirm" : "ok",
         editTarget: { kind: "wall", wallRunId: r.id, currentLength: r.length },
       });
     }
     const ceil = plan.parsedGeometry.ceilingHeight;
+    const ceilPending = pending((u) => u.field === "ceilingHeight");
     facts.push({
       key: "ceiling",
       label: msg(lang, "Ceiling height", "层高"),
       value: ceil != null ? `${ceil}"` : msg(lang, "not set", "未定"),
-      status: ceil != null ? "ok" : "missing",
+      status: ceil == null ? "missing" : ceilPending ? "needs_confirm" : "ok",
       editTarget: { kind: "ceiling", currentHeight: ceil ?? 0 },
     });
     for (const kind of ["plumbing", "window", "door", "gas", "electrical"] as const) {
@@ -774,13 +786,16 @@ function buildConfirmedFacts(
                 : kind === "gas"
                   ? msg(lang, "Gas", "燃气")
                   : msg(lang, "Electrical", "强电");
+          const featPending = pending((u) =>
+            (u.target.kind === "feature" && u.target.id === f.id)
+            || (u.target.kind === "wallRun" && u.target.id === run.id && u.field.startsWith(`feature.${kind}`)));
           facts.push({
             key: `${kind}:${run.id}:${f.offset}`,
             label: msg(lang, `${kindLabel} on ${run.label}`, `${run.label} · ${kindLabel}`),
             value: msg(lang,
               `offset ${f.offset}", width ${f.width}"`,
               `距起点 ${f.offset}"，宽 ${f.width}"`),
-            status: "ok",
+            status: featPending ? "needs_confirm" : "ok",
             editTarget: {
               kind: "feature", wallRunId: run.id, featureId: f.id,
               currentOffset: f.offset, currentWidth: f.width,

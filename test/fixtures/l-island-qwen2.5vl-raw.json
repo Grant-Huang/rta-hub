@@ -1,0 +1,58 @@
+{
+  "ceilingHeight": 96,
+  "ceilingHeightConfidence": 0.4,
+  "overallConfidence": 0.8,
+  "wallRuns": [
+    {
+      "label": "Kitchen wall A",
+      "length": 137,
+      "lengthConfidence": 0.85,
+      "startsAtCorner": true,
+      "endsAtCorner": true,
+      "features": [
+        { "kind": "window", "offset": 24, "width": 36, "confidence": 0.7 },
+        { "kind": "plumbing", "offset": 48, "width": 24, "confidence": 0.6 },
+        { "kind": "door", "offset": 0, "width": 32, "confidence": 0.7 }
+      ]
+    },
+    {
+      "label": "Kitchen wall B",
+      "length": 120,
+      "lengthConfidence": 0.85,
+      "startsAtCorner": true,
+      "endsAtCorner": true,
+      "features": [
+        { "kind": "plumbing", "offset": 42, "width": 24, "confidence": 0.6 }
+      ]
+    },
+    {
+      "label": "Kitchen wall C",
+      "length": 144,
+      "lengthConfidence": 0.85,
+      "startsAtCorner": true,
+      "endsAtCorner": true,
+      "features": [
+        { "kind": "window", "offset": 24, "width": 36, "confidence": 0.7 },
+        { "kind": "plumbing", "offset": 36, "width": 24, "confidence": 0.6 },
+        { "kind": "door", "offset": 0, "width": 32, "confidence": 0.7 }
+      ]
+    },
+    {
+      "label": "Kitchen wall D",
+      "length": 72,
+      "lengthConfidence": 0.85,
+      "startsAtCorner": true,
+      "endsAtCorner": true,
+      "features": [
+        { "kind": "plumbing", "offset": 42, "width": 24, "confidence": 0.6 }
+      ]
+    }
+  ],
+  "notes": [
+    "The kitchen layout is an L-shape with an island. The wall runs are determined by the perimeter of the kitchen and the island. The features listed are based on the visible elements in the sketch."
+  ],
+  "templateGuess": {
+    "id": "l-island-kitchen",
+    "confidence": 0.75
+  }
+}

@@ -6,7 +6,8 @@
  *
  * 三条硬规则：
  *   1. **完整性优先**：拿不准的尺寸进 `unresolvedItems`，绝不静默跳过某段墙；
- *   2. 置信度低于阈值的字段一律标为待确认，即使模型给了值；
+ *   2. 置信度低于阈值的字段不写入几何；**过了阈值也只当作建议值**，同样进待确认
+ *      （视觉结果不能标成已确认，见 FR-15.5）；
  *   3. 没有视觉模型时降级为**手动录入**，而不是编一个户型出来。
  */
 import { randomUUID } from "node:crypto";
@@ -35,10 +36,17 @@ export interface RawExtraction {
   ceilingHeightConfidence?: number;
   wallRuns?: {
     label?: string;
+    /**
+     * 系统墙名（模板槽位）：North / East / West / South / Island / Wall。
+     * 图上的 A/B/C、中文墙名放在 `label`；对齐只认 `slot`（没有 slot 再回退标签）。
+     */
+    slot?: string;
     length?: number;
     lengthConfidence?: number;
     startsAtCorner?: boolean;
     endsAtCorner?: boolean;
+    kind?: "wall" | "island";
+    depth?: number;
     features?: {
       kind?: string;
       offset?: number;
@@ -65,9 +73,159 @@ const FEATURE_KINDS = ["window", "door", "plumbing", "gas", "electrical", "obstr
 let seq = 0;
 const newId = (p: string) => `${p}_${Date.now().toString(36)}_${(seq++).toString(36)}`;
 
+export type RawWallRun = NonNullable<RawExtraction["wallRuns"]>[number];
+export type RawFeature = NonNullable<RawWallRun["features"]>[number];
+
 export interface ParseResult {
   geometry: ParsedGeometry;
   unresolved: FloorPlanUnresolved[];
+}
+
+export type IdFactory = (prefix: string) => string;
+
+/**
+ * 视觉读到的墙长：过阈值写入几何，但仍进待确认；不够则长度 0 + 待确认。
+ * 自由抽取与模板锚定共用，避免两套「算不算已确认」的判断。
+ */
+export function wallLengthFromVision(
+  raw: Pick<RawWallRun, "length" | "lengthConfidence">,
+  opts: { runId: string; label: string; language: UiLanguage; newId: IdFactory },
+): { length: number; unresolved: FloorPlanUnresolved[] } {
+  const lang = opts.language;
+  const lengthConf = raw.lengthConfidence ?? 0;
+  const hasValue = typeof raw.length === "number" && raw.length > 0;
+  const adopted = hasValue && lengthConf >= CONFIDENCE_THRESHOLD;
+  const length = adopted ? quantize(raw.length!) : 0;
+  const suggestion = hasValue ? quantize(raw.length!) : undefined;
+
+  let reason: string;
+  if (adopted) {
+    reason = msg(lang,
+      `${opts.label} looks like ${length}" from the sketch — please confirm the actual size`,
+      `${opts.label} 从图上读到约 ${length}"，请确认实际尺寸`);
+  } else if (hasValue) {
+    reason = msg(lang,
+      `${opts.label} length looks uncertain (confidence ${(lengthConf * 100).toFixed(0)}%) — please confirm the actual size`,
+      `${opts.label} 的长度看不太准（置信度 ${(lengthConf * 100).toFixed(0)}%），请确认实际尺寸`);
+  } else {
+    reason = msg(lang,
+      `${opts.label} length could not be read — please measure and tell me`,
+      `${opts.label} 的长度没能识别出来，请量一下告诉我`);
+  }
+
+  return {
+    length,
+    unresolved: [{
+      id: opts.newId("fpu"),
+      target: { kind: "wallRun", id: opts.runId },
+      field: "length",
+      reason,
+      resolved: false,
+      ...(suggestion !== undefined ? { suggestion } : {}),
+    }],
+  };
+}
+
+/**
+ * 视觉读到的层高：过阈值写入几何，但仍进待确认。
+ * `fallbackSuggestion` 给模板锚定用（图上没读到时用模板标准层高当建议）。
+ */
+export function ceilingFromVision(
+  raw: Pick<RawExtraction, "ceilingHeight" | "ceilingHeightConfidence">,
+  opts: { language: UiLanguage; newId: IdFactory; fallbackSuggestion?: number },
+): { ceilingHeight?: number; unresolved: FloorPlanUnresolved[] } {
+  const lang = opts.language;
+  const ceilConf = raw.ceilingHeightConfidence ?? 0;
+  const hasValue = typeof raw.ceilingHeight === "number";
+  const adopted = hasValue && ceilConf >= CONFIDENCE_THRESHOLD;
+  const ceilingHeight = adopted ? quantize(raw.ceilingHeight!) : undefined;
+  const suggestion = hasValue
+    ? quantize(raw.ceilingHeight!)
+    : opts.fallbackSuggestion;
+
+  const reason = adopted
+    ? msg(lang,
+      `Ceiling looks like ${ceilingHeight}" from the sketch — please confirm`,
+      `从图上读到层高约 ${ceilingHeight}"，请确认`)
+    : msg(lang,
+      "Ceiling height can't be read from the image (it sets wall/tall cabinet height options) — roughly how high are your ceilings?",
+      "天花板高度没法从图上看出来（它决定吊柜和高柜的高度档位），你家层高大概是多少？");
+
+  return {
+    ...(ceilingHeight !== undefined ? { ceilingHeight } : {}),
+    unresolved: [{
+      id: opts.newId("fpu"),
+      target: { kind: "global" },
+      field: "ceilingHeight",
+      reason,
+      resolved: false,
+      ...(suggestion !== undefined ? { suggestion } : {}),
+    }],
+  };
+}
+
+/**
+ * 一条 raw feature → 几何特征（仅过阈值）+ 待确认项（无论过不过阈值）。
+ * 自由抽取原先会把低置信特征问出来；模板路径却静默丢掉——这里收成一处。
+ */
+export function ingestRawFeature(
+  rawFeature: RawFeature,
+  opts: { runId: string; wallLabel: string; language: UiLanguage; newId: IdFactory },
+): { feature?: WallFeature; unresolved: FloorPlanUnresolved[] } {
+  const lang = opts.language;
+  const kind = FEATURE_KINDS.find((k) => k === rawFeature.kind);
+  if (!kind) {
+    return {
+      unresolved: [{
+        id: opts.newId("fpu"),
+        target: { kind: "wallRun", id: opts.runId },
+        field: "feature.kind",
+        reason: msg(lang,
+          `${opts.wallLabel} has something we couldn't classify (${rawFeature.note ?? "unlabeled"}) — is it a window, door, or plumbing?`,
+          `${opts.wallLabel} 上有个识别不出类型的东西（${rawFeature.note ?? "未标注"}），是窗、门、还是上下水？`),
+        resolved: false,
+      }],
+    };
+  }
+
+  const conf = rawFeature.confidence ?? 0;
+  const hasOffset = typeof rawFeature.offset === "number";
+  if (!hasOffset || conf < CONFIDENCE_THRESHOLD) {
+    return {
+      unresolved: [{
+        id: opts.newId("fpu"),
+        target: { kind: "wallRun", id: opts.runId },
+        field: `feature.${kind}.offset`,
+        reason: msg(lang,
+          `${opts.wallLabel}: ${featureName(kind, lang)} position is uncertain — how far is it from the corner?`,
+          `${opts.wallLabel} 上的${featureName(kind, lang)}位置不确定，请告诉我它距墙角多远`),
+        resolved: false,
+        ...(hasOffset ? { suggestion: quantize(rawFeature.offset!) } : {}),
+      }],
+    };
+  }
+
+  const feature: WallFeature = {
+    id: opts.newId("wf"),
+    kind,
+    offset: quantize(rawFeature.offset!),
+    width: quantize(rawFeature.width ?? 0),
+    ...(rawFeature.sillHeight !== undefined ? { sillHeight: quantize(rawFeature.sillHeight) } : {}),
+    ...(rawFeature.note ? { note: rawFeature.note } : {}),
+  };
+  return {
+    feature,
+    unresolved: [{
+      id: opts.newId("fpu"),
+      target: { kind: "feature", id: feature.id },
+      field: kind,
+      reason: msg(lang,
+        `${opts.wallLabel}: ${featureName(kind, lang)} looks like offset ${feature.offset}", width ${feature.width}" — please confirm`,
+        `${opts.wallLabel} 上的${featureName(kind, lang)}看起来距起点 ${feature.offset}"、宽 ${feature.width}"，请确认`),
+      resolved: false,
+      suggestion: feature.offset,
+    }],
+  };
 }
 
 /**
@@ -102,96 +260,36 @@ export function normalizeExtraction(
   raw.wallRuns.forEach((rawRun, i) => {
     const runId = newId("wr");
     const label = rawRun.label?.trim() || msg(lang, `Wall ${i + 1}`, `墙段 ${i + 1}`);
-    const lengthConf = rawRun.lengthConfidence ?? 0;
-
-    // 长度缺失或置信度不足 → 进待确认，**不猜**
-    let length = 0;
-    if (typeof rawRun.length === "number" && rawRun.length > 0 && lengthConf >= CONFIDENCE_THRESHOLD) {
-      length = quantize(rawRun.length);
-    } else {
-      const item: FloorPlanUnresolved = {
-        id: newId("fpu"),
-        target: { kind: "wallRun", id: runId },
-        field: "length",
-        reason: typeof rawRun.length === "number"
-          ? msg(lang,
-            `${label} length looks uncertain (confidence ${(lengthConf * 100).toFixed(0)}%) — please confirm the actual size`,
-            `${label} 的长度看不太准（置信度 ${(lengthConf * 100).toFixed(0)}%），请确认实际尺寸`)
-          : msg(lang,
-            `${label} length could not be read — please measure and tell me`,
-            `${label} 的长度没能识别出来，请量一下告诉我`),
-        resolved: false,
-        ...(typeof rawRun.length === "number" ? { suggestion: quantize(rawRun.length) } : {}),
-      };
-      unresolved.push(item);
-    }
+    const island = rawRun.kind === "island";
+    const { length, unresolved: lengthPending } = wallLengthFromVision(rawRun, {
+      runId, label, language: lang, newId,
+    });
+    unresolved.push(...lengthPending);
 
     const features: WallFeature[] = [];
     for (const rawFeature of rawRun.features ?? []) {
-      const kind = FEATURE_KINDS.find((k) => k === rawFeature.kind);
-      const conf = rawFeature.confidence ?? 0;
-      if (!kind) {
-        unresolved.push({
-          id: newId("fpu"),
-          target: { kind: "wallRun", id: runId },
-          field: "feature.kind",
-          reason: msg(lang,
-            `${label} has something we couldn't classify (${rawFeature.note ?? "unlabeled"}) — is it a window, door, or plumbing?`,
-            `${label} 上有个识别不出类型的东西（${rawFeature.note ?? "未标注"}），是窗、门、还是上下水？`),
-          resolved: false,
-        });
-        continue;
-      }
-      if (typeof rawFeature.offset !== "number" || conf < CONFIDENCE_THRESHOLD) {
-        unresolved.push({
-          id: newId("fpu"),
-          target: { kind: "wallRun", id: runId },
-          field: `feature.${kind}.offset`,
-          reason: msg(lang,
-            `${label}: ${featureName(kind, lang)} position is uncertain — how far is it from the corner?`,
-            `${label} 上的${featureName(kind, lang)}位置不确定，请告诉我它距墙角多远`),
-          resolved: false,
-          ...(typeof rawFeature.offset === "number" ? { suggestion: quantize(rawFeature.offset) } : {}),
-        });
-        continue;
-      }
-      features.push({
-        id: newId("wf"),
-        kind,
-        offset: quantize(rawFeature.offset),
-        width: quantize(rawFeature.width ?? 0),
-        ...(rawFeature.sillHeight !== undefined ? { sillHeight: quantize(rawFeature.sillHeight) } : {}),
-        ...(rawFeature.note ? { note: rawFeature.note } : {}),
+      const ingested = ingestRawFeature(rawFeature, {
+        runId, wallLabel: label, language: lang, newId,
       });
+      if (ingested.feature) features.push(ingested.feature);
+      unresolved.push(...ingested.unresolved);
     }
 
     wallRuns.push({
       id: runId,
       label,
       length,
-      startsAtCorner: rawRun.startsAtCorner ?? i > 0,
-      endsAtCorner: rawRun.endsAtCorner ?? i < (raw.wallRuns?.length ?? 0) - 1,
+      startsAtCorner: island ? false : (rawRun.startsAtCorner ?? i > 0),
+      endsAtCorner: island ? false : (rawRun.endsAtCorner ?? i < (raw.wallRuns?.length ?? 0) - 1),
       features,
+      ...(island ? { kind: "island" as const } : {}),
+      ...(typeof rawRun.depth === "number" ? { depth: quantize(rawRun.depth) } : {}),
     });
   });
 
-  // 天花板高度影响吊柜/高柜档位；不确定就问，不默认 96"
-  let ceilingHeight: number | undefined;
-  const ceilConf = raw.ceilingHeightConfidence ?? 0;
-  if (typeof raw.ceilingHeight === "number" && ceilConf >= CONFIDENCE_THRESHOLD) {
-    ceilingHeight = quantize(raw.ceilingHeight);
-  } else {
-    unresolved.push({
-      id: newId("fpu"),
-      target: { kind: "global" },
-      field: "ceilingHeight",
-      reason: msg(lang,
-        "Ceiling height can't be read from the image (it sets wall/tall cabinet height options) — roughly how high are your ceilings?",
-        "天花板高度没法从图上看出来（它决定吊柜和高柜的高度档位），你家层高大概是多少？"),
-      resolved: false,
-      ...(typeof raw.ceilingHeight === "number" ? { suggestion: quantize(raw.ceilingHeight) } : {}),
-    });
-  }
+  const ceiling = ceilingFromVision(raw, { language: lang, newId });
+  unresolved.push(...ceiling.unresolved);
+  const ceilingHeight = ceiling.ceilingHeight;
 
   // 模型自己提出的疑问也进队列
   for (const note of raw.notes ?? []) {

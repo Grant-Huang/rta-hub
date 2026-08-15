@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   addWallRun, createFloorPlan, normalizeExtraction, pendingQuestions,
-  resolveCeilingHeight, resolveWallLength, type RawExtraction, type VisionExtractor,
+  resolveCeilingHeight, resolveItem, resolveWallLength, type RawExtraction, type VisionExtractor,
 } from "../src/floorplan/parse.js";
 import { isLayoutReady, quantize, totalRunLength, type ParsedGeometry, type WallRun } from "../src/floorplan/types.js";
 import { allocateFillers, MAX_FILLER_WIDTH, packSegment } from "../src/layout/pack.js";
@@ -39,12 +39,15 @@ const goodExtraction: RawExtraction = {
   ],
 };
 
-test("干净的抽取结果没有待确认项", () => {
+test("过阈值的抽取写入几何，但每项仍进待确认（视觉不自动当已确认）", () => {
   const { geometry, unresolved } = normalizeExtraction(goodExtraction);
-  assert.equal(unresolved.length, 0);
   assert.equal(geometry.wallRuns[0]!.length, 144);
   assert.equal(geometry.ceilingHeight, 96);
   assert.equal(geometry.wallRuns[0]!.features.length, 2);
+  const pending = unresolved.filter((u) => !u.resolved);
+  assert.ok(pending.some((u) => u.field === "length"), "墙长过阈值也要确认");
+  assert.ok(pending.some((u) => u.field === "ceilingHeight"), "层高过阈值也要确认");
+  assert.ok(pending.some((u) => u.target.kind === "feature"), "过阈值的门窗上下水也要确认");
 });
 
 test("完整性优先：长度置信度不足时进待确认，不静默采用", () => {
@@ -140,6 +143,13 @@ test("修正墙长会消解对应的待确认项", async () => {
   assert.equal(isLayoutReady(plan), false);
   plan = resolveWallLength(plan, runId, 150, AT);
   assert.equal(plan.parsedGeometry.wallRuns[0]!.length, 150);
+  assert.ok(plan.unresolvedItems
+    .filter((u) => u.field === "length" && u.target.id === runId)
+    .every((u) => u.resolved));
+  plan = resolveCeilingHeight(plan, 96, AT);
+  for (const u of plan.unresolvedItems.filter((x) => !x.resolved)) {
+    plan = resolveItem(plan, u.id, AT);
+  }
   assert.equal(isLayoutReady(plan), true);
 });
 
