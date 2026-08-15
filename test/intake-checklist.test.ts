@@ -197,10 +197,12 @@ test("端到端：必备信息收完之前，快捷回答/回复里都不出现�
   });
   noIntentFields(await json<MessagesResponse>(r2));
 
-  // 3) 补齐家电种类+实测宽度（合计 87"，装得进 144" 的墙）——必备信息应该收完了
+  // 3) 补齐家电种类+实测宽度（合计 117"，装得进 144" 的墙）——必备信息应该收完了。
+  // 灶具要连带明确给出烟机宽度（而不是让系统自动推定一台）：家电尺寸检查表要求
+  // "没有待确认的推定值"才算 ok，推定烟机会让它卡在 needs_confirm（见 #39）。
   const r3 = await req(`/api/conversations/${convId}/messages`, {
     method: "POST", accountId: CONSUMER,
-    body: JSON.stringify({ text: 'fridge 33", range 30", dishwasher 24"' }),
+    body: JSON.stringify({ text: 'fridge 33", range 30", range hood 30", dishwasher 24"' }),
   });
   const body3 = await json<MessagesResponse>(r3);
 
