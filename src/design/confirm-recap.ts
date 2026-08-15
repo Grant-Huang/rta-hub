@@ -19,6 +19,18 @@ function wallAlreadyConfirmed(plan: FloorPlan | undefined, runId: string, length
   return Boolean(run && run.length === length && wallRunProvenance(plan, runId) === "customer");
 }
 
+/** 这一轮之前，这段墙上是否已经有这个位置的燃气/强电接口。 */
+function featureAlreadyConfirmed(
+  plan: FloorPlan | undefined,
+  kind: "gas" | "electrical",
+  wallRunId: string,
+  offset: number,
+): boolean {
+  if (!plan) return false;
+  const run = plan.parsedGeometry.wallRuns.find((r) => r.id === wallRunId);
+  return Boolean(run && run.features.some((f) => f.kind === kind && f.offset === offset));
+}
+
 export function justConfirmedNotes(
   before: FloorPlan | undefined,
   after: FloorPlan | undefined,
@@ -49,6 +61,18 @@ export function justConfirmedNotes(
     if (prev && prev.width === a.width && prev.provenance === "customer") continue;
     const name = applianceLabel(a.kind, language === "zh" ? "zh" : "en");
     notes.push(language === "zh" ? `${name} ${a.width}寸` : `${name} ${a.width}"`);
+  }
+
+  for (const kind of ["gas", "electrical"] as const) {
+    for (const r of after.parsedGeometry.wallRuns) {
+      for (const f of r.features.filter((x) => x.kind === kind)) {
+        if (featureAlreadyConfirmed(before, kind, r.id, f.offset)) continue;
+        const label = kind === "gas"
+          ? (language === "zh" ? "燃气接口" : "gas hookup")
+          : (language === "zh" ? "强电接口" : "electrical hookup");
+        notes.push(language === "zh" ? `${r.label} ${label}` : `${label} on ${r.label}`);
+      }
+    }
   }
 
   return notes;

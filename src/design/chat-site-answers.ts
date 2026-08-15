@@ -7,6 +7,7 @@
  * FR-19：客户按 Q# 作答时同样走此路径。
  */
 import type { FloorPlan, WallFeatureKind, WallRun } from "../floorplan/types.js";
+import { isIsland } from "../floorplan/types.js";
 import { addFeature, addWallRun, resolveCeilingHeight, resolveItem, resolveWallLength } from "../floorplan/parse.js";
 import { wallRunProvenance } from "../floorplan/design-input.js";
 import { compassWallsAdjacent } from "../layout/plan-model.js";
@@ -17,6 +18,10 @@ const DEFAULT_PLUMBING_WIDTH = 24;
 const DEFAULT_WINDOW_WIDTH = 36;
 const DEFAULT_DOOR_WIDTH = 32;
 const DEFAULT_PLUMBING_OFFSET_RATIO = 0.4;
+// 气/电接口是点状接口，不像水槽柜占一整段墙面——留一个小得多的默认宽度即可。
+const DEFAULT_GAS_WIDTH = 6;
+const DEFAULT_ELECTRICAL_WIDTH = 6;
+const DEFAULT_ISLAND_DEPTH = 25;
 
 /**
  * 墙名/方位与数字之间容许的口语插入词——"North **about** 7 ft" 这类含糊表述
@@ -36,7 +41,8 @@ export interface ParsedCeilingAnswer {
   height: number;
 }
 
-export type ChatSiteApplyKind = "plumbing" | "window" | "door" | "ceiling" | "wallLength";
+export type ChatSiteApplyKind =
+  | "plumbing" | "window" | "door" | "gas" | "electrical" | "island" | "ceiling" | "wallLength";
 
 export interface ChatSiteApplyResult {
   plan: FloorPlan;
@@ -68,6 +74,131 @@ export function parsePlumbingFromChat(
 export function isDeferPlumbing(text: string): boolean {
   return /no plumbing|without plumbing|plumbing later|sink later|后装(下水|水管)|暂无上下水|没有上下水|下水稍后|水槽后定/i
     .test(text);
+}
+
+function mentionsGas(text: string): boolean {
+  return /\bgas\s*(?:line|hookup|connection)?\b|燃气|天然气|气源|气接口|气阀/i.test(text);
+}
+
+/** 客户明确表示不用燃气（改用电灶/电磁炉）——灶具改走电接口。 */
+export function isDeferGas(text: string): boolean {
+  return /no gas|without gas|not\s+gas|induction|电磁炉|电陶炉|全电(?:厨房)?|不用气|没有(?:燃气|天然气)|没气|无燃气|无气|electric\s+range/i
+    .test(text);
+}
+
+/** 从客户话术解析燃气接口位置（接灶具）；能落到某段墙才返回。 */
+export function parseGasFromChat(
+  text: string,
+  plan: FloorPlan,
+): ParsedFeatureAnswer | undefined {
+  const runs = plan.parsedGeometry.wallRuns.filter((r) => r.length > 0);
+  if (runs.length === 0) return undefined;
+  if (!mentionsGas(text)) return undefined;
+  if (isDeferGas(text)) return undefined;
+
+  const wall = resolveWallMention(text, runs);
+  if (!wall) return undefined;
+
+  const offset = parseOffset(text, wall.length, DEFAULT_GAS_WIDTH);
+  const width = Math.min(DEFAULT_GAS_WIDTH, wall.length);
+  const maxOffset = Math.max(0, wall.length - width);
+  const clamped = Math.max(0, Math.min(offset, maxOffset));
+  return { wallRunId: wall.id, offset: clamped, width };
+}
+
+function mentionsElectrical(text: string): boolean {
+  return /\belectrical\b|240\s*v|强电|电源接口|电接口|插座位|电源位/i.test(text);
+}
+
+/** 客户明确表示强电位置后定。 */
+export function isDeferElectrical(text: string): boolean {
+  return /no electrical|without electrical|electrical later|电(?:源)?位置后定|暂无强电|强电后定|电源后定/i
+    .test(text);
+}
+
+/**
+ * 从客户话术解析强电接口位置（接冰箱/烤箱；没有燃气时也接灶具）；
+ * 能落到某段墙才返回。
+ */
+export function parseElectricalFromChat(
+  text: string,
+  plan: FloorPlan,
+): ParsedFeatureAnswer | undefined {
+  const runs = plan.parsedGeometry.wallRuns.filter((r) => r.length > 0);
+  if (runs.length === 0) return undefined;
+  if (!mentionsElectrical(text)) return undefined;
+  if (isDeferElectrical(text)) return undefined;
+
+  const wall = resolveWallMention(text, runs);
+  if (!wall) return undefined;
+
+  const offset = parseOffset(text, wall.length, DEFAULT_ELECTRICAL_WIDTH);
+  const width = Math.min(DEFAULT_ELECTRICAL_WIDTH, wall.length);
+  const maxOffset = Math.max(0, wall.length - width);
+  const clamped = Math.max(0, Math.min(offset, maxOffset));
+  return { wallRunId: wall.id, offset: clamped, width };
+}
+
+function mentionsIsland(text: string): boolean {
+  return /\bisland\b|中岛|岛台/i.test(text);
+}
+
+/** 客户明确表示没有岛台/没有空间做岛台。 */
+export function isDeferIsland(text: string): boolean {
+  return /no island|without an? island|no\s+(?:enough\s+)?(?:space|room)\s+for\s+(?:an\s+)?island|没有岛台|不做岛台|没有中岛|没有空间做岛台|不考虑岛台|无岛台|放不下岛台|装不下岛台/i
+    .test(text);
+}
+
+/** 客户是否表达了"想要岛台"（且不是在说没有）。 */
+export function wantsIsland(text: string): boolean {
+  return mentionsIsland(text) && !isDeferIsland(text);
+}
+
+/** 岛台尺寸：「60x36"」/「60"x36"」/「岛台约 5 尺」——没给进深时用常见单排进深。 */
+function parseIslandDims(text: string): { length?: number; depth?: number } {
+  const dims = text.match(
+    /(\d+(?:\.\d+)?)\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm)?\s*(?:[x×]|by)\s*(\d+(?:\.\d+)?)\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm)?/i,
+  );
+  if (dims) {
+    const length = parseWallLengthInches(dims[1]!, dims[2]);
+    const depthUnit = (dims[4] ?? dims[2] ?? "").toLowerCase();
+    let depth = Number(dims[3]);
+    if (depthUnit === "ft" || depthUnit === "feet" || depthUnit === "'" || depthUnit === "尺") depth *= 12;
+    else if (depthUnit === "cm") depth = Math.round(depth / 2.54);
+    return { length, depth: Number.isFinite(depth) && depth > 0 ? Math.round(depth) : undefined };
+  }
+  const single = text.match(
+    /(?:island|岛台|中岛)[^\d]{0,6}(\d+(?:\.\d+)?)\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm)?/i,
+  );
+  if (single) {
+    const length = parseWallLengthInches(single[1]!, single[2]);
+    return { length };
+  }
+  return {};
+}
+
+/**
+ * 客户明确要加岛台时，建一段岛台墙壳（尺寸未给全时长度先留 0，
+ * 走跟其他墙段一样的「墙长未齐」追问路径——不凭空造一个尺寸）。
+ * 已有岛台时不重复建。
+ */
+export function applyChatIslandAnswer(
+  plan: FloorPlan,
+  text: string,
+  at: string,
+): FloorPlan | undefined {
+  const already = plan.parsedGeometry.wallRuns.some((r) => isIsland(r));
+  if (already) return undefined;
+  if (!wantsIsland(text)) return undefined;
+  const { length, depth } = parseIslandDims(text);
+  return addWallRun(plan, {
+    label: "Island",
+    length: length ?? 0,
+    startsAtCorner: false,
+    endsAtCorner: false,
+    kind: "island",
+    depth: depth ?? DEFAULT_ISLAND_DEPTH,
+  }, at);
 }
 
 export function isDeferWindows(text: string): boolean {
@@ -583,6 +714,32 @@ export function applyChatSiteAnswers(
     }
   }
 
+  if (!hasKind("gas")) {
+    const g = parseGasFromChat(text, next);
+    if (g) {
+      next = addFeature(next, g.wallRunId, {
+        kind: "gas", offset: g.offset, width: g.width,
+      }, at);
+      applied.push("gas");
+    }
+  }
+
+  if (!hasKind("electrical")) {
+    const e = parseElectricalFromChat(text, next);
+    if (e) {
+      next = addFeature(next, e.wallRunId, {
+        kind: "electrical", offset: e.offset, width: e.width,
+      }, at);
+      applied.push("electrical");
+    }
+  }
+
+  const island = applyChatIslandAnswer(next, text, at);
+  if (island) {
+    next = island;
+    applied.push("island");
+  }
+
   if (applied.length === 0 && blockedEdits.length === 0) return undefined;
   return { plan: next, applied, blockedEdits };
 }
@@ -629,7 +786,21 @@ function applyNumberedSiteAnswers(
       continue;
     }
 
-    if (q.kind === "plumbing" || q.kind === "window" || q.kind === "door") {
+    if (q.kind === "island") {
+      if (next.parsedGeometry.wallRuns.some((r) => isIsland(r))) continue;
+      if (isDeferIsland(body)) continue;
+      const island = applyChatIslandAnswer(next, /island|岛台|中岛/i.test(body) ? body : `island ${body}`, at);
+      if (island) {
+        next = island;
+        applied.push("island");
+      }
+      continue;
+    }
+
+    if (
+      q.kind === "plumbing" || q.kind === "window" || q.kind === "door"
+      || q.kind === "gas" || q.kind === "electrical"
+    ) {
       const hasKind = next.parsedGeometry.wallRuns.some((r) =>
         r.features.some((f) => f.kind === q.kind));
       if (hasKind) {
@@ -638,6 +809,8 @@ function applyNumberedSiteAnswers(
         if (q.kind === "window" && isDeferWindows(body)) continue;
         if (q.kind === "door" && isDeferDoors(body)) continue;
         if (q.kind === "plumbing" && isDeferPlumbing(body)) continue;
+        if (q.kind === "gas" && isDeferGas(body)) continue;
+        if (q.kind === "electrical" && isDeferElectrical(body)) continue;
         const pending = next.unresolvedItems.find((u) =>
           !u.resolved && u.target.kind === "feature"
           && next.parsedGeometry.wallRuns.some((r) => r.features.some(
@@ -652,6 +825,8 @@ function applyNumberedSiteAnswers(
       if (q.kind === "window" && isDeferWindows(body)) continue;
       if (q.kind === "door" && isDeferDoors(body)) continue;
       if (q.kind === "plumbing" && isDeferPlumbing(body)) continue;
+      if (q.kind === "gas" && isDeferGas(body)) continue;
+      if (q.kind === "electrical" && isDeferElectrical(body)) continue;
 
       const runs = next.parsedGeometry.wallRuns.filter((r) => r.length > 0);
       let wall = q.wallRunId
@@ -669,7 +844,11 @@ function applyNumberedSiteAnswers(
         ? DEFAULT_DOOR_WIDTH
         : q.kind === "window"
           ? DEFAULT_WINDOW_WIDTH
-          : DEFAULT_PLUMBING_WIDTH;
+          : q.kind === "gas"
+            ? DEFAULT_GAS_WIDTH
+            : q.kind === "electrical"
+              ? DEFAULT_ELECTRICAL_WIDTH
+              : DEFAULT_PLUMBING_WIDTH;
       const width = parseWidth(body, widthDefault, wall.length);
       const offset = parseOffset(body, wall.length, width);
       const maxOffset = Math.max(0, wall.length - width);

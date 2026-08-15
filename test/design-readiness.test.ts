@@ -76,7 +76,7 @@ test("关键项齐备时 ready，并给出文字确认复述", () => {
   const r = evaluateDesignReadiness({
     conversation: conv({
       designRequirements:
-        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\"",
+        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\"\nNo island",
     }),
     plan,
     companyId: "co_1",

@@ -11,7 +11,7 @@ import { assumedOnes, applianceLabel, type ApplianceKind } from "../floorplan/ap
 import { planAppliances } from "../layout/appliance-plan.js";
 import { missingFields, fieldLabel } from "../agents/orchestrator.js";
 import { geometrySuppressesIntake } from "./site-questions.js";
-import { chatConfirmedPlumbing } from "./chat-site-answers.js";
+import { chatConfirmedPlumbing, isDeferElectrical, isDeferGas, isDeferIsland } from "./chat-site-answers.js";
 import { isConfirmAssumedAppliances } from "./chat-appliance-answers.js";
 import { matchProvince, provinceByCode } from "./province-match.js";
 import { requiredIntakeComplete } from "./intake-checklist.js";
@@ -115,7 +115,7 @@ function featureKind(plan: FloorPlan, kind: string): { run: WallRun; count: numb
 
 function describeFeatures(
   plan: FloorPlan,
-  kind: "plumbing" | "window" | "door",
+  kind: "plumbing" | "window" | "door" | "gas" | "electrical",
   lang: UiLanguage,
 ): string {
   const hits = featureKind(plan, kind);
@@ -157,6 +157,21 @@ function geometryLines(plan: FloorPlan, lang: UiLanguage): string[] {
     : msg(lang, "Ceiling height: not set", "层高：未定"));
   return lines;
 }
+
+/**
+ * `critical: true` 有两层含义，这里要分开：
+ *
+ *   1. 挡住 `requiredIntakeComplete`——决定风格/预算/省份能不能问（见
+ *      `intake-checklist.ts`）；
+ *   2. 挡住 `readyToAskDesign`——决定能不能真的出一版排布。
+ *
+ * 上下水（`plumbing`）两层都挡：水槽柜必须落在真实上下水位置，排布离不开它。
+ * 燃气/强电/岛台不一样：它们决定灶具/冰箱贴哪面墙、要不要留岛台过道，但
+ * 排布可以先按常规位置出一版、客户答上来了再局部重排——不必和上下水一样
+ * 卡住第一版。所以这三项只挡第 1 层（仍然是"问预算前必须问过的必备项"），
+ * 不挡第 2 层。
+ */
+const DEFERRABLE_BEFORE_DESIGN: ReadonlySet<string> = new Set(["gas", "electrical", "island"]);
 
 /**
  * 评估设计就绪检查表 + 生成 Tab1 brief 与出图前确认文案。
@@ -338,6 +353,119 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
     });
   }
 
+  // —— 燃气接口（接灶具）——
+  const hasGas = plan ? featureKind(plan, "gas").length > 0 : false;
+  const deferredGas = isDeferGas(req);
+  if (hasGas && plan) {
+    items.push({
+      id: "gas",
+      category: "site",
+      critical: true,
+      status: "ok",
+      brief: msg(lang,
+        `Gas hookup:\n${describeFeatures(plan, "gas", lang)}`,
+        `燃气接口：\n${describeFeatures(plan, "gas", lang)}`),
+    });
+  } else if (deferredGas) {
+    items.push({
+      id: "gas",
+      category: "site",
+      critical: true,
+      status: "ok",
+      brief: msg(lang,
+        "Gas hookup: none — range will run on electric.",
+        "燃气接口：没有——灶具走电。"),
+    });
+  } else {
+    items.push({
+      id: "gas",
+      category: "site",
+      critical: true,
+      status: "missing",
+      brief: msg(lang, "Gas hookup for the range not confirmed.", "接灶具的燃气接口尚未确认。"),
+      askHint: msg(lang,
+        "Is there a gas line for the range? Which wall, roughly where? Or say \"no gas / electric range\".",
+        "有接灶具的燃气接口吗？在哪面墙、大概位置？没有的话可以说「没有燃气，用电」。"),
+    });
+  }
+
+  // —— 强电接口（接冰箱/烤箱；没有燃气时也接灶具）——
+  const hasElectrical = plan ? featureKind(plan, "electrical").length > 0 : false;
+  if (hasElectrical && plan) {
+    items.push({
+      id: "electrical",
+      category: "site",
+      critical: true,
+      status: "ok",
+      brief: msg(lang,
+        `Electrical hookup:\n${describeFeatures(plan, "electrical", lang)}`,
+        `强电接口：\n${describeFeatures(plan, "electrical", lang)}`),
+    });
+  } else if (isDeferElectrical(req)) {
+    items.push({
+      id: "electrical",
+      category: "site",
+      critical: true,
+      status: "deferred",
+      brief: msg(lang,
+        "Electrical hookup: deferred (you said to decide later).",
+        "强电接口：已推迟（你说后定）。"),
+    });
+  } else {
+    items.push({
+      id: "electrical",
+      category: "site",
+      critical: true,
+      status: "missing",
+      brief: msg(lang, "Electrical hookup for fridge/oven not confirmed.", "冰箱/烤箱的强电接口尚未确认。"),
+      askHint: deferredGas
+        ? msg(lang,
+          "Since there's no gas, where's the electrical hookup for the range (and fridge/oven)? Which wall, roughly where?",
+          "既然没有燃气，灶具（以及冰箱/烤箱）的强电接口在哪面墙、大概位置？")
+        : msg(lang,
+          "Where's the electrical hookup for the fridge/oven (usually combined)? Which wall, roughly where?",
+          "冰箱/烤箱（通常合并）的强电接口在哪面墙、大概位置？"),
+    });
+  }
+
+  // —— 岛台空间——是否有位置做岛台，不是所有厨房都有——
+  const islandRun = plan?.parsedGeometry.wallRuns.find((r) => isIsland(r));
+  if (islandRun) {
+    items.push({
+      id: "island",
+      category: "geometry",
+      critical: true,
+      status: islandRun.length > 0 ? "ok" : "missing",
+      brief: islandRun.length > 0
+        ? msg(lang, `Island: ${islandRun.length}".`, `岛台：${islandRun.length}"。`)
+        : msg(lang, "Island: size not confirmed yet.", "岛台：尺寸尚未确认。"),
+      ...(islandRun.length > 0 ? {} : {
+        askHint: msg(lang,
+          "Roughly what size is the island (e.g. \"60x36\")?",
+          "岛台大概多大（如「60x36」）？"),
+      }),
+    });
+  } else if (isDeferIsland(req)) {
+    items.push({
+      id: "island",
+      category: "geometry",
+      critical: true,
+      status: "ok",
+      brief: msg(lang, "Island: no room for one.", "岛台：没有空间做岛台。"),
+    });
+  } else {
+    items.push({
+      id: "island",
+      category: "geometry",
+      critical: true,
+      status: "missing",
+      brief: msg(lang, "Island space not confirmed.", "岛台空间尚未确认。"),
+      askHint: msg(lang,
+        "Is there room for an island? If so, roughly what size (e.g. \"60x36\")? Or say \"no island\".",
+        "有没有位置做岛台？如果有，大概多大（如「60x36」）？没有可以说「不做岛台」。"),
+    });
+  }
+
   // —— 家电种类（不允许「后定」冒充就绪；尺寸未明不得进设计）——
   const appliances = plan?.appliances ?? [];
   if (appliances.length > 0) {
@@ -511,7 +639,8 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
 
   const openItems = items.filter((i) => i.status === "missing" || i.status === "needs_confirm");
   const criticalBlocking = items.filter((i) =>
-    i.critical && (i.status === "missing" || i.status === "needs_confirm"));
+    i.critical && !DEFERRABLE_BEFORE_DESIGN.has(i.id)
+    && (i.status === "missing" || i.status === "needs_confirm"));
   // deferred / assumed（已接受推定）的关键项不阻断询问出图
   const readyToAskDesign = criticalBlocking.length === 0
     && items.some((i) => i.id === "walls_ceiling" && i.status === "ok");
@@ -561,14 +690,18 @@ function buildConfirmedFacts(
       status: ceil != null ? "ok" : "missing",
       editTarget: { kind: "ceiling", currentHeight: ceil ?? 0 },
     });
-    for (const kind of ["plumbing", "window", "door"] as const) {
+    for (const kind of ["plumbing", "window", "door", "gas", "electrical"] as const) {
       for (const { run } of featureKind(plan, kind)) {
         for (const f of run.features.filter((x) => x.kind === kind)) {
           const kindLabel = kind === "plumbing"
             ? msg(lang, "Plumbing", "上下水")
             : kind === "window"
               ? msg(lang, "Window", "窗")
-              : msg(lang, "Door", "门");
+              : kind === "door"
+                ? msg(lang, "Door", "门")
+                : kind === "gas"
+                  ? msg(lang, "Gas", "燃气")
+                  : msg(lang, "Electrical", "强电");
           facts.push({
             key: `${kind}:${run.id}:${f.offset}`,
             label: msg(lang, `${kindLabel} on ${run.label}`, `${run.label} · ${kindLabel}`),
@@ -641,8 +774,8 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
   const pick = (...ids: string[]) => ids.map((id) => byId[id]).filter(Boolean) as ReadinessItem[];
 
-  const space = pick("walls_ceiling");
-  const site = pick("plumbing", "windows", "doors");
+  const space = pick("walls_ceiling", "island");
+  const site = pick("plumbing", "windows", "doors", "gas", "electrical");
   const appl = pick("appliances_kinds", "appliances_sizes", "appliances_fit");
   const intent = pick("style", "budget", "province");
   const seller = pick("seller");
