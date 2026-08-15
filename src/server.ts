@@ -2056,6 +2056,7 @@ app.post("/api/conversations/:id/engagements/:eid/messages", requireAccount, asy
   const text = (body.text ?? "").trim();
   if (!text) return c.json({ error: "text is required", code: "EMPTY_TEXT" }, 400);
   const at = now();
+  const beforeCount = eg0.messages.length;
   try {
     let { conversation: next, engagement } = appendEngagementMessage(
       conv, eg0.id, { role: "user", speaker: "user", content: text, at },
@@ -2111,7 +2112,10 @@ app.post("/api/conversations/:id/engagements/:eid/messages", requireAccount, asy
     return c.json({
       engagement,
       confirmed: engagementConfirmedPayload(next, engagement),
-      replies: engagement.messages.filter((m) => m.at === at && m.role !== "user"),
+      // 按本次调用新增的消息数取切片，不按时间戳匹配——同一毫秒内两条消息
+      // 时间戳相同是真实可能发生的（内存态测试尤其容易撞上），`at` 匹配会
+      // 把更早那条也算进本轮回复，见 test/company-engagement.test.ts 的间歇性失败。
+      replies: engagement.messages.slice(beforeCount + 1).filter((m) => m.role !== "user"),
       conversationId: next.id,
     });
   } catch (e) {
