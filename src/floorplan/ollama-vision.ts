@@ -147,7 +147,7 @@ export function createOllamaVisionExtractor(
             images: [b64],
             stream: false,
             format: "json",
-            options: { temperature: 0.1 },
+            options: { temperature: 0.1, num_ctx: 8192 },
           }),
         });
       } catch (err) {

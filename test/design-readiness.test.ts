@@ -321,3 +321,16 @@ test("账号已有省份（注册必填）时，仅作建议值——needs_confi
   assert.match(province3!.brief, /British Columbia|BC/, "下拉框改过的省份应覆盖账号建议值");
   assert.equal(confirmedViaDropdown.readyToAskDesign, true);
 });
+
+test("视觉写入但未确认的墙长/层高/上下水在已确认 Tab 标 needs_confirm，不是 ok", () => {
+  const plan = readyPlan();
+  plan.unresolvedItems = [
+    { id: "fpu_1", target: { kind: "wallRun", id: "wr_1" }, field: "length", reason: "confirm", resolved: false },
+    { id: "fpu_2", target: { kind: "global" }, field: "ceilingHeight", reason: "confirm", resolved: false },
+    { id: "fpu_3", target: { kind: "feature", id: "wf_1" }, field: "plumbing", reason: "confirm", resolved: false },
+  ];
+  const r = evaluateDesignReadiness({ conversation: conv(), plan, language: "zh" });
+  assert.equal(r.confirmedFacts.find((f) => f.key === "wall:wr_1")?.status, "needs_confirm");
+  assert.equal(r.confirmedFacts.find((f) => f.key === "ceiling")?.status, "needs_confirm");
+  assert.equal(r.confirmedFacts.find((f) => f.key.startsWith("plumbing:"))?.status, "needs_confirm");
+});
