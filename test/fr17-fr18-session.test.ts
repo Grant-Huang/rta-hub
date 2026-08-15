@@ -124,6 +124,8 @@ async function seedDesignIntake(conversationId: string, floorPlanId: string) {
       appliances: [
         { kind: "refrigerator", width: 36 },
         { kind: "range", width: 30 },
+        // 灶具几乎总要配抽油烟机，客户给了实测尺寸就不必再走"推定值待确认"
+        { kind: "rangeHood", width: 30 },
         { kind: "dishwasher", width: 24 },
       ],
     }),
@@ -131,7 +133,8 @@ async function seedDesignIntake(conversationId: string, floorPlanId: string) {
   await req(`/api/conversations/${conversationId}/messages`, {
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({
-      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Fridge 36\", stove 30\", dishwasher 24\".",
+      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. "
+        + "Fridge 36\", stove 30\", range hood 30\", dishwasher 24\".",
     }),
   });
 }

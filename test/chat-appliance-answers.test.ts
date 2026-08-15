@@ -33,17 +33,20 @@ function emptyPlan(appliances: FloorPlan["appliances"] = []): FloorPlan {
 
 test("解析 fridge/stove/dishwasher 宽度并落库", () => {
   const parsed = parseAppliancesFromChat('fridge 33", stove 30", dishwasher 24"');
-  assert.equal(parsed.appliances.length, 3);
+  // 三样客户给的 + 一台跟着灶具补的推定烟机
+  assert.equal(parsed.appliances.length, 4);
   const fridge = parsed.appliances.find((a) => a.kind === "refrigerator");
   assert.equal(fridge?.width, 33);
   assert.equal(fridge?.provenance, "customer");
   const stove = parsed.appliances.find((a) => a.kind === "range");
   assert.equal(stove?.width, 30);
+  const hood = parsed.appliances.find((a) => a.kind === "rangeHood");
+  assert.equal(hood?.provenance, "assumed");
 
   const applied = applyChatApplianceAnswers(emptyPlan(), 'Fridge 33", stove 30"');
   assert.ok(applied);
   assert.ok(applied!.applied.includes("widths") || applied!.applied.includes("kinds"));
-  assert.equal(applied!.plan.appliances?.length, 2);
+  assert.equal(applied!.plan.appliances?.length, 3);
 });
 
 test("budget range 不误判为灶具", () => {
@@ -55,7 +58,7 @@ test("budget range 不误判为灶具", () => {
   );
 });
 
-test("家电后定 isDefer；接受推定时保留 assumed 并在空列表时落入默认三件套", () => {
+test("家电后定 isDefer；接受推定时保留 assumed 并在空列表时落入默认三件套+推定烟机", () => {
   assert.equal(isDeferAppliances("appliances later"), true);
   const plan = emptyPlan([
     {
@@ -72,8 +75,10 @@ test("家电后定 isDefer；接受推定时保留 assumed 并在空列表时落
   assert.ok(seeded);
   assert.ok(seeded!.applied.includes("kinds"));
   assert.ok(seeded!.applied.includes("confirmAssumed"));
-  assert.equal(seeded!.plan.appliances?.length, 3);
+  // 冰箱+灶具+洗碗机三件套，另加一台跟着灶具补的推定烟机
+  assert.equal(seeded!.plan.appliances?.length, 4);
   assert.ok(seeded!.plan.appliances?.every((a) => a.provenance === "assumed"));
+  assert.ok(seeded!.plan.appliances?.some((a) => a.kind === "rangeHood"));
 });
 
 test("历史同时有 appliances later 与 assumed widths are fine 时仍落入推定", () => {

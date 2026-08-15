@@ -39,6 +39,20 @@ import { ownerCornerKeepOuts } from "./corner-reserve.js";
 const TALL_APPLIANCE: ReadonlySet<ApplianceKind> = new Set(["refrigerator", "wallOven"]);
 
 /**
+ * 灶具/灶台不能对着窗——这条跟 TALL_APPLIANCE 是两个不同的理由：
+ * 高柜是箱体本身通高、窗那段没有实体墙可靠；灶具是矮柜，物理上能塞进窗下，
+ * 但灶具几乎总要配一台抽油烟机（见 normalizeAppliances），烟机排烟需要
+ * 头顶的墙面/吊柜走管道，窗洞那一截没有墙可走——灶具坐在窗前，等于烟机
+ * 一开始就没地方装。窗帘贴近明火也是现实中的顾虑，但主因是排烟这条硬约束。
+ */
+const WINDOW_AVOIDING_COOKING: ReadonlySet<ApplianceKind> = new Set(["range", "cooktop"]);
+
+/** 这类家电落位/复核落台区时要不要把窗洞当断点——理由见上面两个集合各自的注释。 */
+function avoidsWindows(kind: ApplianceKind): boolean {
+  return TALL_APPLIANCE.has(kind) || WINDOW_AVOIDING_COOKING.has(kind);
+}
+
+/**
  * 给水槽**连同它两侧台面**预留的宽度。
  *
  * 36"（常见水槽柜）+ 24" + 18"（NKBA 要求的两侧台面工作区）。
@@ -257,7 +271,7 @@ export function planAppliances(
       if (!req) continue;
       const blockers = [
         ...(hard.get(runId) ?? []),
-        ...(TALL_APPLIANCE.has(p.spec.kind) ? windowSpans(runId) : []),
+        ...(avoidsWindows(p.spec.kind) ? windowSpans(runId) : []),
         { x, width },
       ];
       if (!landingOk(run, p.x, p.width, p.spec.kind, blockers)) return true;
@@ -271,14 +285,14 @@ export function planAppliances(
 
     const need = reservedWidth(spec);
     const name = applianceLabel(spec.kind, lang);
-    const tall = TALL_APPLIANCE.has(spec.kind);
+    const avoidWindow = avoidsWindows(spec.kind);
     const overlapsHere = (runId: string, x: number, width: number) =>
       overlaps(runId, x, width)
-      || (tall && windowSpans(runId).some((t) => x < t.x + t.width && x + width > t.x))
+      || (avoidWindow && windowSpans(runId).some((t) => x < t.x + t.width && x + width > t.x))
       || breaksExistingLanding(runId, x, width);
     const blockersHere = (runId: string) => [
       ...(hard.get(runId) ?? []),
-      ...(tall ? windowSpans(runId) : []),
+      ...(avoidWindow ? windowSpans(runId) : []),
     ];
     const spot = findSpot(runs, spec, need, overlapsHere, blockersHere, lang);
     if (!spot) {
@@ -286,9 +300,9 @@ export function planAppliances(
         kind: spec.kind,
         message: msg(lang,
           `${name} needs ${need}" but no wall run can fit it` +
-            ` (excluding entry openings${tall ? ", windows" : ""}, obstructions, and other appliances)`,
+            ` (excluding entry openings${avoidWindow ? ", windows" : ""}, obstructions, and other appliances)`,
           `${name}需要 ${need}" 的位置，` +
-            `但没有一段墙能放下（已排除出入口${tall ? "、窗洞" : ""}、障碍与其他家电占位）`),
+            `但没有一段墙能放下（已排除出入口${avoidWindow ? "、窗洞" : ""}、障碍与其他家电占位）`),
       });
       continue;
     }

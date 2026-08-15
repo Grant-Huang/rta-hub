@@ -558,7 +558,8 @@ test("局部重算只影响指定墙段", async () => {
   await req(`/api/conversations/${conversation.id}/messages`, {
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({
-      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Fridge 36\", stove 30\", dishwasher 24\".",
+      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. "
+        + "Fridge 36\", stove 30\", range hood 30\", dishwasher 24\".",
     }),
   });
   await req(`/api/floorplans/${floorPlan.id}/resolve`, {
@@ -567,6 +568,7 @@ test("局部重算只影响指定墙段", async () => {
       appliances: [
         { kind: "refrigerator", width: 36 },
         { kind: "range", width: 30 },
+        { kind: "rangeHood", width: 30 },
         { kind: "dishwasher", width: 24 },
       ],
     }),
@@ -702,6 +704,10 @@ async function seedDesignIntake(conversationId: string, accountId: string, floor
       appliances: [
         { kind: "refrigerator", width: 36 },
         { kind: "range", width: 30 },
+        // 灶具几乎总要配抽油烟机（normalizeAppliances 会自动补一台推定的），
+        // 这里客户直接给出实测尺寸，避免走"推定值待确认"那条路，
+        // 与冰箱/灶具/洗碗机走同一条"客户给了就是 customer"的路径。
+        { kind: "rangeHood", width: 30 },
         { kind: "dishwasher", width: 24 },
       ],
     }),
@@ -709,7 +715,8 @@ async function seedDesignIntake(conversationId: string, accountId: string, floor
   await req(`/api/conversations/${conversationId}/messages`, {
     method: "POST", accountId,
     body: JSON.stringify({
-      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. Fridge 36\", stove 30\", dishwasher 24\".",
+      text: "Modern style, budget CAD $10–20k, Ontario ON. No windows. "
+        + "Fridge 36\", stove 30\", range hood 30\", dishwasher 24\".",
     }),
   });
   return runId;
@@ -1559,7 +1566,8 @@ test("客户能补充窗户与上下水位置，排布据此放水槽柜", async
   await req(`/api/conversations/${conversation.id}/messages`, {
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({
-      text: "Modern style, budget CAD $10–20k, Ontario ON. Plumbing later. No windows. Fridge 36\", stove 30\".",
+      text: "Modern style, budget CAD $10–20k, Ontario ON. Plumbing later. No windows. "
+        + "Fridge 36\", stove 30\", range hood 30\".",
     }),
   });
   await req(`/api/floorplans/${floorPlan.id}/resolve`, {
@@ -1568,6 +1576,8 @@ test("客户能补充窗户与上下水位置，排布据此放水槽柜", async
       appliances: [
         { kind: "refrigerator", width: 36 },
         { kind: "range", width: 30 },
+        // 灶具几乎总要配抽油烟机，客户给了实测尺寸就不必再走"推定值待确认"
+        { kind: "rangeHood", width: 30 },
       ],
     }),
   });

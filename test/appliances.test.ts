@@ -54,8 +54,32 @@ test("同一种家电只留一台", () => {
     applianceFrom({ kind: "refrigerator", width: 36 }),
     applianceFrom({ kind: "range" }),
   ]);
-  assert.equal(list.length, 2);
+  // 有灶具没提烟机时会补一台推定的（见 normalizeAppliances），所以是 3 不是 2
+  assert.equal(list.length, 3);
   assert.equal(list.find((a) => a.kind === "refrigerator")?.width, 36, "后填的覆盖先填的");
+});
+
+test("有灶具没提烟机时补一台推定的抽油烟机，宽度跟灶具走", () => {
+  const list = normalizeAppliances([applianceFrom({ kind: "range", width: 36 })]);
+  const hood = list.find((a) => a.kind === "rangeHood");
+  assert.ok(hood, "灶具几乎总要配烟机，不该悄悄漏掉");
+  assert.equal(hood!.width, 36, "烟机宽度按灶具走，不是写死的默认值");
+  assert.equal(hood!.provenance, "assumed", "客户没说过要装烟机，这是推定的");
+});
+
+test("客户明确给了烟机时不覆盖", () => {
+  const list = normalizeAppliances([
+    applianceFrom({ kind: "range", width: 36 }),
+    applianceFrom({ kind: "rangeHood", width: 30, preferredZone: "nearEntry" }),
+  ]);
+  const hood = list.find((a) => a.kind === "rangeHood");
+  assert.equal(hood!.width, 30, "客户给的烟机尺寸不该被推定值覆盖");
+  assert.equal(hood!.provenance, "customer");
+});
+
+test("没有灶具就不会平白冒出一台烟机", () => {
+  const list = normalizeAppliances([applianceFrom({ kind: "refrigerator", width: 33 })]);
+  assert.equal(list.some((a) => a.kind === "rangeHood"), false);
 });
 
 test("客户想放的位置被记下来，不是丢掉", () => {

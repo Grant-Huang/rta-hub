@@ -174,6 +174,31 @@ test("冰箱不得压在窗洞上——同墙有窗时落位避开", () => {
   );
 });
 
+test("灶具不得对着窗——理由不是箱体通高，是烟机排烟没地方走", () => {
+  const w = wall({
+    id: "north",
+    length: 180,
+    features: [
+      feat("win", "window", 48, 36),
+      feat("e", "electrical", 60, 0),
+    ],
+  });
+  const plan = planAppliances(geo(w), [appl("range", { width: 30 })]);
+  const range = plan.placed.find((p) => p.spec.kind === "range");
+  assert.ok(range, "应另找位置放下灶具");
+  assert.ok(
+    range.x + range.width <= 48 || range.x >= 84,
+    `灶具 ${range.x}–${range.x + range.width} 压到了窗 48–84`,
+  );
+});
+
+test("同墙窗占满时灶具放不下就如实报警告，提示里点名窗洞", () => {
+  const w = wall({ id: "a", length: 30, features: [feat("win", "window", 0, 30)] });
+  const plan = planAppliances(geo(w), [appl("range", { width: 30 })]);
+  assert.equal(plan.placed.length, 0);
+  assert.match(plan.warnings[0]!.message, /window|窗洞/);
+});
+
 test("冰箱不得压进门洞净空（含门套让位）", () => {
   const w = wall({
     id: "a",
