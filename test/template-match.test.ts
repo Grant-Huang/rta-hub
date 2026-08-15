@@ -55,7 +55,6 @@ test("按标签模糊匹配对齐：图上读到的 North/East 落到 U 型模�
   const byLabel = Object.fromEntries(geometry.wallRuns.map((r) => [r.label, r.length]));
   assert.equal(byLabel.North, 150);
   assert.equal(byLabel.East, 118);
-  // West 没被读到 → 长度 0，且进待确认，reason 里点名了具体墙+布局
   assert.equal(byLabel.West, 0);
   const westPending = unresolved.find((u) =>
     u.target.kind === "wallRun"
@@ -63,9 +62,30 @@ test("按标签模糊匹配对齐：图上读到的 North/East 落到 U 型模�
   assert.ok(westPending, "西墙没读到应该进待确认");
   assert.match(westPending!.reason, /West/);
   assert.match(westPending!.reason, /U-shape/i);
+  // 过阈值的北墙/东墙/层高仍要确认，不能标成已确认
+  assert.ok(unresolved.some((u) =>
+    u.field === "length" && geometry.wallRuns.find((r) => r.id === u.target.id)?.label === "North"));
+  assert.ok(unresolved.some((u) => u.field === "ceilingHeight"));
 });
 
-test("标签完全对不上时按剩余出现顺序位置对齐——图上量出来的东西不能因为标签不对就丢", () => {
+test("北墙/岛台等中文标签也能对上罗盘槽位", () => {
+  const template = FLOORPLAN_TEMPLATES["l-island-kitchen"]!;
+  const raw: RawExtraction = {
+    wallRuns: [
+      { label: "北墙", length: 144, lengthConfidence: 0.9 },
+      { label: "东墙", length: 120, lengthConfidence: 0.9 },
+      { label: "岛台", length: 72, lengthConfidence: 0.9, kind: "island", depth: 36 },
+    ],
+  };
+  const { geometry, unresolved } = normalizeExtractionWithTemplate(raw, template, "zh");
+  const byLabel = Object.fromEntries(geometry.wallRuns.map((r) => [r.label, r.length]));
+  assert.equal(byLabel.North, 144);
+  assert.equal(byLabel.East, 120);
+  assert.equal(byLabel.Island, 72);
+  assert.equal(unresolved.filter((u) => u.field === "note").length, 0, "标签对得上就不应再报多余墙段");
+});
+
+test("标签完全对不上时槽位空着，不按出现顺序硬套；多出来的墙进待确认", () => {
   const template = FLOORPLAN_TEMPLATES["u-shaped-kitchen"]!; // West, North, East（3段）
   const raw: RawExtraction = {
     wallRuns: [
@@ -74,9 +94,13 @@ test("标签完全对不上时按剩余出现顺序位置对齐——图上量�
       { label: "Wall C", length: 118, lengthConfidence: 0.9 },
     ],
   };
-  const { geometry } = normalizeExtractionWithTemplate(raw, template, "en");
-  assert.deepEqual(geometry.wallRuns.map((r) => r.length), [120, 144, 118]);
+  const { geometry, unresolved } = normalizeExtractionWithTemplate(raw, template, "en");
+  assert.deepEqual(geometry.wallRuns.map((r) => r.length), [0, 0, 0]);
   assert.deepEqual(geometry.wallRuns.map((r) => r.label), ["West", "North", "East"]);
+  const extras = unresolved.filter((u) => u.field === "note");
+  assert.equal(extras.length, 3);
+  assert.ok(extras.some((u) => /Wall A/.test(u.reason) && u.suggestion === 120));
+  assert.ok(extras.some((u) => /Wall C/.test(u.reason) && u.suggestion === 118));
 });
 
 test("置信度不够的墙长视为没读到——不能拿低置信度的数直接采信", () => {
@@ -95,7 +119,7 @@ test("置信度不够的墙长视为没读到——不能拿低置信度的数�
   assert.equal(pending!.suggestion, 144);
 });
 
-test("特征（窗/门/上下水）按对齐后的墙段带过去，同样过置信度门槛", () => {
+test("特征（窗/门/上下水）按对齐后的墙段带过去；低置信进待确认，过阈值也要确认", () => {
   const template = FLOORPLAN_TEMPLATES["floorplan-minimal"]!; // North, East
   const raw: RawExtraction = {
     wallRuns: [
@@ -103,24 +127,32 @@ test("特征（窗/门/上下水）按对齐后的墙段带过去，同样过置
         label: "North", length: 144, lengthConfidence: 0.9,
         features: [
           { kind: "window", offset: 48, width: 36, confidence: 0.8 },
-          { kind: "door", offset: 0, width: 32, confidence: 0.2 }, // 置信度不够，应被丢弃
+          { kind: "door", offset: 0, width: 32, confidence: 0.2 }, // 置信度不够，不写入几何
         ],
       },
     ],
   };
-  const { geometry } = normalizeExtractionWithTemplate(raw, template, "en");
+  const { geometry, unresolved } = normalizeExtractionWithTemplate(raw, template, "en");
   const north = geometry.wallRuns.find((r) => r.label === "North")!;
   assert.equal(north.features.length, 1);
   assert.equal(north.features[0]!.kind, "window");
+  assert.ok(unresolved.some((u) => u.field === "feature.door.offset"), "低置信门应进待确认，不能静默丢掉");
+  assert.ok(unresolved.some((u) =>
+    u.target.kind === "feature" && u.target.id === north.features[0]!.id),
+  "过阈值的窗也要确认");
 });
 
-test("岛台槎位（L型+岛台模板）保留 kind/depth", () => {
+test("岛台槎位（L型+岛台模板）保留 kind/depth，且不接墙", () => {
   const template = FLOORPLAN_TEMPLATES["l-island-kitchen"]!; // North, East, Island
   const raw: RawExtraction = { wallRuns: [] };
   const { geometry } = normalizeExtractionWithTemplate(raw, template, "en");
   const island = geometry.wallRuns.find((r) => r.label === "Island")!;
+  const east = geometry.wallRuns.find((r) => r.label === "East")!;
   assert.equal(island.kind, "island");
   assert.equal(island.depth, 36);
+  assert.equal(island.startsAtCorner, false);
+  assert.equal(island.endsAtCorner, false);
+  assert.equal(east.endsAtCorner, false, "东墙后面是岛台，不是转角相接");
 });
 
 test("走廊型两段墙不相接——模板的 startsAtCorner:false 要保留下来", () => {
@@ -137,6 +169,8 @@ test("层高读到且置信度够时采用；没读到时进待确认并带模�
     { ceilingHeight: 108, ceilingHeightConfidence: 0.9, wallRuns: [] }, template, "en",
   );
   assert.equal(withCeiling.geometry.ceilingHeight, 108);
+  assert.ok(withCeiling.unresolved.some((u) => u.field === "ceilingHeight"),
+    "层高过阈值写入几何，仍要确认");
 
   const noCeiling = normalizeExtractionWithTemplate({ wallRuns: [] }, template, "en");
   assert.equal(noCeiling.geometry.ceilingHeight, undefined);

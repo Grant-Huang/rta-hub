@@ -72,7 +72,7 @@ export const FLOORPLAN_TEMPLATES: Readonly<Record<string, FloorplanTemplate>> = 
     walls: [
       { label: "North", length: 144 },
       { label: "East", length: 120 },
-      { label: "Island", length: 72, kind: "island", depth: 36 },
+      { label: "Island", length: 72, kind: "island", depth: 36, startsAtCorner: false },
     ],
     features: [
       { wall: 0, kind: "window", offset: 48, width: 36 },

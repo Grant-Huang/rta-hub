@@ -67,9 +67,18 @@ test("传了 templateAnchor 且模型猜中模板时，走模板锚定路径—�
   assert.equal(plan.parsedGeometry.wallRuns.length, 3);
   const labels = plan.parsedGeometry.wallRuns.map((r) => r.label);
   assert.deepEqual(labels, ["West", "North", "East"]);
+  const west = plan.parsedGeometry.wallRuns.find((r) => r.label === "West")!;
+  const north = plan.parsedGeometry.wallRuns.find((r) => r.label === "North")!;
+  const east = plan.parsedGeometry.wallRuns.find((r) => r.label === "East")!;
+  assert.equal(west.length, 0);
+  assert.equal(north.length, 144);
+  assert.equal(east.length, 118);
   const pending = plan.unresolvedItems.filter((u) => !u.resolved);
-  assert.equal(pending.length, 1, "只有 West 没读到，应该只有一条待确认");
-  assert.match(pending[0]!.reason, /West/);
+  assert.ok(pending.some((u) => u.target.id === west.id && u.field === "length"));
+  assert.ok(pending.some((u) => u.target.id === north.id && u.field === "length"),
+    "过阈值的北墙也要确认");
+  assert.ok(pending.some((u) => u.target.id === east.id && u.field === "length"));
+  assert.ok(pending.some((u) => u.field === "ceilingHeight"));
 });
 
 test("传了 templateAnchor 但模型没给模板猜测（或猜错/低置信）时，原样退回自由抽取", async () => {
