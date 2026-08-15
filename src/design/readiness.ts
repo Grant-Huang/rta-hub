@@ -42,9 +42,10 @@ export interface DesignBriefSection {
 
 /**
  * 已确认 Tab 里这一行能不能手动改、改的话要传什么——前端不用去解析 `key`
- * 字符串猜目标，直接读这个字段拼 `/resolve` 的请求体（见 web/index.html
- * 的 `submitConfirmedEdit`）。没有这个字段 = 这一行不支持面板内编辑
- * （风格/预算/省份等走对话改，不在这次编辑范围内）。
+ * 字符串猜目标，直接读这个字段拼请求体（wall/ceiling/appliance/feature 走
+ * `/resolve`，见 web/index.html 的 `saveFactEdit`；province 走
+ * `/api/conversations/:id/preferences`，跟风格/预算共用的既有偏好接口）。
+ * 没有这个字段 = 这一行不支持面板内编辑（风格/预算等走对话改）。
  */
 export type ConfirmedFactEditTarget =
   | { kind: "wall"; wallRunId: string; currentLength: number }
@@ -53,7 +54,8 @@ export type ConfirmedFactEditTarget =
   | {
       kind: "feature"; wallRunId: string; featureId: string;
       currentOffset: number; currentWidth: number;
-    };
+    }
+  | { kind: "province"; currentCode: Province };
 
 /** 已确认 Tab 用的明确事实行（尺寸/位置等，禁止模糊「已记录」）。 */
 export interface ConfirmedFact {
@@ -188,10 +190,8 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   if (geometrySuppressesIntake(plan) || (plan && isLayoutReady(plan))) {
     intake = intake.filter((f) => f !== "kitchen size" && f !== "layout");
   }
-  // 账号上已经有省份（注册必填）——不再要求客户在聊天里也说一遍才算数。
-  if (input.accountProvince) {
-    intake = intake.filter((f) => f !== "province");
-  }
+  // 省份走独立的建议/确认逻辑（见下方"省份"小节），不用这份 intake 判 missing。
+  intake = intake.filter((f) => f !== "province");
 
   const items: ReadinessItem[] = [];
 
@@ -583,19 +583,18 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
     }
   }
 
-  // —— 意图：风格 / 预算 / 省份 ——
+  // —— 意图：风格 / 预算 ——
   // FR-15.2：禁止「已记在需求里」——必须写出系统理解到的具体描述。
   const doorStyleName = doorStyleNameFromPrefs(prefs);
-  for (const field of ["style", "budget", "province"] as const) {
+  for (const field of ["style", "budget"] as const) {
     const missing = intake.includes(field);
     const fromPref = (field === "budget" && shared.budgetBand !== undefined)
-      || (field === "style" && Boolean(doorStyleName))
-      || (field === "province" && Boolean(input.accountProvince));
+      || (field === "style" && Boolean(doorStyleName));
     const ok = !missing || fromPref;
     const understood = ok
       ? (field === "style" && doorStyleName && missing
         ? msg(lang, `Style: ${doorStyleName}.`, `风格：${doorStyleName}。`)
-        : describeIntentField(field, req, shared.budgetBand, lang, input.accountProvince))
+        : describeIntentField(field, req, shared.budgetBand, lang))
       : "";
     items.push({
       id: field,
@@ -613,6 +612,54 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
           `请补充${fieldLabel(field, "zh")}。`),
       }),
     });
+  }
+
+  // —— 省份——账号上的省份只是**建议值**（注册必填，不代表客户在这次对话
+  // 里确认过），必须客户明确确认/改口（聊天提到，或用已确认面板的下拉框
+  // 改过）才算 ok；否则停在 needs_confirm，用建议值顶着继续，但仍要问一句。
+  let provinceCurrentCode: Province | undefined;
+  {
+    const confirmedCode = shared.province;
+    const chatHit = matchProvince(req);
+    const confirmed = confirmedCode ? provinceByCode(confirmedCode) : chatHit;
+    if (confirmed) {
+      provinceCurrentCode = (confirmedCode ?? chatHit?.code) as Province | undefined;
+      items.push({
+        id: "province",
+        category: "intent",
+        critical: true,
+        status: "ok",
+        brief: msg(lang, `Province: ${confirmed.en} (${confirmed.code}).`, `省份：${confirmed.zh}（${confirmed.code}）。`),
+      });
+    } else if (input.accountProvince) {
+      provinceCurrentCode = input.accountProvince;
+      const suggested = provinceByCode(input.accountProvince);
+      items.push({
+        id: "province",
+        category: "intent",
+        critical: true,
+        status: "needs_confirm",
+        brief: suggested
+          ? msg(lang,
+            `Province: ${suggested.en} (${suggested.code}) — from your account, not yet confirmed.`,
+            `省份：${suggested.zh}（${suggested.code}）——来自账号信息，尚未确认。`)
+          : msg(lang, "Province: not yet confirmed.", "省份：尚未确认。"),
+        askHint: suggested
+          ? msg(lang,
+            `Your account has ${suggested.en} (${suggested.code}) on file — is that right, or should I use a different province?`,
+            `账号信息里的省份是${suggested.zh}（${suggested.code}）——对吗？不对的话告诉我正确的省份。`)
+          : msg(lang, "Please confirm your province.", "请确认所在省份。"),
+      });
+    } else {
+      items.push({
+        id: "province",
+        category: "intent",
+        critical: true,
+        status: "missing",
+        brief: msg(lang, "Province: not yet.", "省份：尚未确认。"),
+        askHint: msg(lang, "Please share your province.", "请补充所在省份。"),
+      });
+    }
   }
 
   // —— 厂商 ——
@@ -647,7 +694,7 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
 
   const sections = buildSections(items, lang);
   const confirmationText = buildConfirmationText(items, readyToAskDesign, lang);
-  const confirmedFacts = buildConfirmedFacts(items, plan, lang);
+  const confirmedFacts = buildConfirmedFacts(items, plan, lang, provinceCurrentCode);
 
   return {
     items, readyToAskDesign, requiredIntakeComplete: requiredIntakeComplete(items),
@@ -660,6 +707,7 @@ function buildConfirmedFacts(
   items: ReadinessItem[],
   plan: FloorPlan | undefined,
   lang: UiLanguage,
+  provinceCurrentCode: Province | undefined,
 ): ConfirmedFact[] {
   const facts: ConfirmedFact[] = [];
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
@@ -749,6 +797,9 @@ function buildConfirmedFacts(
       label,
       value: raw || it.brief,
       status: it.status,
+      ...(id === "province" && provinceCurrentCode
+        ? { editTarget: { kind: "province", currentCode: provinceCurrentCode } }
+        : {}),
     });
   }
 
@@ -858,15 +909,17 @@ export function readinessOpenFields(readiness: DesignReadiness): string[] {
 }
 
 /**
- * 从需求原文抽出客户可见的风格/预算/省份描述。
+ * 从需求原文抽出客户可见的风格/预算描述。
  * 匹配标准选项时用标准术语；否则用摘录，绝不写「已记在需求里」。
+ *
+ * 省份不走这里——它的"建议值 vs 客户确认"逻辑在 `evaluateDesignReadiness`
+ * 里单独处理（见"省份"小节），不是简单的"从需求文本摘一句"。
  */
 export function describeIntentField(
-  field: "style" | "budget" | "province",
+  field: "style" | "budget",
   requirements: string,
   budgetBand: string | undefined,
   lang: UiLanguage,
-  accountProvince?: Province,
 ): string {
   const text = requirements;
   if (field === "budget") {
@@ -880,16 +933,6 @@ export function describeIntentField(
     );
     const phrase = (m?.[0] ?? "").trim() || msg(lang, "stated in chat", "已在对话中说明");
     return msg(lang, `Budget: ${phrase}.`, `预算：${phrase}。`);
-  }
-
-  if (field === "province") {
-    const hit = matchProvince(text) ?? (accountProvince ? provinceByCode(accountProvince) : undefined);
-    if (hit) {
-      return msg(lang,
-        `Province: ${hit.en} (${hit.code}).`,
-        `省份：${hit.zh}（${hit.code}）。`);
-    }
-    return msg(lang, "Province: stated in chat.", "省份：已在对话中说明。");
   }
 
   // style

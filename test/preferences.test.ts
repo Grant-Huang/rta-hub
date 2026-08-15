@@ -208,6 +208,16 @@ test("非法枚举值被拒", () => {
   assert.throws(() => validatePreferences({ assembly: "Assembled" as never }, b), PreferenceError);
   assert.throws(() => validatePreferences({ budgetBand: "cheap" as never }, b), PreferenceError);
   assert.throws(() => validatePreferences({ hardwareOptionIds: "hw_softclose" as never }, b), PreferenceError);
+  assert.throws(() => validatePreferences({ province: "XX" as never }, b), PreferenceError);
+});
+
+test("省份下拉编辑：合法省码写入 shared，不属于任何公司专属集合", () => {
+  const { shared, company } = validatePreferences({ province: "BC" }, bundle());
+  assert.deepEqual(shared, { province: "BC" });
+  assert.deepEqual(company, {});
+  // 没有公司上下文（省份跨公司通用，不该要求先 @ 一家公司）也该放行
+  const { shared: shared2 } = validatePreferences({ province: "QC" }, undefined);
+  assert.deepEqual(shared2, { province: "QC" });
 });
 
 test("校验结果按「跨公司 / 公司专属」拆开", () => {

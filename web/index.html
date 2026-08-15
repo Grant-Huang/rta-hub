@@ -149,6 +149,8 @@
   .fact-list .fact-edit-row { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:4px; }
   .fact-list .fact-edit-row input { width:78px; font-size:12.5px; padding:3px 6px; border-radius:6px;
     background:#0f1318; border:1px solid #3a4250; color:#e6e8eb; }
+  .fact-list .fact-edit-row select { font-size:12.5px; padding:3px 6px; border-radius:6px;
+    background:#0f1318; border:1px solid #3a4250; color:#e6e8eb; }
   .fact-list .fact-edit-row label { font-size:11px; color:#8b94a3; }
   .fact-list .fact-edit-save { font-size:11.5px; padding:3px 9px; border-radius:6px; background:#1e3566;
     color:#e6e8eb; border:1px solid #4d7bd7; cursor:pointer; }
@@ -406,6 +408,23 @@ function factStatusClass(status) {
   if (status === 'needs_confirm' || status === 'deferred' || status === 'assumed') return 'fact-clarify';
   return 'fact-confirmed';
 }
+
+/** 加拿大省/地区——与 domain/types.ts 的 ALL_PROVINCES 一致，供省份下拉编辑用。 */
+const PROVINCE_OPTIONS = [
+  { code: 'AB', en: 'Alberta', zh: '阿尔伯塔省' },
+  { code: 'BC', en: 'British Columbia', zh: '不列颠哥伦比亚省' },
+  { code: 'MB', en: 'Manitoba', zh: '曼尼托巴省' },
+  { code: 'NB', en: 'New Brunswick', zh: '新不伦瑞克省' },
+  { code: 'NL', en: 'Newfoundland and Labrador', zh: '纽芬兰与拉布拉多省' },
+  { code: 'NS', en: 'Nova Scotia', zh: '新斯科舍省' },
+  { code: 'NT', en: 'Northwest Territories', zh: '西北地区' },
+  { code: 'NU', en: 'Nunavut', zh: '努纳武特地区' },
+  { code: 'ON', en: 'Ontario', zh: '安大略省' },
+  { code: 'PE', en: 'Prince Edward Island', zh: '爱德华王子岛省' },
+  { code: 'QC', en: 'Quebec', zh: '魁北克省' },
+  { code: 'SK', en: 'Saskatchewan', zh: '萨斯喀彻温省' },
+  { code: 'YT', en: 'Yukon', zh: '育空地区' },
+];
 
 /** 当前正在编辑的已确认事实 key（面板一次只编辑一行）；null = 没有在编辑。 */
 let editingFactKey = null;
@@ -797,6 +816,12 @@ function renderFactEditRow(f) {
       + `<input type="number" step="0.25" min="0" data-fact-input="offset" value="${et.currentOffset}">`
       + `<label>${esc(t('factWidthLabel'))}</label>`
       + `<input type="number" step="0.25" min="0" data-fact-input="width" value="${et.currentWidth}">`;
+  } else if (et.kind === 'province') {
+    const opts = PROVINCE_OPTIONS.map((p) =>
+      `<option value="${p.code}"${p.code === et.currentCode ? ' selected' : ''}>${esc(uiLang === 'zh' ? p.zh : p.en)} (${p.code})</option>`,
+    ).join('');
+    inputs = `<label>${esc(t('factProvinceLabel'))}</label>`
+      + `<select data-fact-input="province">${opts}</select>`;
   }
   return `
     <li class="${factStatusClass(f.status)}">
@@ -911,9 +936,37 @@ $('importDesignFileInput')?.addEventListener('change', async () => {
 async function saveFactEdit(key) {
   const fact = (confirmed.confirmedFacts || []).find((f) => f.key === key);
   const row = document.querySelector(`.fact-edit-row[data-fact-key="${cssEscape(key)}"]`);
-  if (!fact?.editTarget || !row || !floorPlanId) return;
-  const val = (name) => Number(row.querySelector(`[data-fact-input="${name}"]`)?.value);
+  if (!fact?.editTarget || !row || !conversationId) return;
   const et = fact.editTarget;
+
+  // 省份不挂在户型上，走跟风格/预算共用的偏好接口，不经 /resolve。
+  if (et.kind === 'province') {
+    const code = row.querySelector('[data-fact-input="province"]')?.value;
+    if (!code) return;
+    try {
+      const { ok, body } = await api(`/api/conversations/${conversationId}/preferences`, {
+        method: 'POST', body: JSON.stringify({ companyId: currentCompanyId() || '', province: code }),
+      });
+      if (!ok) {
+        factEditErr = body.error || t('submitFail');
+        renderConfirmed();
+        return;
+      }
+      editingFactKey = null;
+      factEditErr = '';
+      // /preferences 不带回 designBrief——重新拉一次会话快照刷新已确认面板。
+      const snap = await api(`/api/conversations/${conversationId}`);
+      if (snap.ok && snap.body.designBrief) applyDesignBrief(snap.body.designBrief);
+      else renderConfirmed();
+    } catch (err) {
+      factEditErr = t('factSaveFail', err.message || String(err));
+      renderConfirmed();
+    }
+    return;
+  }
+
+  if (!floorPlanId) return;
+  const val = (name) => Number(row.querySelector(`[data-fact-input="${name}"]`)?.value);
   let patch;
   if (et.kind === 'wall') patch = { wallRunId: et.wallRunId, length: val('length') };
   else if (et.kind === 'ceiling') patch = { ceilingHeight: val('ceilingHeight') };
