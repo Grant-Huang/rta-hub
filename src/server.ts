@@ -3131,7 +3131,12 @@ async function applyFloorplanTemplate(
       });
     }
   }
-  plan = { ...plan, unresolvedItems: [...plan.unresolvedItems, ...confirmItems], updatedAt: at };
+  plan = {
+    ...plan,
+    unresolvedItems: [...plan.unresolvedItems, ...confirmItems],
+    shapeTemplateId: template.id,
+    updatedAt: at,
+  };
   await appCtx.repos.floorPlans.upsert(plan);
 
   const templateNote = lang === "zh" ? template.noteZh : template.noteEn;

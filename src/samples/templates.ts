@@ -174,3 +174,16 @@ export const SHAPE_WALL_EXPLANATION: Readonly<Record<string, { en: string; zh: s
     zh: "L型两段墙首尾相接（「North / 北墙」和「East / 东墙」）。",
   },
 };
+
+/**
+ * 户型形状的短名——供"已确认"面板展示"客户说的是哪种户型"用（区别于
+ * `noteEn`/`noteZh`，那两个是带墙长数字的完整句子，跟原子事实行的墙长
+ * 数值重复；这里只要一个词）。
+ */
+export const SHAPE_SHORT_LABEL: Readonly<Record<string, { en: string; zh: string }>> = {
+  "one-wall-kitchen": { en: "One-wall", zh: "一字型" },
+  "u-shaped-kitchen": { en: "U-shape", zh: "U型" },
+  "l-island-kitchen": { en: "L-shape + island", zh: "L型+岛台" },
+  "galley-kitchen": { en: "Galley", zh: "走廊型" },
+  "floorplan-minimal": { en: "L-shape", zh: "L型" },
+};

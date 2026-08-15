@@ -15,6 +15,7 @@ import { chatConfirmedPlumbing, isDeferElectrical, isDeferGas, isDeferIsland } f
 import { isConfirmAssumedAppliances } from "./chat-appliance-answers.js";
 import { matchProvince, provinceByCode } from "./province-match.js";
 import { requiredIntakeComplete } from "./intake-checklist.js";
+import { SHAPE_SHORT_LABEL } from "../samples/templates.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export type CheckStatus = "ok" | "missing" | "needs_confirm" | "deferred" | "assumed";
@@ -713,6 +714,17 @@ function buildConfirmedFacts(
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
 
   if (plan) {
+    if (plan.shapeTemplateId) {
+      const shapeLabel = SHAPE_SHORT_LABEL[plan.shapeTemplateId];
+      if (shapeLabel) {
+        facts.push({
+          key: "shape",
+          label: msg(lang, "Kitchen shape", "户型"),
+          value: lang === "zh" ? shapeLabel.zh : shapeLabel.en,
+          status: "ok",
+        });
+      }
+    }
     for (const r of plan.parsedGeometry.wallRuns) {
       const kind = isIsland(r)
         ? msg(lang, "Island", "岛台")
@@ -803,23 +815,53 @@ function buildConfirmedFacts(
     });
   }
 
-  // 对话确认上下水但尚未写入 feature 时，仍列入事实
-  const plumbingItem = byId.plumbing;
-  if (
-    plumbingItem
-    && (plumbingItem.status === "ok" || plumbingItem.status === "deferred")
-    && !facts.some((f) => f.key.startsWith("plumbing:"))
-  ) {
+  // 对话已确认/推迟但没有落成一段墙特征时（比如"没有燃气"根本不会有 gas
+  // feature），仍要列一行——否则客户明明答过，"已确认"面板里却完全看不到，
+  // 显得像没问过。
+  const CHAT_ONLY_FACT_ITEMS: {
+    id: "plumbing" | "gas" | "electrical" | "island";
+    labelEn: string; labelZh: string; stripRe: RegExp;
+  }[] = [
+    { id: "plumbing", labelEn: "Plumbing", labelZh: "上下水", stripRe: /^(Plumbing|上下水)\s*[：:]\s*/i },
+    { id: "gas", labelEn: "Gas hookup", labelZh: "燃气接口", stripRe: /^(Gas hookup|燃气接口)\s*[：:]\s*/i },
+    { id: "electrical", labelEn: "Electrical hookup", labelZh: "强电接口", stripRe: /^(Electrical hookup|强电接口)\s*[：:]\s*/i },
+    { id: "island", labelEn: "Island", labelZh: "岛台", stripRe: /^(Island|岛台)\s*[：:]\s*/i },
+  ];
+  const hasIslandWall = Boolean(plan?.parsedGeometry.wallRuns.some((r) => isIsland(r)));
+  for (const { id, labelEn, labelZh, stripRe } of CHAT_ONLY_FACT_ITEMS) {
+    const it = byId[id];
+    if (!it || (it.status !== "ok" && it.status !== "deferred")) continue;
+    // island 走的是"墙"这条事实行（isIsland 的 wall run），不是自己的
+    // key 前缀——已经有那段墙的话，这里就不用再补一行了。
+    if (id === "island" ? hasIslandWall : facts.some((f) => f.key.startsWith(`${id}:`))) continue;
     facts.push({
-      key: "plumbing:chat",
-      label: msg(lang, "Plumbing", "上下水"),
-      value: plumbingItem.brief.replace(/^(Plumbing|上下水)\s*[：:]\s*/i, ""),
-      status: plumbingItem.status,
+      key: `${id}:chat`,
+      label: msg(lang, labelEn, labelZh),
+      value: it.brief.replace(stripRe, ""),
+      status: it.status,
     });
   }
 
   return facts;
 }
+
+/**
+ * 这几项一旦 ok/assumed，`brief` 里的具体数字（墙长/位置/宽度）在"已确认"
+ * 面板的原子事实行里已经逐条列出过一遍——section 卡片是叙事概览，不是
+ * 第二份明细，重复贴一遍同样的数字正是用户反馈"重复信息很多"的来源。
+ * 所以这里只给一句简短确认，数字看上面的明细；仍缺/待确认时照旧用完整
+ * `brief`/`askHint`——那是这几项**唯一**出现细节的地方，不能省。
+ */
+const SECTION_ITEM_SHORT_LABEL: Readonly<Record<string, { en: string; zh: string }>> = {
+  walls_ceiling: { en: "Wall lengths & ceiling height", zh: "墙长与层高" },
+  plumbing: { en: "Plumbing", zh: "上下水" },
+  windows: { en: "Windows", zh: "窗" },
+  doors: { en: "Doors", zh: "门" },
+  gas: { en: "Gas hookup", zh: "燃气接口" },
+  electrical: { en: "Electrical hookup", zh: "强电接口" },
+  island: { en: "Island", zh: "岛台" },
+  appliances_sizes: { en: "Appliance sizes", zh: "家电尺寸" },
+};
 
 function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSection[] {
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
@@ -830,6 +872,16 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
   const appl = pick("appliances_kinds", "appliances_sizes", "appliances_fit");
   const intent = pick("style", "budget", "province");
   const seller = pick("seller");
+
+  const itemLine = (g: ReadinessItem): string => {
+    const shortLabel = SECTION_ITEM_SHORT_LABEL[g.id];
+    if (shortLabel && (g.status === "ok" || g.status === "assumed")) {
+      return msg(lang,
+        `${shortLabel.en}: confirmed — see the itemized list above for exact numbers.`,
+        `${shortLabel.zh}：已确认——具体数字见上方明细列表。`);
+    }
+    return g.brief;
+  };
 
   const section = (
     id: string,
@@ -844,7 +896,7 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
     const untouched = group.every((g) => g.status === "missing");
     const body = untouched
       ? msg(lang, "Not discussed yet.", "还没聊。")
-      : group.map((g) => g.brief).join(lang === "zh" ? "\n" : "\n");
+      : group.map(itemLine).join(lang === "zh" ? "\n" : "\n");
     const sectionStatus: DesignBriefSection["status"] = untouched
       ? "untouched"
       : group.some((g) => g.status === "missing" || g.status === "needs_confirm" || g.status === "assumed")
