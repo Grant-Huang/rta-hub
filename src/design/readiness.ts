@@ -431,6 +431,10 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
       const fit = planAppliances(plan.parsedGeometry, appliances, lang);
       if (fit.warnings.length > 0) {
         const detail = fit.warnings.map((w) => w.message).join("\n");
+        // 冰箱是放不下的其中一台时，给客户一条不改尺寸、不加墙长也能出图的路：
+        // 冰箱不一定非得在这面橱柜墙——储藏间/过道放得下的话，说一声就从这面墙的
+        // 排布里去掉（见 chat-appliance-answers.ts 的 isFridgeElsewhere）。
+        const fridgeNoRoom = fit.warnings.some((w) => w.kind === "refrigerator");
         items.push({
           id: "appliances_fit",
           category: "appliances",
@@ -438,8 +442,16 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
           status: "missing",
           brief: detail,
           askHint: msg(lang,
-            "These appliances need more wall length than you have. Shrink appliance widths, drop an appliance, or give a longer wall — then we can design.",
-            "这些家电需要的墙长超过了现有墙段。请改小家电宽度、减少台数，或报更长的墙——否则无法出图。"),
+            "These appliances need more wall length than you have. Shrink appliance widths, drop an appliance, or give a longer wall" +
+              (fridgeNoRoom
+                ? " — or if the fridge can go elsewhere (not on this cabinet wall), just say so and we'll leave it out of this wall's layout"
+                : "") +
+              " — then we can design.",
+            "这些家电需要的墙长超过了现有墙段。请改小家电宽度、减少台数，或报更长的墙" +
+              (fridgeNoRoom
+                ? "——如果冰箱可以不放在这面橱柜墙（比如放在储藏间/过道），直接告诉我们，我们就把它从这面墙的排布里去掉"
+                : "") +
+              "，否则无法出图。"),
         });
       } else {
         items.push({

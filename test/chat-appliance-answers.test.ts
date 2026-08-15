@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyChatApplianceAnswers, parseAppliancesFromChat, isDeferAppliances,
+  applyChatApplianceAnswers, parseAppliancesFromChat, isDeferAppliances, isFridgeElsewhere,
 } from "../src/design/chat-appliance-answers.js";
 import type { FloorPlan } from "../src/floorplan/types.js";
 
@@ -90,6 +90,35 @@ test("历史同时有 appliances later 与 assumed widths are fine 时仍落入�
   assert.ok(r);
   assert.ok(r!.plan.appliances && r!.plan.appliances.length >= 3);
   assert.ok(r!.plan.appliances?.every((a) => a.provenance === "assumed"));
+});
+
+// ── 冰箱不放在这面墙 ──────────────────────────────────────────────────────
+
+test("聊天里直接说冰箱放别处，能识别出来", () => {
+  assert.equal(isFridgeElsewhere("the fridge is going elsewhere, not on this wall"), true);
+  assert.equal(isFridgeElsewhere("我们冰箱不放在这面墙，放过道储藏间"), true);
+  assert.equal(isFridgeElsewhere("fridge is 33 inches wide"), false, "只报尺寸不该误判");
+});
+
+test("已有冰箱时，说「放别处」只改 placement，不动宽度/provenance", () => {
+  const plan = emptyPlan([
+    { kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer" },
+  ]);
+  const r = applyChatApplianceAnswers(plan, "actually the fridge is going elsewhere, not on this wall");
+  assert.ok(r);
+  assert.ok(r!.applied.includes("placement"));
+  const fridge = r!.plan.appliances?.find((a) => a.kind === "refrigerator");
+  assert.equal(fridge?.placement, "elsewhere");
+  assert.equal(fridge?.width, 36, "宽度不该被这句话改动");
+  assert.equal(fridge?.provenance, "customer");
+});
+
+test("还没提过冰箱时，一句「放别处」也补出一台冰箱并标 elsewhere", () => {
+  const r = applyChatApplianceAnswers(emptyPlan(), "fridge will be elsewhere, in the pantry");
+  assert.ok(r);
+  const fridge = r!.plan.appliances?.find((a) => a.kind === "refrigerator");
+  assert.ok(fridge, "客户提到了冰箱这件事，不该在列表里凭空消失");
+  assert.equal(fridge?.placement, "elsewhere");
 });
 
 test("Q# 话术也可解析种类", () => {

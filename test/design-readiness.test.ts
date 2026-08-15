@@ -166,6 +166,55 @@ test("墙长与家电宽度冲突时 appliances_fit 立即阻断就绪", () => {
   assert.match(fit!.brief, /放不下|Refrigerator|冰箱|range|灶/i);
 });
 
+test("墙长不够时，提示里点名冰箱可以不放在这面墙", () => {
+  const plan = readyPlan({
+    wallRuns: [{
+      id: "wr_1", label: "North", length: 70,
+      startsAtCorner: false, endsAtCorner: false, features: [],
+    }],
+  });
+  // range 先落位占住中段，冰箱才是放不下的那一台——顺序决定谁先拿到位置
+  plan.appliances = [
+    { kind: "range", width: 30, clearanceEachSide: 0, provenance: "customer" },
+    { kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer" },
+  ];
+  const r = evaluateDesignReadiness({
+    conversation: conv({
+      designRequirements:
+        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\" range 30\"",
+    }),
+    plan,
+    language: "en",
+  });
+  const fit = r.items.find((i) => i.id === "appliances_fit");
+  assert.equal(fit?.status, "missing");
+  assert.match(fit!.brief, /Refrigerator/i, "确认这次放不下的确实是冰箱");
+  assert.match(fit!.askHint ?? "", /elsewhere/i, "冰箱本身放不下时该给出这条出路");
+});
+
+test("客户已说冰箱放别处后，那面墙不再因为冰箱放不下而卡住", () => {
+  const plan = readyPlan({
+    wallRuns: [{
+      id: "wr_1", label: "North", length: 70,
+      startsAtCorner: false, endsAtCorner: false, features: [],
+    }],
+  });
+  plan.appliances = [
+    { kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer", placement: "elsewhere" },
+    { kind: "range", width: 30, clearanceEachSide: 0, provenance: "customer" },
+  ];
+  const r = evaluateDesignReadiness({
+    conversation: conv({
+      designRequirements:
+        "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\" range 30\"",
+    }),
+    plan,
+    language: "en",
+  });
+  const fit = r.items.find((i) => i.id === "appliances_fit");
+  assert.equal(fit?.status, "ok", "冰箱不参与这面墙了，就不该再因为它放不下而卡住");
+});
+
 test("家电后定不能冒充就绪", () => {
   const r = evaluateDesignReadiness({
     conversation: conv({

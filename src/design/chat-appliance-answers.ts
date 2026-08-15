@@ -13,7 +13,7 @@ import {
 } from "../floorplan/appliances.js";
 import type { BlockedEdit } from "./confirm-lock.js";
 
-export type ChatApplianceApplyKind = "kinds" | "widths" | "confirmAssumed" | "defer";
+export type ChatApplianceApplyKind = "kinds" | "widths" | "confirmAssumed" | "defer" | "placement";
 
 export interface ChatApplianceApplyResult {
   plan: FloorPlan;
@@ -28,6 +28,18 @@ const DEFER_RE =
 /** 接受推定宽度（不改数值；保留 provenance=assumed，出图/报价继续披露推定）。 */
 const CONFIRM_ASSUMED_RE =
   /assumed\s+(widths?\s+)?(are\s+)?(ok|fine|good|okay)|those\s+(assumed\s+)?widths?\s+(are\s+)?(ok|fine|good)|推定(宽度)?(可以|没问题|ok|OK)|按推定|就按这(个|些)宽|先按常见|widths?\s+look\s+(ok|fine)/i;
+
+/**
+ * 冰箱不放在橱柜这面墙——墙长不够时给客户的一条出路。检测到就把冰箱标为
+ * `placement: "elsewhere"`：不参与这面墙的落位与「装不装得下」校验，
+ * 但仍留在 appliances 列表里（见 ApplianceSpec.placement 的注释）。
+ */
+const FRIDGE_ELSEWHERE_RE =
+  /\b(fridge|refrigerator)\b[^.!?\n]{0,30}\b(elsewhere|separately|in\s+a\s+separate\s+\w+|another\s+(room|spot|location|wall)|not\s+on\s+(this|the|our)\s+wall|in\s+the\s+(pantry|hallway|garage|closet|nook|mudroom))\b|冰箱.{0,10}(不放在|不装在|不摆在|不在).{0,6}(这|那|同)?(面|堵)?墙|冰箱.{0,10}(放|摆|装).{0,6}(别处|别的地方|另一个地方|过道|走廊|储藏间|杂物间|旁边(的)?壁龛)|冰箱.{0,6}(单独|另外)(放|摆|安排)/i;
+
+export function isFridgeElsewhere(text: string): boolean {
+  return FRIDGE_ELSEWHERE_RE.test(text);
+}
 
 /** 客户只说「推定可以」、尚未点名家电时，用北美常见三件套落库。 */
 const DEFAULT_ASSUMED_KINDS: ApplianceKind[] = ["refrigerator", "range", "dishwasher"];
@@ -138,6 +150,19 @@ export function applyChatApplianceAnswers(
       applied.push(
         parsed.appliances.some((a) => a.provenance === "customer") ? "widths" : "kinds",
       );
+    }
+  }
+
+  if (isFridgeElsewhere(text)) {
+    const idx = list.findIndex((a) => a.kind === "refrigerator");
+    if (idx >= 0) {
+      if (list[idx]!.placement !== "elsewhere") {
+        list = [...list.slice(0, idx), { ...list[idx]!, placement: "elsewhere" }, ...list.slice(idx + 1)];
+        applied.push("placement");
+      }
+    } else {
+      list = [...list, applianceFrom({ kind: "refrigerator", placement: "elsewhere" })];
+      applied.push("placement");
     }
   }
 

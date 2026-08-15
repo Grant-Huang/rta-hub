@@ -282,6 +282,8 @@ export function planAppliances(
   for (const spec of appliances) {
     if (PLACED_WITH_SINK.includes(spec.kind)) continue; // 由水槽带着走
     if (spec.kind === "rangeHood") continue;            // 跟着灶台，最后处理
+    // 客户说了不放在这面墙——不占位、不报「放不下」，它压根不参与这面墙的排布
+    if (spec.placement === "elsewhere") continue;
 
     const need = reservedWidth(spec);
     const name = applianceLabel(spec.kind, lang);

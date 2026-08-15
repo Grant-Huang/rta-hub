@@ -41,6 +41,13 @@ export interface ApplianceSpec {
   preferredZone?: "nearEntry" | "nearSink" | "nearWindow" | "any";
   /** 宽度是客户给的还是推定的——下游解释与硬约束提示都要读它。 */
   provenance: Provenance;
+  /**
+   * 客户明说这台家电不放在橱柜这面墙（比如放在储藏间/过道的独立空间）。
+   * 默认（留空）视为 `"onWall"`。标为 `"elsewhere"` 后，落位与「装不装得下」
+   * 的硬约束校验都跳过它——但它仍留在 `appliances` 列表里、仍走
+   * provenance 披露链路，不是被悄悄丢掉：客户随时能在已确认面板里看到、改回。
+   */
+  placement?: "onWall" | "elsewhere";
 }
 
 /**
@@ -124,6 +131,7 @@ export function applianceFrom(input: {
   width?: number | undefined;
   clearanceEachSide?: number | undefined;
   preferredZone?: ApplianceSpec["preferredZone"];
+  placement?: ApplianceSpec["placement"];
   language?: "en" | "zh";
 }, overlayDefaults?: Partial<Record<ApplianceKind, number>>): ApplianceSpec {
   const lang = input.language ?? "en";
@@ -156,6 +164,7 @@ export function applianceFrom(input: {
     width: input.width ?? defaultWidth,
     clearanceEachSide: gap,
     ...(input.preferredZone ? { preferredZone: input.preferredZone } : {}),
+    ...(input.placement ? { placement: input.placement } : {}),
     provenance: input.width === undefined ? "assumed" : "customer",
   };
 }
