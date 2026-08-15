@@ -59,6 +59,7 @@
   <span class="badge" id="acctBadge">—</span>
 </header>
 <main>
+  <div class="card" id="loginCard"></div>
   <div class="card" id="profileCard">
     <h2 id="profileHeading" data-i18n="profileHeading">Profile</h2>
     <p class="hint" id="loading" data-i18n="loading">Loading…</p>
@@ -123,6 +124,104 @@ function applyLang() {
   document.title = t("meTitle");
   window.RTA_UI.applyDataI18n();
   $("langBtn").textContent = t("langToggle");
+}
+
+const fieldStyle = "flex:1;min-width:200px;background:#151a22;border:1px solid #262b33;"
+  + "color:inherit;padding:8px;border-radius:8px;font-size:13px";
+
+let authAccount = null;
+
+/** 登录态由服务端 cookie 决定，不是 localStorage——每次进页面都要问一遍。 */
+async function loadAuthState() {
+  const res = await fetch("/api/auth/me");
+  const body = await res.json().catch(() => ({ account: null }));
+  authAccount = body.account || null;
+  renderLoginCard();
+}
+
+function renderLoginCard() {
+  const box = $("loginCard");
+  if (authAccount) {
+    box.innerHTML = `
+      <h2>${esc(t("signInHeading"))}</h2>
+      <p class="hint">${esc(t("signedInAs"))} <strong>${esc(authAccount.email)}</strong></p>
+      <button type="button" id="signOutBtn" class="ghost">${esc(t("signOutBtn"))}</button>`;
+    $("signOutBtn").addEventListener("click", async () => {
+      await fetch("/api/auth/logout", { method: "POST" });
+      authAccount = null;
+      renderLoginCard();
+      await load();
+    });
+    return;
+  }
+  box.innerHTML = `
+    <h2>${esc(t("signInHeading"))}</h2>
+    <p class="hint">${esc(t("signInHint"))}</p>
+    <div class="row">
+      <input id="loginEmail" type="email" placeholder="${esc(t("emailPlaceholder"))}" style="${fieldStyle}" />
+      <button type="button" id="sendCodeBtn">${esc(t("sendCodeBtn"))}</button>
+    </div>
+    <div id="loginMsg"></div>`;
+  const submit = async () => {
+    const email = $("loginEmail").value.trim();
+    if (!email) return;
+    $("sendCodeBtn").disabled = true;
+    const res = await fetch("/api/auth/request-code", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const body = await res.json().catch(() => ({}));
+    $("sendCodeBtn").disabled = false;
+    if (!res.ok) {
+      $("loginMsg").innerHTML = `<p class="err">${esc(body.error || t("sendCodeFail"))}</p>`;
+      return;
+    }
+    renderCodeStep(email, body.devCode);
+  };
+  $("sendCodeBtn").addEventListener("click", submit);
+  $("loginEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+}
+
+function renderCodeStep(email, devCode) {
+  const box = $("loginCard");
+  box.innerHTML = `
+    <h2>${esc(t("signInHeading"))}</h2>
+    <p class="hint">${esc(t("codeSentHint"))} <strong>${esc(email)}</strong></p>
+    ${devCode ? `<p class="hint">${esc(t("devCodeHint"))}: <strong>${esc(devCode)}</strong></p>` : ""}
+    <div class="row">
+      <input id="loginCode" inputmode="numeric" maxlength="6"
+             placeholder="${esc(t("codePlaceholder"))}"
+             style="width:120px;background:#151a22;border:1px solid #262b33;color:inherit;
+                    padding:8px;border-radius:8px;font-size:13px;letter-spacing:2px" />
+      <button type="button" id="verifyCodeBtn">${esc(t("verifyCodeBtn"))}</button>
+      <button type="button" id="backBtn" class="ghost">${esc(t("backBtn"))}</button>
+    </div>
+    <div id="loginMsg"></div>`;
+  $("backBtn").addEventListener("click", renderLoginCard);
+  const submit = async () => {
+    const code = $("loginCode").value.trim();
+    if (!code) return;
+    $("verifyCodeBtn").disabled = true;
+    const res = await fetch("/api/auth/verify-code", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, code }),
+    });
+    const body = await res.json().catch(() => ({}));
+    $("verifyCodeBtn").disabled = false;
+    if (!res.ok) {
+      $("loginMsg").innerHTML = `<p class="err">${esc(body.error || t("verifyCodeFail"))}</p>`;
+      return;
+    }
+    authAccount = body.account;
+    // 兼容旧逻辑：这个浏览器上其它还在读 localStorage 的地方（比如主聊天页的
+    // X-Account-Id 兜底），跟着一起指向真实账号——服务端有 cookie 时会优先信 cookie，
+    // 这里只是让没有 cookie 的边缘路径也指对地方。
+    setAccountId(body.account.id);
+    renderLoginCard();
+    await load();
+  };
+  $("verifyCodeBtn").addEventListener("click", submit);
+  $("loginCode").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
 }
 
 async function load() {
@@ -230,9 +329,11 @@ $("langBtn").addEventListener("click", () => {
   const next = window.RTA_UI.resolveLang() === "zh" ? "en" : "zh";
   window.RTA_UI.setLang(next);
   load();
+  loadAuthState();
 });
 
 load();
+loadAuthState();
 </script>
 </body>
 </html>

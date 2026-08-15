@@ -14,7 +14,8 @@
  */
 import type { EmailSubscription, ServiceType } from "../domain/types.js";
 
-export type EmailKind = "lead" | "invite" | "mailing";
+/** `auth_code` = 登录验证码：客户本人刚发起的一次性操作，与 `lead` 同理免退订链接。 */
+export type EmailKind = "lead" | "invite" | "mailing" | "auth_code";
 
 export interface SenderIdentity {
   /** CASL 要求：发件人名称。 */
@@ -96,7 +97,7 @@ export function assertCaslCompliant(email: OutboundEmail, sender: SenderIdentity
       "MISSING_IDENTITY",
     );
   }
-  if (email.kind !== "lead") {
+  if (email.kind !== "lead" && email.kind !== "auth_code") {
     if (!email.unsubscribeUrl) {
       throw new CaslComplianceError(
         `${email.kind} emails must include a working unsubscribe URL (CASL)`,
