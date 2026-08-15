@@ -223,6 +223,8 @@ export interface OllamaVisionOptions {
    * 默认两步：先墙后特征。`false` 退回单次提示词（A/B 对照用）。
    */
   twoStep?: boolean;
+  /** 每一步 Ollama 调用结束时回调，供 A/B 记耗时。 */
+  onTiming?: (info: { step: "oneshot" | "walls" | "features"; elapsedMs: number }) => void;
 }
 
 /** 从环境变量装配；没配 base URL 就返回 undefined（上传降级为手动录入）。 */
@@ -269,8 +271,14 @@ export function createOllamaVisionExtractor(
   const timeoutMs = opts.timeoutMs ?? 180_000;
   const twoStep = opts.twoStep !== false;
 
-  const generate = (prompt: string, b64: string, mimeType: string) =>
-    ollamaGenerateJson(root, model, prompt, b64, mimeType, timeoutMs);
+  const generate = async (step: "oneshot" | "walls" | "features", prompt: string, b64: string, mimeType: string) => {
+    const t0 = Date.now();
+    try {
+      return await ollamaGenerateJson(root, model, prompt, b64, mimeType, timeoutMs);
+    } finally {
+      opts.onTiming?.({ step, elapsedMs: Date.now() - t0 });
+    }
+  };
 
   return {
     async extract({ image, mimeType, hint }): Promise<RawExtraction | undefined> {
@@ -278,16 +286,16 @@ export function createOllamaVisionExtractor(
       if (!b64) return undefined;
 
       if (!twoStep) {
-        const parsed = await generate(floorPlanVisionPrompt(hint), b64, mimeType);
+        const parsed = await generate("oneshot", floorPlanVisionPrompt(hint), b64, mimeType);
         return parsed ? toRawExtraction(parsed) : undefined;
       }
 
-      const wallsParsed = await generate(floorPlanVisionWallsPrompt(hint), b64, mimeType);
+      const wallsParsed = await generate("walls", floorPlanVisionWallsPrompt(hint), b64, mimeType);
       if (!wallsParsed) return undefined;
       const walls = toRawExtraction(wallsParsed);
       if (!walls.wallRuns?.length) return walls;
 
-      const featParsed = await generate(floorPlanVisionFeaturesPrompt(walls, hint), b64, mimeType);
+      const featParsed = await generate("features", floorPlanVisionFeaturesPrompt(walls, hint), b64, mimeType);
       if (!featParsed) return walls;
       return mergeWallsAndFeatures(walls, toRawExtraction(featParsed));
     },
