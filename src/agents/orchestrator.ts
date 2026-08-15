@@ -85,6 +85,13 @@ function orchestratorSystem(
       "- **主动问一句**：是否要根据目前整理好的需求给出设计方案？",
       "- 未得到明确同意前，不要声称已经开始画图或出方案。",
       "",
+      "关键——必备信息优先（遵守本提示词末尾附加的【状态】区块）：",
+      "- 户型/上下水/窗门/家电这些必备信息没收完之前，**不要问风格、预算、省份**——不是排在后面问，是现在完全不问。"
+        + "【状态】区块会明确写出必备信息是否已收完；没收完时哪怕客户主动聊起风格/预算，简短记一句就好，"
+        + "不要顺着这个话题追问下去，下一句仍然回到必备信息里最靠前的缺项。",
+      "- 客户如果在回答别的问题时顺带说了额外信息（比如答墙长时提到了窗户位置），也要记下来，"
+        + "并在回复里简短确认一句，不要因为不是当前问的就丢掉。",
+      "",
       "边界：",
       "- 这个平台卖的是 **RTA 板式待组装橱柜**，不是全定制。",
       "  尺寸只有厂家的固定档、板件平装发货需要组装、不含上门安装。",
@@ -145,6 +152,11 @@ function orchestratorSystem(
     "- If Status says not ready or lists a still-missing item: ask that missing item (at most one).",
     "- NEVER claim \"everything is confirmed\" / \"I have everything I need\", or invite generating a design while Status says not ready.",
     "- NEVER switch to optional preferences (drawers, hardware, etc.) while critical intake is still missing.",
+    "- While Status says required intake is not complete: **never ask about style, budget, or province** — not later, not at all "
+      + "until required intake is done. If the customer volunteers style/budget info anyway, jot it down with a brief acknowledgment "
+      + "and go right back to the next required-intake item — don't follow their tangent.",
+    "- If the customer volunteers information you didn't ask for while answering something else (e.g. mentions a window position "
+      + "while giving wall lengths), record it too and briefly confirm it — don't drop it just because it wasn't the active question.",
     "- If they ask to generate before Status says ready: acknowledge briefly, then ask the ONE still-missing item — do not pretend you can draw yet.",
     "",
     "Boundaries:",
@@ -221,6 +233,15 @@ export interface OrchestratorOptions {
     openAsks?: readonly string[];
     floorPlanReady: boolean;
     readyToAskDesign: boolean;
+    /**
+     * 必备信息（户型/上下水/窗门/家电等，不含风格预算省份）是否已收完
+     * （见 `design/intake-checklist.ts`）。为 false 时风格/预算/省份不得
+     * 进候选问题池——服务端已经把它们从 `missing`/`openAsks` 里摘掉了，
+     * 这里再传一份显式布尔值给 `guardPrematureIntentQuestions` 做代码层
+     * 兜底：光靠"候选池里没有"不够保险，模型偶尔会自己现编一句去问。
+     * 缺省（未传）时不触发这道门禁——只有明确传 false 才拦。
+     */
+    requiredIntakeComplete?: boolean;
     /** 已确认项短摘要，禁止再问 */
     confirmedBriefs?: readonly string[];
     /**
@@ -345,6 +366,9 @@ export async function orchestratorReply(
   let content = guardPrematureDesignOffer(
     trimmed, requirements, opts.profile, opts.repeatedAsk ?? 0, lang, opts.intakeStatus, opts.supportContact,
   );
+  content = guardPrematureIntentQuestions(
+    content, requirements, opts.profile, opts.repeatedAsk ?? 0, lang, opts.intakeStatus, opts.supportContact,
+  );
   // 资料已齐却空转「请稍候 / 团队制作中」→ 改成明确出图邀约（勿假装已在画）
   if (opts.intakeStatus?.readyToAskDesign && isPoliteDesignStall(content)) {
     content = lang === "zh"
@@ -419,6 +443,34 @@ export function guardPrematureDesignOffer(
   return fallbackPrompt(requirements, profile, repeatedAsk, lang, intakeStatus, supportContact);
 }
 
+/** 回复是否在问风格/预算/省份——粗粒度关键词+疑问句式，宁可漏判不误伤正文陈述句。 */
+function asksAboutIntentFields(content: string): boolean {
+  const asksStyle = /(?:什么|哪种|喜欢).{0,8}风格.{0,4}[？?]|style.{0,20}(?:do you|would you|did you have).{0,20}\?|prefer.{0,15}style/i;
+  const asksBudget = /预算(?:大概|大约|是|有)?多少|你的预算.{0,10}[？?]|budget.{0,15}(?:is|do you|would you).{0,20}\?|what.{0,10}budget/i;
+  const asksProvince = /(?:哪|在哪)(?:个|一)?省.{0,4}[？?]|which province|what province/i;
+  return asksStyle.test(content) || asksBudget.test(content) || asksProvince.test(content);
+}
+
+/**
+ * 必备信息（户型/上下水/窗门/家电）没收完时，若模型仍然问起风格/预算/
+ * 省份 → 换回确定性追问。跟 `guardPrematureDesignOffer` 同一个思路：服务端
+ * 已经把这三项从候选池摘掉了，但光靠"候选池里没有"不够保险——模型偶尔
+ * 会脱离候选池自己现编一句去问，这里再补一道代码层面的兜底。
+ */
+export function guardPrematureIntentQuestions(
+  content: string,
+  requirements: string,
+  profile: TradeInteractionProfile,
+  repeatedAsk: number | boolean,
+  lang: UiLanguage,
+  intakeStatus?: OrchestratorOptions["intakeStatus"],
+  supportContact?: string,
+): string {
+  if (!intakeStatus || intakeStatus.requiredIntakeComplete !== false) return content;
+  if (!asksAboutIntentFields(content)) return content;
+  return fallbackPrompt(requirements, profile, repeatedAsk, lang, intakeStatus, supportContact);
+}
+
 /** 把 intake 状态写成模型可读的短注，避免幻觉「已齐 / 未齐」。 */
 function intakeStatusNote(
   status: OrchestratorOptions["intakeStatus"],
@@ -438,8 +490,12 @@ function intakeStatusNote(
     }
     const miss = open.join("；") || "（无）";
     const done = confirmed.length ? `已确认勿再问：${confirmed.join("；")}。` : "";
+    const intentGate = status.requiredIntakeComplete === false
+      ? `户型/上下水/窗门/家电等必备信息还没收完，**风格、预算、省份现在都不要问**，等必备信息收完再问。`
+      : "";
     return `${recap ? `${recap} ` : ""}【状态】户型${status.floorPlanReady ? "已就绪" : "未就绪"}。${done}`
       + `本轮最多追问 1 项仍缺信息：${miss}。`
+      + (intentGate ? `${intentGate}` : "")
       + `若客户答非所问：先简短确认已记下的内容，再换一种问法或请其点快捷选项——禁止原样重复上一问。`
       + `不要贴户型草图；用纯文字提问。`
       + `未就绪时禁止：声称信息已齐、邀请出图、改问抽屉/五金等偏好。`
@@ -455,8 +511,13 @@ function intakeStatusNote(
   }
   const miss = open.join("; ") || "(none)";
   const done = confirmed.length ? `Already confirmed (do NOT re-ask): ${confirmed.join("; ")}. ` : "";
+  const intentGate = status.requiredIntakeComplete === false
+    ? `Required intake (floor plan / plumbing / windows-doors / appliances) is not complete yet — `
+      + `**do not ask about style, budget, or province right now**; wait until required intake is done. `
+    : "";
   return `${recap ? `${recap} ` : ""}[Status] Floor plan ${status.floorPlanReady ? "ready" : "not ready"}. ${done}`
     + `Ask at most ONE still-missing item this turn: ${miss}. `
+    + intentGate
     + `If their reply is off-topic: briefly acknowledge what you have, then rephrase or point to quick options — never repeat the same question verbatim. `
     + `Text-only questions (no floor-plan sketches). `
     + `FORBIDDEN while not ready: saying everything is confirmed, inviting design generation, or asking optional preferences (drawers/hardware). `

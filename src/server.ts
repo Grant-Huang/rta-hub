@@ -177,6 +177,7 @@ import {
   type DesignSession,
 } from "./design/stages.js";
 import { evaluateDesignReadiness } from "./design/readiness.js";
+import { stripIntentFields } from "./design/intake-checklist.js";
 import { renderPlanViews } from "./render/plan-view.js";
 import { buildBom, bomToSelections } from "./layout/bom.js";
 import { buildQuoteList, renderQuoteListHtml, renderQuoteListText } from "./quote/line-items.js";
@@ -1491,17 +1492,23 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
           accountProvince: account.province,
         });
       })();
-      const intakeMiss = intakeMissing(conv.id).length
+      const intakeMissRaw = intakeMissing(conv.id).length
         ? missingFields(nextReqs).filter((f) => {
             const plan = planForConversation(conv.id);
             if (plan && isLayoutReady(plan) && (f === "kitchen size" || f === "layout")) return false;
             return true;
           })
         : [];
+      // 必备信息（户型/上下水/窗门/家电）没收完时，style/budget/province 不进候选池——
+      // 不是排后面问，是不出现（见 design/intake-checklist.ts）。
+      const intakeMiss = readinessPre.requiredIntakeComplete
+        ? intakeMissRaw
+        : stripIntentFields(intakeMissRaw);
       // prefer checklist open critical asks when geometry exists
       const planReady = readinessPre.items.some((i) => i.id === "walls_ceiling" && i.status === "ok");
       const openAsks = readinessPre.openItems
         .filter((i) => i.critical && (i.status === "missing" || i.status === "needs_confirm"))
+        .filter((i) => readinessPre.requiredIntakeComplete || i.category !== "intent")
         .sort((a, b) => {
           if (a.id === "appliances_fit") return -1;
           if (b.id === "appliances_fit") return 1;
@@ -1542,6 +1549,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
               confirmedBriefs,
               floorPlanReady: planReady,
               readyToAskDesign: readinessPre.readyToAskDesign,
+              requiredIntakeComplete: readinessPre.requiredIntakeComplete,
               ...(justConfirmedThisTurn.length ? { justConfirmed: justConfirmedThisTurn } : {}),
             },
           });
@@ -1562,6 +1570,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
           ? undefined
           : (afterFail.openItems
             .filter((i) => i.critical && (i.status === "missing" || i.status === "needs_confirm"))
+            .filter((i) => afterFail.requiredIntakeComplete || i.category !== "intent")
             .map((i) => i.askHint || i.brief)[0]
             ?? openAsks[0]
             ?? (intakeMiss[0] ? fieldLabel(intakeMiss[0], language) : undefined));
@@ -1632,6 +1641,11 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       }).filter(Boolean);
   if (briefing.geometryUsable) {
     quickFieldList = quickFieldList.filter((f) => f !== "kitchen size" && f !== "layout");
+  }
+  // 必备信息没收完时，风格/预算/省份的快捷回答 chip 也不该冒出来——
+  // 不然按钮和助手嘴上说的（"必备信息没收完不问这些"）对不上。
+  if (!readiness.requiredIntakeComplete) {
+    quickFieldList = stripIntentFields(quickFieldList);
   }
   const quickReplies = mentions.length === 0
     ? quickRepliesFor(

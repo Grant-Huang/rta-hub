@@ -14,6 +14,7 @@ import { geometrySuppressesIntake } from "./site-questions.js";
 import { chatConfirmedPlumbing } from "./chat-site-answers.js";
 import { isConfirmAssumedAppliances } from "./chat-appliance-answers.js";
 import { matchProvince, provinceByCode } from "./province-match.js";
+import { requiredIntakeComplete } from "./intake-checklist.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
 export type CheckStatus = "ok" | "missing" | "needs_confirm" | "deferred" | "assumed";
@@ -67,6 +68,11 @@ export interface DesignReadiness {
   items: ReadinessItem[];
   /** 关键项是否都已 ok（或 deferred 且非 critical——critical 不允许 deferred 冒充 ok）。 */
   readyToAskDesign: boolean;
+  /**
+   * 必备信息（geometry/site/appliances）是否已收完，不含风格/预算/省份。
+   * 为 false 时，风格/预算/省份不得进入候选问题池——见 `intake-checklist.ts`。
+   */
+  requiredIntakeComplete: boolean;
   /** 仍缺或需确认的项（给编排/快捷回答）。 */
   openItems: ReadinessItem[];
   sections: DesignBriefSection[];
@@ -514,7 +520,10 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   const confirmationText = buildConfirmationText(items, readyToAskDesign, lang);
   const confirmedFacts = buildConfirmedFacts(items, plan, lang);
 
-  return { items, readyToAskDesign, openItems, sections, confirmationText, confirmedFacts };
+  return {
+    items, readyToAskDesign, requiredIntakeComplete: requiredIntakeComplete(items),
+    openItems, sections, confirmationText, confirmedFacts,
+  };
 }
 
 /** 把检查项拆成「标签 → 明确值」行，供已确认 Tab 逐条列出。 */
