@@ -322,6 +322,36 @@ test("账号已有省份（注册必填）时，仅作建议值——needs_confi
   assert.equal(confirmedViaDropdown.readyToAskDesign, true);
 });
 
+test("岛台长×进深进入已确认事实，未确认时标 needs_confirm", () => {
+  const plan = readyPlan({
+    wallRuns: [
+      {
+        id: "wr_1", label: "North", length: 168,
+        startsAtCorner: false, endsAtCorner: false,
+        features: [{ id: "wf_1", kind: "plumbing", offset: 24, width: 24 }],
+      },
+      {
+        id: "wr_i", label: "Island", length: 72, kind: "island", depth: 36,
+        startsAtCorner: false, endsAtCorner: false, features: [],
+      },
+    ],
+  });
+  plan.unresolvedItems = [
+    { id: "fpu_i", target: { kind: "wallRun", id: "wr_i" }, field: "length", reason: "confirm", resolved: false },
+  ];
+  const r = evaluateDesignReadiness({ conversation: conv(), plan, language: "zh" });
+  const islandItem = r.items.find((i) => i.id === "island");
+  assert.ok(islandItem);
+  assert.match(islandItem!.brief, /72/);
+  assert.match(islandItem!.brief, /36/);
+  assert.equal(islandItem!.status, "needs_confirm");
+  const fact = r.confirmedFacts.find((f) => f.key === "wall:wr_i");
+  assert.ok(fact);
+  assert.match(fact!.value, /72/);
+  assert.match(fact!.value, /36/);
+  assert.equal(fact!.status, "needs_confirm");
+});
+
 test("视觉写入但未确认的墙长/层高/上下水在已确认 Tab 标 needs_confirm，不是 ok", () => {
   const plan = readyPlan();
   plan.unresolvedItems = [

@@ -9,8 +9,22 @@ test("视觉提示词不含 Kitchen wall A / length:137 这类会泄漏的示例
   const prompt = floorPlanVisionPrompt();
   assert.equal(/Kitchen wall A/i.test(prompt), false);
   assert.equal(/"length"\s*:\s*137/.test(prompt), false);
-  assert.match(prompt, /North, East, South, West, or Island/);
+  assert.match(prompt, /North, East, South, West, Island, or Wall/);
   assert.match(prompt, /kind "island"/);
+});
+
+test("视觉提示词要求按图例扫窗/门/上下水，并用 slot 映射系统墙名", () => {
+  const prompt = floorPlanVisionPrompt();
+  assert.match(prompt, /window/);
+  assert.match(prompt, /door/);
+  assert.match(prompt, /plumbing/);
+  assert.match(prompt, /parallel thin lines/i);
+  assert.match(prompt, /\barc\b/i);
+  assert.match(prompt, /two circles/i);
+  assert.match(prompt, /- slot:/);
+  assert.match(prompt, /slots:/);
+  assert.match(prompt, /l-island-kitchen/);
+  assert.match(prompt, /empty features/i);
 });
 
 test("toRawExtraction 解析 island kind 与 depth", () => {
@@ -19,4 +33,12 @@ test("toRawExtraction 解析 island kind 与 depth", () => {
   });
   assert.equal(raw.wallRuns?.[0]?.kind, "island");
   assert.equal(raw.wallRuns?.[0]?.depth, 36);
+});
+
+test("toRawExtraction 解析 slot（图上 A/B/C → 系统罗盘槽位）", () => {
+  const raw = toRawExtraction({
+    wallRuns: [{ label: "Wall A", slot: "North", length: 144, lengthConfidence: 0.9 }],
+  });
+  assert.equal(raw.wallRuns?.[0]?.label, "Wall A");
+  assert.equal(raw.wallRuns?.[0]?.slot, "North");
 });

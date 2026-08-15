@@ -20,6 +20,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { FloorPlanUnresolved, ParsedGeometry, WallFeature, WallRun } from "./types.js";
+import { quantize } from "./types.js";
 import {
   ceilingFromVision, ingestRawFeature, wallLengthFromVision,
   type ParseResult, type RawExtraction, type RawWallRun,
@@ -47,11 +48,25 @@ export function matchesKnownTemplate(raw: RawExtraction | undefined): FloorplanT
   return FLOORPLAN_TEMPLATES[guess.id];
 }
 
+function declaredSlotMatches(declared: string, slot: FloorplanTemplateWall): boolean {
+  const v = declared.toLowerCase().trim();
+  const s = slot.label.toLowerCase().trim();
+  if (!v) return false;
+  if (v === s) return true;
+  const aliases = COMPASS_ALIASES[s];
+  if (!aliases) return false;
+  return aliases.some((a) => v === a || v.includes(a)) || v.includes(s);
+}
+
 /**
- * 标签对齐：North / north wall / 北墙 对得上；岛台还认 kind/depth。
+ * 对齐优先用模型给的 `slot`（图上 A/B/C → 罗盘槽位）。
+ * 没有 slot 再认标签：North / north wall / 北墙；岛台还认 kind/depth。
  * 对不上就留空，**不再**按剩余出现顺序补位。
  */
 export function rawMatchesSlot(raw: RawWallRun, slot: FloorplanTemplateWall): boolean {
+  const declared = (raw.slot ?? "").trim();
+  if (declared) return declaredSlotMatches(declared, slot);
+
   const slotLabel = slot.label.toLowerCase().trim();
   const islandSlot = slot.kind === "island" || slotLabel === "island";
   if (islandSlot) {
@@ -132,6 +147,10 @@ export function normalizeExtractionWithTemplate(
     }
 
     const island = islandJoins(slot);
+    const visionDepth = rawSlot && typeof rawSlot.depth === "number" && rawSlot.depth > 0
+      ? quantize(rawSlot.depth)
+      : undefined;
+    const depth = visionDepth ?? slot.depth;
     return {
       id: runId,
       label: slot.label,
@@ -140,7 +159,7 @@ export function normalizeExtractionWithTemplate(
       endsAtCorner: island ? false : Boolean(next && !islandJoins(next)),
       features,
       ...(slot.kind ? { kind: slot.kind } : {}),
-      ...(slot.depth !== undefined ? { depth: slot.depth } : {}),
+      ...(depth !== undefined ? { depth } : {}),
     };
   });
 

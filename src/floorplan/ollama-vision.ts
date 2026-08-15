@@ -21,11 +21,16 @@ interface OllamaGenerateResponse {
  * 重复描述（否则模板改了、这里的分类提示词忘了同步，是同一类"两份判断"的坑）。
  */
 function templateGuessSection(): string {
-  const lines = Object.values(FLOORPLAN_TEMPLATES).map((t) =>
-    `- "${t.id}": ${t.noteEn} (${t.walls.length} wall run${t.walls.length === 1 ? "" : "s"})`);
+  const lines = Object.values(FLOORPLAN_TEMPLATES).map((t) => {
+    const slots = t.walls.map((w) => w.label).join(", ");
+    return `- "${t.id}": ${t.noteEn} — slots: ${slots}`;
+  });
+  const slotNames = [...new Set(Object.values(FLOORPLAN_TEMPLATES).flatMap((t) =>
+    t.walls.map((w) => w.label)))].join(", ");
   return `Also classify which of these 5 standard kitchen layouts the sketch most resembles (or none):
 ${lines.join("\n")}
-Set "templateGuess" to { "id": <one of those 5 ids>, "confidence": 0–1 }, or omit it entirely if none of the 5 fit well.`;
+Set "templateGuess" to { "id": <one of those 5 ids>, "confidence": 0–1 }, or omit it entirely if none of the 5 fit well.
+System wall names are those slot labels (${slotNames}), never lettered A/B/C.`;
 }
 
 /** 给视觉模型的抽取说明。数字示例会泄漏进输出，所以这里只写字段契约、不写样例对象。 */
@@ -36,7 +41,7 @@ The image may show a whole house (main floor + upper floor + garage). Focus on t
 
 From the kitchen outline, return the walls where base cabinets would run (usually along the kitchen perimeter walls that have counters/sink/stove). Lengths must be in **inches**.
 
-Convert feet-inches labels: 11'5" = 11*12+5 = 137 inches. 10'5" = 125 inches.
+Convert feet-inches labels: N' M" = N*12+M inches (example: 10'6" = 126).
 
 ${templateGuessSection()}
 
@@ -49,21 +54,29 @@ Return ONLY a JSON object (no markdown fences, no commentary) with these fields:
 - notes: optional array of uncertainty strings
 
 Each wallRuns item:
-- label: MUST be a compass name from the drawing's north arrow: North, East, South, West, or Island. Do not label walls A/B/C.
+- label: the name printed on the drawing (including lettered names like A/B/C or Chinese wall names). Keep it as written.
+- slot: the matching system wall name from the north arrow and the guessed layout's slots listed above. Must be one of: North, East, South, West, Island, or Wall. Do not put lettered names in slot.
 - length: inches (number). Copy the printed dimension; if it is not on the sketch, omit length.
 - lengthConfidence: 0–1
 - startsAtCorner / endsAtCorner: booleans
 - kind: "wall" (default) or "island"
-- depth: inches; only for kind "island" (the short side)
+- depth: inches; only for kind "island" (the short side). Island belongs in wallRuns (kind "island") — there is no separate island field.
 - features: array of { kind, offset, width, confidence }
+
+Legend (prefer the drawing's own legend if present; otherwise these common marks):
+- two parallel thin lines crossing a wall = window
+- arc or door-swing on a wall = door
+- two circles / sink / faucet mark = plumbing
+- hatched or diagonally filled rectangle standing in the room (not on a wall) = island
 
 Rules:
 - Feature kind must be one of: window, door, plumbing, gas, electrical, obstruction.
+- For EVERY kitchen wall and the island, scan for those marks. Put what you see in that wall's features[]. An empty features array means you looked and found none — not that you skipped the wall.
+- If a mark is drawn but its numbers are missing, still emit kind (and offset/width when readable); omit missing numbers and lower confidence. Do not invent a mark that is not drawn.
 - offset is inches from THAT wall's starting corner (the labeled corner on the sketch), not from the room origin. A door is often near the far end — do not default offset to 0.
 - An island is NOT a fourth perimeter wall. Emit it as kind "island" with length (long side) and depth (short side). Island startsAtCorner and endsAtCorner are false.
 - Prefer 2–4 kitchen wall runs that form an L / U / galley from the drawing, plus a separate island run when one is drawn.
 - If the kitchen is labeled with overall room size (W x D) but individual wall segments are not marked, emit the sides using that W and D.
-- **Only add features you can actually see** (sink → plumbing on that wall, a drawn window, a doorway). Do NOT invent a window/door/plumbing on every wall.
 - Copy numbers from the drawing. Do not copy numbers from this prompt.
 - If you truly cannot find any kitchen, set wallRuns to [] and explain in notes — but first look carefully for a Kitchen label on the main floor.
 - Do not invent bedrooms as kitchen walls.
@@ -248,6 +261,7 @@ export function toRawExtraction(parsed: Record<string, unknown>): RawExtraction 
       ...(typeof row.label === "string" ? { label: row.label }
         : typeof row.id === "string" ? { label: row.id }
           : typeof row.name === "string" ? { label: row.name } : {}),
+      ...(typeof row.slot === "string" && row.slot.trim() ? { slot: row.slot.trim() } : {}),
       ...(length !== undefined ? { length } : {}),
       ...(num(row.lengthConfidence) !== undefined
         ? { lengthConfidence: num(row.lengthConfidence)! }

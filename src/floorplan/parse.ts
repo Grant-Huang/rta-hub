@@ -36,6 +36,11 @@ export interface RawExtraction {
   ceilingHeightConfidence?: number;
   wallRuns?: {
     label?: string;
+    /**
+     * 系统墙名（模板槽位）：North / East / West / South / Island / Wall。
+     * 图上的 A/B/C、中文墙名放在 `label`；对齐只认 `slot`（没有 slot 再回退标签）。
+     */
+    slot?: string;
     length?: number;
     lengthConfidence?: number;
     startsAtCorner?: boolean;

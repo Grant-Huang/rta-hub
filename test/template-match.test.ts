@@ -9,6 +9,8 @@ import {
 } from "../src/floorplan/template-match.js";
 import type { RawExtraction } from "../src/floorplan/parse.js";
 import { FLOORPLAN_TEMPLATES } from "../src/samples/templates.js";
+import { exportDesignInput } from "../src/floorplan/design-input.js";
+import type { FloorPlan } from "../src/floorplan/types.js";
 
 test("没有 templateGuess 时不匹配任何模板", () => {
   assert.equal(matchesKnownTemplate(undefined), undefined);
@@ -153,6 +155,62 @@ test("岛台槎位（L型+岛台模板）保留 kind/depth，且不接墙", () =
   assert.equal(island.startsAtCorner, false);
   assert.equal(island.endsAtCorner, false);
   assert.equal(east.endsAtCorner, false, "东墙后面是岛台，不是转角相接");
+});
+
+test("slot 优先于图上 A/B/C 标签：对齐到罗盘槽位，features 跟着走；岛台长宽进导出 JSON", () => {
+  const template = FLOORPLAN_TEMPLATES["l-island-kitchen"]!;
+  const raw: RawExtraction = {
+    ceilingHeight: 96, ceilingHeightConfidence: 0.9, overallConfidence: 0.9,
+    wallRuns: [
+      {
+        label: "Wall A", slot: "North", length: 144, lengthConfidence: 0.9,
+        features: [{ kind: "window", offset: 48, width: 36, confidence: 0.9 }],
+      },
+      {
+        label: "Wall B", slot: "East", length: 120, lengthConfidence: 0.9,
+        features: [
+          { kind: "plumbing", offset: 36, width: 24, confidence: 0.9 },
+          { kind: "door", offset: 88, width: 32, confidence: 0.9 },
+        ],
+      },
+      {
+        label: "hatched island", slot: "Island", kind: "island",
+        length: 72, depth: 40, lengthConfidence: 0.9,
+      },
+    ],
+  };
+  const { geometry, unresolved } = normalizeExtractionWithTemplate(raw, template, "en");
+  const north = geometry.wallRuns.find((r) => r.label === "North")!;
+  const east = geometry.wallRuns.find((r) => r.label === "East")!;
+  const island = geometry.wallRuns.find((r) => r.label === "Island")!;
+  assert.equal(north.length, 144);
+  assert.deepEqual(north.features.map((f) => f.kind), ["window"]);
+  assert.equal(north.features[0]!.offset, 48);
+  assert.equal(east.length, 120);
+  assert.deepEqual(east.features.map((f) => f.kind), ["plumbing", "door"]);
+  assert.equal(east.features[1]!.offset, 88);
+  assert.equal(island.length, 72);
+  assert.equal(island.kind, "island");
+  assert.equal(island.depth, 40, "图上读到的岛台进深覆盖模板默认 36");
+  assert.equal(unresolved.filter((u) => u.field === "note").length, 0, "slot 对得上就不应再报多余墙段");
+
+  const plan: FloorPlan = {
+    id: "fp_slot",
+    conversationId: "c_slot",
+    sourceFile: { name: "k.png", mimeType: "image/png", sizeBytes: 1 },
+    parsedGeometry: geometry,
+    parseConfidence: 0.9,
+    unresolvedItems: unresolved,
+    createdAt: "2026-08-15T00:00:00.000Z",
+    updatedAt: "2026-08-15T00:00:00.000Z",
+  };
+  const exported = exportDesignInput(plan);
+  const expIsland = exported.geometry.wallRuns.find((r) => r.label === "Island")!;
+  assert.equal(expIsland.kind, "island");
+  assert.equal(expIsland.depth, 40);
+  assert.equal(expIsland.length, 72);
+  assert.equal(expIsland.provenance, "assumed");
+  assert.equal(exported.geometry.wallRuns.find((r) => r.label === "North")?.features[0]?.kind, "window");
 });
 
 test("走廊型两段墙不相接——模板的 startsAtCorner:false 要保留下来", () => {

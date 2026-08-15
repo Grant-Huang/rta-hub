@@ -432,13 +432,20 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   // —— 岛台空间——是否有位置做岛台，不是所有厨房都有——
   const islandRun = plan?.parsedGeometry.wallRuns.find((r) => isIsland(r));
   if (islandRun) {
+    const islandPending = plan!.unresolvedItems.some((u) =>
+      !u.resolved && u.target.kind === "wallRun" && u.target.id === islandRun.id);
+    const sizeText = islandRun.depth != null
+      ? `${islandRun.length}×${islandRun.depth}"`
+      : `${islandRun.length}"`;
     items.push({
       id: "island",
       category: "geometry",
       critical: true,
-      status: islandRun.length > 0 ? "ok" : "missing",
+      status: islandRun.length > 0
+        ? (islandPending ? "needs_confirm" : "ok")
+        : "missing",
       brief: islandRun.length > 0
-        ? msg(lang, `Island: ${islandRun.length}".`, `岛台：${islandRun.length}"。`)
+        ? msg(lang, `Island: ${sizeText}.`, `岛台：${sizeText}。`)
         : msg(lang, "Island: size not confirmed yet.", "岛台：尺寸尚未确认。"),
       ...(islandRun.length > 0 ? {} : {
         askHint: msg(lang,
