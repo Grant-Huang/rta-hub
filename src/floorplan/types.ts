@@ -105,6 +105,12 @@ export interface FloorPlan {
    * 贸易账号一个人有多个项目，每个项目的家电各不相同——挂在偏好上就串了。
    */
   appliances?: ApplianceSpec[];
+  /**
+   * 客户文字确认过的户型形状模板 id（`samples/templates.ts` 的 5 种之一），
+   * 由 `applyFloorplanTemplate` 建壳时写入。仅用于"已确认"面板展示客户
+   * 说过是哪种户型——自由手输/识图抽取的户型没有这个模板出处，留空。
+   */
+  shapeTemplateId?: string;
   createdAt: string;
   updatedAt: string;
 }

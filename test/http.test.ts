@@ -969,6 +969,7 @@ test("FR-15：齐备后 design 接口带回叙事 brief 与出图前文字确认
     designBrief: {
       readyToAskDesign: boolean;
       sections: { id: string; body: string; status: string }[];
+      confirmedFacts: { key: string; value: string }[];
       confirmationText: string;
     };
     prompt: { message: string; awaiting?: string };
@@ -978,7 +979,10 @@ test("FR-15：齐备后 design 接口带回叙事 brief 与出图前文字确认
   assert.equal(ready.prompt.awaiting, "drawingConsent");
   assert.match(ready.prompt.message, /Shall I generate a design/i);
   assert.match(ready.prompt.message, /Plumbing|上下水/i);
-  assert.ok(ready.designBrief.sections.some((s) => s.id === "space" && /144/.test(s.body)));
+  // 具体数字（墙长）只在原子事实行里出现一次——section 卡片是简述，不重复贴数字
+  // （Phase 5：confirmedFacts 与 sections 去重）。
+  assert.ok(ready.designBrief.sections.some((s) => s.id === "space"));
+  assert.ok(ready.designBrief.confirmedFacts.some((f) => f.key.startsWith("wall:") && /144/.test(f.value)));
   assert.match(ready.designBrief.confirmationText, /Shall I generate a design/i);
 
   const getConv = await (await req(`/api/conversations/${conversation.id}?companyId=co_pilot`, {
