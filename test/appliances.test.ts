@@ -15,7 +15,7 @@ import {
   normalizeAppliances, provenanceNote, reservedWidth, violationCaveat,
 } from "../src/floorplan/appliances.js";
 import {
-  applianceQuestion, applianceWidthQuestion, appliancePlacementQuestion,
+  applianceQuestion, applianceWidthQuestion, applianceHeightQuestion, appliancePlacementQuestion,
   buildApplianceQuestions,
 } from "../src/preferences/questions.js";
 
@@ -91,7 +91,7 @@ test("客户想放的位置被记下来，不是丢掉", () => {
 
 test("全是客户给的尺寸时，不说任何「按推定值」的话", () => {
   const list = [
-    applianceFrom({ kind: "refrigerator", width: 33 }),
+    applianceFrom({ kind: "refrigerator", width: 33, height: 70 }),
     applianceFrom({ kind: "range", width: 30 }),
   ];
   assert.deepEqual(assumedOnes(list), []);
@@ -143,6 +143,15 @@ test("宽度题里必须有「我去量一下再说」", () => {
   assert.ok(q.options.some((o) => o.id === "refrigerator:33"));
 });
 
+test("高度题只问冰箱，也带「我去量一下再说」", () => {
+  const q = applianceHeightQuestion();
+  assert.ok(q);
+  const unsure = q.options.find((o) => o.id === "refrigerator:height:unsure");
+  assert.ok(unsure, "不知道冰箱多高也该是合法答案");
+  assert.ok(/assumed|推定/i.test(unsure.detail ?? ""));
+  assert.ok(q.options.some((o) => o.id === "refrigerator:height:70"));
+});
+
 test("位置题里有「你帮我定」——客户不该被迫替系统做决定", () => {
   const q = appliancePlacementQuestion("refrigerator");
   assert.ok(q.options.some((o) => o.id === "refrigerator:any"));
@@ -169,8 +178,17 @@ test("只对推定尺寸的家电追问宽度，客户给过准确数字的不�
 
 test("全部尺寸都确认过之后就不再问了", () => {
   const qs = buildApplianceQuestions({
-    known: [applianceFrom({ kind: "refrigerator", width: 33 })],
+    known: [applianceFrom({ kind: "refrigerator", width: 33, height: 70 })],
     kindsAnswered: true, maxPerTurn: 5,
   });
   assert.deepEqual(qs, []);
+});
+
+test("宽度已确认但冰箱高度还没问过时，追问高度——不因为宽度答过就当全问完了", () => {
+  const qs = buildApplianceQuestions({
+    known: [applianceFrom({ kind: "refrigerator", width: 33 })],
+    kindsAnswered: true, maxPerTurn: 5,
+  });
+  assert.equal(qs.length, 1);
+  assert.equal(qs[0]!.key, "applianceHeights");
 });

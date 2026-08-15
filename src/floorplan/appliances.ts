@@ -41,6 +41,25 @@ export interface ApplianceSpec {
   preferredZone?: "nearEntry" | "nearSink" | "nearWindow" | "any";
   /** 宽度是客户给的还是推定的——下游解释与硬约束提示都要读它。 */
   provenance: Provenance;
+  /**
+   * 客户明说这台家电不放在橱柜这面墙（比如放在储藏间/过道的独立空间）。
+   * 默认（留空）视为 `"onWall"`。标为 `"elsewhere"` 后，落位与「装不装得下」
+   * 的硬约束校验都跳过它——但它仍留在 `appliances` 列表里、仍走
+   * provenance 披露链路，不是被悄悄丢掉：客户随时能在已确认面板里看到、改回。
+   */
+  placement?: "onWall" | "elsewhere";
+  /**
+   * 冰箱本体高度（英寸）——只对冰箱有意义。冰箱很少顶到天花板，上面通常还有
+   * 一个矮柜；不知道冰箱多高，这个柜子的尺寸就是瞎猜的（或者猜出来根本装不下）。
+   */
+  height?: number;
+  /**
+   * 高度是客户给的还是推定的。与 `provenance`（宽度）分开单独 track——
+   * 客户经常先确认了宽度，高度还没问到，两者不该被同一个标记捆在一起
+   * （捆在一起会导致"只是没答高度"就整台家电又被判成需要重新确认宽度）。
+   * 只在冰箱上出现。
+   */
+  heightProvenance?: Provenance;
 }
 
 /**
@@ -49,9 +68,12 @@ export interface ApplianceSpec {
  * 这些数值**只在客户明确说"不确定"时使用**，且用了就标 `provenance: "assumed"`。
  * 它们不是"标准"，只是"最常见"——所以不能拿来覆盖客户给的数。
  */
-export const APPLIANCE_DEFAULTS: Record<ApplianceKind, { width: number; clearanceEachSide: number }> = {
+export const APPLIANCE_DEFAULTS:
+  Record<ApplianceKind, { width: number; clearanceEachSide: number; height?: number }> = {
   // 33" 是北美最常见的整机宽度（30" 窄款、36" 对开门/法式各占一部分）
-  refrigerator: { width: 33, clearanceEachSide: 1 },
+  // 70" 是常见整机高度——多数标准款冰箱在 66"–70" 之间，层高 96" 时上面还留得出
+  // 一个矮柜的空间
+  refrigerator: { width: 33, clearanceEachSide: 1, height: 70 },
   range: { width: 30, clearanceEachSide: 0 },
   // 嵌入式灶台落在**比它宽的柜子**上：台面开孔要留边，开孔切到柜体侧板就废了。
   // 所以它占的墙面宽度是"柜子的宽度"，不是"灶的宽度"——30" 的灶要 33" 的柜。
@@ -73,6 +95,11 @@ export const COMMON_WIDTHS: Partial<Record<ApplianceKind, number[]>> = {
   rangeHood: [30, 36],
   microwave: [24, 30],
   dishwasher: [18, 24],
+};
+
+/** 客户可选的常见高度档位。目前只有冰箱问这个——它是唯一「上面通常还有个柜子」的家电。 */
+export const COMMON_HEIGHTS: Partial<Record<ApplianceKind, number[]>> = {
+  refrigerator: [66, 68, 70, 72],
 };
 
 export const APPLIANCE_LABEL_EN: Record<ApplianceKind, string> = {
@@ -108,6 +135,9 @@ export function applianceLabel(
 /** 尺寸边界：小于最窄的家用款、大于最宽的商用款都当输入错误处理。 */
 const MIN_WIDTH = 12;
 const MAX_WIDTH = 60;
+/** 冰箱高度边界——矮于台面高的、高于双层商用款的都当输入错误处理。 */
+const MIN_HEIGHT = 54;
+const MAX_HEIGHT = 90;
 
 export class ApplianceError extends Error {}
 
@@ -124,6 +154,9 @@ export function applianceFrom(input: {
   width?: number | undefined;
   clearanceEachSide?: number | undefined;
   preferredZone?: ApplianceSpec["preferredZone"];
+  placement?: ApplianceSpec["placement"];
+  /** 冰箱高度（英寸）。其余家电类型忽略这个字段。 */
+  height?: number | undefined;
   language?: "en" | "zh";
 }, overlayDefaults?: Partial<Record<ApplianceKind, number>>): ApplianceSpec {
   const lang = input.language ?? "en";
@@ -151,11 +184,25 @@ export function applianceFrom(input: {
       : `Clearance ${gap}" is unreasonable (0–6")`);
   }
 
+  const isFridge = input.kind === "refrigerator";
+  if (isFridge && input.height !== undefined) {
+    if (!Number.isFinite(input.height) || input.height < MIN_HEIGHT || input.height > MAX_HEIGHT) {
+      throw new ApplianceError(lang === "zh"
+        ? `${label}高度 ${input.height}" 超出合理范围（${MIN_HEIGHT}–${MAX_HEIGHT}"）`
+        : `${label} height ${input.height}" is outside the allowed range (${MIN_HEIGHT}–${MAX_HEIGHT}")`);
+    }
+  }
+
   return {
     kind: input.kind,
     width: input.width ?? defaultWidth,
     clearanceEachSide: gap,
     ...(input.preferredZone ? { preferredZone: input.preferredZone } : {}),
+    ...(input.placement ? { placement: input.placement } : {}),
+    ...(isFridge ? {
+      height: input.height ?? d.height ?? 70,
+      heightProvenance: input.height === undefined ? "assumed" as const : "customer" as const,
+    } : {}),
     provenance: input.width === undefined ? "assumed" : "customer",
   };
 }
@@ -197,10 +244,19 @@ export function provenanceNote(
   language: "en" | "zh" = "en",
 ): string | undefined {
   const assumed = assumedOnes(appliances);
-  if (assumed.length === 0) return undefined;
+  // 冰箱高度单独 track（见 ApplianceSpec.heightProvenance）：宽度已确认、
+  // 高度还没问到的冰箱不会出现在 assumedOnes 里，但这也是一条要披露的推定。
+  const fridgeHeightAssumed = appliances.find(
+    (a) => a.kind === "refrigerator" && a.heightProvenance === "assumed");
+  if (assumed.length === 0 && !fridgeHeightAssumed) return undefined;
   const parts = assumed.map((a) => language === "zh"
     ? `${APPLIANCE_LABEL_ZH[a.kind]}按 ${a.width}" 预留`
     : `${APPLIANCE_LABEL_EN[a.kind]} reserved at ${a.width}"`);
+  if (fridgeHeightAssumed) {
+    parts.push(language === "zh"
+      ? `冰箱高度按 ${fridgeHeightAssumed.height}" 推定（决定上方能不能装吊柜）`
+      : `Refrigerator height assumed at ${fridgeHeightAssumed.height}" (decides whether a cabinet fits above it)`);
+  }
   if (language === "zh") {
     return `以下尺寸是按常见款推定的（你还没提供实际尺寸）：${parts.join("、")}。` +
       `如果你的实际尺寸不同，这一版要重排。`;

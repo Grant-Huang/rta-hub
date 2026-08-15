@@ -216,6 +216,25 @@ test("冰箱不得压进门洞净空（含门套让位）", () => {
   );
 });
 
+// ── 冰箱不放在这面墙 ──────────────────────────────────────────────────────
+
+test("客户说冰箱放别处时不参与这面墙的排布——不占位，也不报「放不下」", () => {
+  const w = wall({ id: "a", length: 30 }); // 太短，正常情况下冰箱会报警告
+  const plan = planAppliances(geo(w), [appl("refrigerator", { width: 33 })].map((a) => ({
+    ...a, placement: "elsewhere" as const,
+  })));
+  assert.equal(plan.placed.length, 0, "标了 elsewhere 就不该落位");
+  assert.equal(plan.warnings.length, 0, "不该说「放不下」——它压根没打算放这面墙");
+});
+
+test("冰箱放别处后，同墙其余家电正常落位、不受影响", () => {
+  const w = wall({ id: "a", length: 60, features: [feat("g", "gas", 30, 0)] });
+  const fridge = { ...appl("refrigerator", { width: 33 }), placement: "elsewhere" as const };
+  const plan = planAppliances(geo(w), [fridge, appl("range", { width: 30 })]);
+  assert.equal(plan.placed.length, 1);
+  assert.equal(plan.placed[0]!.spec.kind, "range");
+});
+
 test("同墙窗+门占满时冰箱放不下就报警告，不静默压洞", () => {
   // 132" 北墙：窗 36@48 + 门 32@52.75 几乎挤满中段，再加冰箱 33 易干涉
   const w = wall({

@@ -3349,6 +3349,8 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
     appliances: {
       kind: ApplianceKind; width?: number;
       clearanceEachSide?: number; preferredZone?: ApplianceSpec["preferredZone"];
+      /** 冰箱高度（英寸）——决定上方能不能装吊柜；其余家电类型忽略这个字段。 */
+      height?: number;
     }[];
   }>(c);
 

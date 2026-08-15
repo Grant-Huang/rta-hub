@@ -13,7 +13,8 @@ import {
 } from "../floorplan/appliances.js";
 import type { BlockedEdit } from "./confirm-lock.js";
 
-export type ChatApplianceApplyKind = "kinds" | "widths" | "confirmAssumed" | "defer";
+export type ChatApplianceApplyKind =
+  | "kinds" | "widths" | "confirmAssumed" | "defer" | "placement" | "height";
 
 export interface ChatApplianceApplyResult {
   plan: FloorPlan;
@@ -28,6 +29,46 @@ const DEFER_RE =
 /** 接受推定宽度（不改数值；保留 provenance=assumed，出图/报价继续披露推定）。 */
 const CONFIRM_ASSUMED_RE =
   /assumed\s+(widths?\s+)?(are\s+)?(ok|fine|good|okay)|those\s+(assumed\s+)?widths?\s+(are\s+)?(ok|fine|good)|推定(宽度)?(可以|没问题|ok|OK)|按推定|就按这(个|些)宽|先按常见|widths?\s+look\s+(ok|fine)/i;
+
+/**
+ * 冰箱不放在橱柜这面墙——墙长不够时给客户的一条出路。检测到就把冰箱标为
+ * `placement: "elsewhere"`：不参与这面墙的落位与「装不装得下」校验，
+ * 但仍留在 appliances 列表里（见 ApplianceSpec.placement 的注释）。
+ */
+const FRIDGE_ELSEWHERE_RE =
+  /\b(fridge|refrigerator)\b[^.!?\n]{0,30}\b(elsewhere|separately|in\s+a\s+separate\s+\w+|another\s+(room|spot|location|wall)|not\s+on\s+(this|the|our)\s+wall|in\s+the\s+(pantry|hallway|garage|closet|nook|mudroom))\b|冰箱.{0,10}(不放在|不装在|不摆在|不在).{0,6}(这|那|同)?(面|堵)?墙|冰箱.{0,10}(放|摆|装).{0,6}(别处|别的地方|另一个地方|过道|走廊|储藏间|杂物间|旁边(的)?壁龛)|冰箱.{0,6}(单独|另外)(放|摆|安排)/i;
+
+export function isFridgeElsewhere(text: string): boolean {
+  return FRIDGE_ELSEWHERE_RE.test(text);
+}
+
+/**
+ * 冰箱高度——决定上方能不能装吊柜（见 ApplianceSpec.height 的注释）。
+ *
+ * 必须带「高/tall/height」这类明确指向高度的词才算数，否则会跟宽度解析
+ * （`widthNear`）抢同一个数字——「fridge 33 tall」与「fridge 33 wide」的区别
+ * 只在这个词上。
+ */
+const FRIDGE_HEIGHT_RE = new RegExp(
+  // "fridge 70 tall/height/high"
+  "\\b(?:fridge|refrigerator)\\b[^.!?\\n]{0,20}?(\\d{2,3})\\s*(?:[\"″]|in(?:ch(?:es)?)?|寸)?\\s*(?:tall|height|high)\\b"
+  // "70 tall/high ... fridge"
+  + "|\\b(\\d{2,3})\\s*(?:[\"″]|in(?:ch(?:es)?)?|寸)?\\s*(?:tall|high)\\b[^.!?\\n]{0,20}?\\b(?:fridge|refrigerator)\\b"
+  // "fridge height/height of the fridge is 70"
+  + "|\\b(?:fridge|refrigerator)\\b[^.!?\\n]{0,20}?\\bheight\\b[^.!?\\n]{0,10}?(\\d{2,3})"
+  + "|冰箱[^。！？\\n]{0,10}?高(?:度)?[^0-9]{0,4}(\\d{2,3})"
+  + "|(\\d{2,3})\\s*(?:寸|英寸)?\\s*高[^。！？\\n]{0,10}?冰箱",
+  "i",
+);
+
+function fridgeHeightFromChat(text: string): number | undefined {
+  const m = FRIDGE_HEIGHT_RE.exec(text);
+  if (!m) return undefined;
+  const raw = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5];
+  const n = raw !== undefined ? Number(raw) : undefined;
+  if (n === undefined || !Number.isFinite(n) || n < 54 || n > 90) return undefined;
+  return n;
+}
 
 /** 客户只说「推定可以」、尚未点名家电时，用北美常见三件套落库。 */
 const DEFAULT_ASSUMED_KINDS: ApplianceKind[] = ["refrigerator", "range", "dishwasher"];
@@ -138,6 +179,43 @@ export function applyChatApplianceAnswers(
       applied.push(
         parsed.appliances.some((a) => a.provenance === "customer") ? "widths" : "kinds",
       );
+    }
+  }
+
+  if (isFridgeElsewhere(text)) {
+    const idx = list.findIndex((a) => a.kind === "refrigerator");
+    if (idx >= 0) {
+      if (list[idx]!.placement !== "elsewhere") {
+        list = [...list.slice(0, idx), { ...list[idx]!, placement: "elsewhere" }, ...list.slice(idx + 1)];
+        applied.push("placement");
+      }
+    } else {
+      list = [...list, applianceFrom({ kind: "refrigerator", placement: "elsewhere" })];
+      applied.push("placement");
+    }
+  }
+
+  const fridgeHeight = fridgeHeightFromChat(text);
+  if (fridgeHeight !== undefined) {
+    const idx = list.findIndex((a) => a.kind === "refrigerator");
+    if (idx >= 0) {
+      const prev = list[idx]!;
+      if (prev.heightProvenance === "customer" && prev.height !== fridgeHeight) {
+        blockedEdits.push({
+          kind: "appliance", label: `${applianceLabel("refrigerator", "en")} height`,
+          current: prev.height!, attempted: fridgeHeight,
+        });
+      } else if (prev.height !== fridgeHeight || prev.heightProvenance !== "customer") {
+        list = [
+          ...list.slice(0, idx),
+          { ...prev, height: fridgeHeight, heightProvenance: "customer" },
+          ...list.slice(idx + 1),
+        ];
+        applied.push("height");
+      }
+    } else {
+      list = [...list, applianceFrom({ kind: "refrigerator", height: fridgeHeight })];
+      applied.push("height");
     }
   }
 

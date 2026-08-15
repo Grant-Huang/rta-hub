@@ -58,6 +58,33 @@ test("冰箱顶上排出上柜，且它与冰箱位同中心", () => {
   assert.ok(over.depth >= 24, `冰箱上柜要与冰箱齐深，实际 ${over.depth}"`);
 });
 
+test("冰箱上柜的高度按「层高 − 冰箱高度」选，不是无脑取第一档", () => {
+  // 默认冰箱高 70"：可用高度 96-70-6=20"，这家最高一档冰箱上柜是 18"
+  const shortFridge = generateLayout(geo(longWall()), pilotModules, {
+    ceilingHeight: 96, appliances: [applianceFrom({ kind: "refrigerator", width: 33, height: 70 })],
+  });
+  const overShort = shortFridge.placements.find((p) => p.label === "Fridge upper")!;
+  assert.equal(overShort.height, 18);
+
+  // 冰箱更高（75"）：可用高度收窄到 15"，18" 那档装不下，该退到 15"
+  const tallFridge = generateLayout(geo(longWall()), pilotModules, {
+    ceilingHeight: 96, appliances: [applianceFrom({ kind: "refrigerator", width: 33, height: 75 })],
+  });
+  const overTall = tallFridge.placements.find((p) => p.label === "Fridge upper")!;
+  assert.equal(overTall.height, 15, "冰箱更高时，上柜该让出对应的高度");
+});
+
+test("冰箱太高、层高下装不进任何一档上柜时，如实报警告并提醒可以考虑放进 pantry", () => {
+  // 冰箱 78" 高，层高 84"：可用高度只有 0"，这家最矮的上柜也是 12"，装不下
+  const layout = generateLayout(geo(longWall()), pilotModules, {
+    ceilingHeight: 84, appliances: [applianceFrom({ kind: "refrigerator", width: 33, height: 78 })],
+  });
+  assert.equal(layout.placements.some((p) => p.label === "Fridge upper"), false);
+  const w = layout.warnings.find((x) => /fridge upper|冰箱上柜|no room|装不进/i.test(x.message));
+  assert.ok(w, `应该报出冰箱上柜装不下，实际 warnings: ${JSON.stringify(layout.warnings)}`);
+  assert.match(w!.message, /pantry|餐边柜/i, "应该提醒可以考虑把冰箱放进单独的 pantry");
+});
+
 test("这家没有冰箱上柜型号时**报出来**，不静默跳过", () => {
   // 去掉带 servesAppliance: refrigerator 的型号
   const without = pilotModules.filter(
