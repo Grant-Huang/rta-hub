@@ -1,18 +1,18 @@
 {
-  "at": "2026-08-15T22:47:37.149Z",
+  "at": "2026-08-15T22:53:40.052Z",
   "model": "qwen2.5vl",
   "A": {
-    "elapsedMs": 105719,
+    "elapsedMs": 115707,
     "steps": [
       {
         "step": "oneshot",
-        "elapsedMs": 105715
+        "elapsedMs": 115703
       }
     ],
     "score": {
       "wallHits": 3,
       "featureWallHits": 2,
-      "featureOffsetHits": 2,
+      "featureOffsetHits": 1,
       "features": [
         {
           "slot": "North",
@@ -26,14 +26,14 @@
           "kind": "plumbing",
           "wallOk": false,
           "offsetOk": false,
-          "offset": 120
+          "offset": 108
         },
         {
           "slot": "East",
           "kind": "door",
           "wallOk": true,
-          "offsetOk": true,
-          "offset": 88
+          "offsetOk": false,
+          "offset": 96
         }
       ]
     },
@@ -52,7 +52,7 @@
           },
           {
             "kind": "plumbing",
-            "offset": 120,
+            "offset": 108,
             "width": 24,
             "confidence": 1
           }
@@ -66,7 +66,7 @@
         "features": [
           {
             "kind": "door",
-            "offset": 88,
+            "offset": 96,
             "width": 32,
             "confidence": 1
           }
@@ -82,21 +82,21 @@
     ]
   },
   "B": {
-    "elapsedMs": 134004,
+    "elapsedMs": 145324,
     "steps": [
       {
         "step": "walls",
-        "elapsedMs": 78247
+        "elapsedMs": 82781
       },
       {
         "step": "features",
-        "elapsedMs": 55754
+        "elapsedMs": 62539
       }
     ],
     "score": {
       "wallHits": 3,
       "featureWallHits": 2,
-      "featureOffsetHits": 1,
+      "featureOffsetHits": 2,
       "features": [
         {
           "slot": "North",
@@ -116,8 +116,8 @@
           "slot": "East",
           "kind": "door",
           "wallOk": true,
-          "offsetOk": false,
-          "offset": 96
+          "offsetOk": true,
+          "offset": 88
         }
       ]
     },
@@ -148,7 +148,7 @@
         "features": [
           {
             "kind": "door",
-            "offset": 96,
+            "offset": 88,
             "width": 32,
             "confidence": 100
           }
@@ -171,5 +171,42 @@
       }
     ]
   },
-  "deltaMs": 28285
+  "deltaMs": 29617,
+  "previous": [
+    {
+      "at": "2026-08-15T22:47:37.149Z",
+      "A": {
+        "elapsedMs": 105719,
+        "steps": [{ "step": "oneshot", "elapsedMs": 105715 }],
+        "score": {
+          "wallHits": 3,
+          "featureWallHits": 2,
+          "featureOffsetHits": 2,
+          "features": [
+            { "slot": "North", "kind": "window", "wallOk": true, "offsetOk": true, "offset": 42 },
+            { "slot": "East", "kind": "plumbing", "wallOk": false, "offsetOk": false, "offset": 120 },
+            { "slot": "East", "kind": "door", "wallOk": true, "offsetOk": true, "offset": 88 }
+          ]
+        }
+      },
+      "B": {
+        "elapsedMs": 134004,
+        "steps": [
+          { "step": "walls", "elapsedMs": 78247 },
+          { "step": "features", "elapsedMs": 55754 }
+        ],
+        "score": {
+          "wallHits": 3,
+          "featureWallHits": 2,
+          "featureOffsetHits": 1,
+          "features": [
+            { "slot": "North", "kind": "window", "wallOk": true, "offsetOk": true, "offset": 48 },
+            { "slot": "East", "kind": "plumbing", "wallOk": false, "offsetOk": false, "offset": 108 },
+            { "slot": "East", "kind": "door", "wallOk": true, "offsetOk": false, "offset": 96 }
+          ]
+        }
+      },
+      "deltaMs": 28285
+    }
+  ]
 }

@@ -151,10 +151,16 @@ test("实图耗时夹具：两步比单次更慢（walls+features 两次调用�
     A: { elapsedMs: number; steps: { step: string; elapsedMs: number }[] };
     B: { elapsedMs: number; steps: { step: string; elapsedMs: number }[] };
     deltaMs: number;
+    previous?: { A: { elapsedMs: number }; B: { elapsedMs: number }; deltaMs: number }[];
   };
   assert.equal(report.A.steps[0]?.step, "oneshot");
   assert.deepEqual(report.B.steps.map((s) => s.step), ["walls", "features"]);
   assert.ok(report.A.elapsedMs > 0);
   assert.ok(report.B.elapsedMs > report.A.elapsedMs, "两步总耗时应高于单次");
   assert.equal(report.deltaMs, report.B.elapsedMs - report.A.elapsedMs);
+  assert.ok(report.previous && report.previous.length >= 1, "应保留上次当场对照");
+  for (const prev of report.previous) {
+    assert.ok(prev.B.elapsedMs > prev.A.elapsedMs, "上次两步也应更慢");
+    assert.equal(prev.deltaMs, prev.B.elapsedMs - prev.A.elapsedMs);
+  }
 });
