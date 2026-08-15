@@ -135,10 +135,10 @@ import type { BlockedEdit } from "./design/confirm-lock.js";
 import { renderSiteDiagram } from "./render/site-diagram.js";
 import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
-import { floorplanTemplateById } from "./samples/templates.js";
+import { floorplanTemplateById, matchKnownShape, SHAPE_WALL_EXPLANATION } from "./samples/templates.js";
 import { matchesKnownTemplate, normalizeExtractionWithTemplate } from "./floorplan/template-match.js";
 import {
-  floorplanFirstWelcome, intakeSampleCards, reuploadPrompt, shouldSuggestReupload,
+  floorplanFirstWelcome, intakeSampleCards, reuploadPrompt, shouldSuggestReupload, wantsShapeExample,
 } from "./floorplan/intake.js";
 import { generateLayout, regenerateRun, toSelections } from "./layout/generate.js";
 import { planAppliances } from "./layout/appliance-plan.js";
@@ -1264,6 +1264,8 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
   const notices: string[] = [];
   const replies: ChatMessage[] = [];
   const perCompanyThreads = conv.perCompanyThreads.map((t) => ({ ...t, messages: [...t.messages] }));
+  // 客户明确要求看户型示例图时才有值（Phase 2）——不再一开场就常驻展示。
+  let showcaseSamples: ReturnType<typeof intakeSampleCards> | undefined;
 
   // 仅「明确切换」时回一句确认；整段中文自然跟随时不打断
   if (switched) {
@@ -1353,6 +1355,38 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
       text,
     ].filter((s) => s.trim()).join("\n");
     let planChat = planForConversation(conv.id);
+    // 开场第一问是"你家是哪种布局"，纯文字回答（Phase 2）。客户拿不准时可以
+    // 直接说想看示例图（"不确定"/"什么样"/"show me" 一类）——检测优先于下面
+    // 的"点名户型"识别：同一句话如果既提了户型词又带"什么样/举例"这类词，
+    // 是在问"这是什么样"，不是在报出自己家的答案，不能当成确认。
+    if (!planChat && wantsShapeExample(text)) {
+      const namedShapeId = matchKnownShape(text);
+      const toShow = namedShapeId
+        ? intakeSampleCards(language).filter((s) => s.id === namedShapeId)
+        : intakeSampleCards(language).filter((s) => s.role === "floorplan");
+      showcaseSamples = toShow;
+      replies.push({
+        role: "assistant",
+        content: msg(language,
+          "Here's what that looks like — take a look, then tell me which shape matches your kitchen.",
+          "示例图在下面——看完告诉我哪一种像你家的户型。"),
+        at,
+      });
+    } else if (!planChat) {
+      // 开场第一问是"你家是哪种布局"，纯文字回答（Phase 2）：客户直接打字点名
+      // 已知户型（"U型"/"走廊型"…）时，套用该户型的标准墙壳——跟点按钮选模板走
+      // 同一份逻辑（`applyFloorplanTemplate`），只是入口从点击换成了打字。
+      // 只在**还没有户型**时识别，不然客户后面聊天里随口提一句"我朋友家是U型的"
+      // 也会被当成要重置几何。
+      const shapeId = matchKnownShape(text);
+      if (shapeId) {
+        const applied = await applyFloorplanTemplate(conv, shapeId, language, at);
+        if (applied) {
+          planChat = applied.plan;
+          replies.push({ role: "assistant", content: applied.interpretation, at });
+        }
+      }
+    }
     const needShell = !planChat && (
       chatMentionsGeometry(combined)
       || chatMentionsApplianceKinds(combined)
@@ -1755,6 +1789,7 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     questionCompanyId: questionCompanyId || null,
     language,
     ...briefing,
+    ...(showcaseSamples ? { intakeSamples: showcaseSamples } : {}),
     ...(applianceQuestions.length ? { applianceQuestions } : {}),
     ...(designPrompt ? { designPrompt, designSession } : {}),
     ...(designConsentGranted ? { designConsentGranted: true, designSession } : {}),
@@ -3028,6 +3063,89 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
 });
 
 /**
+ * 套用户型模板：建墙壳（标准数值，全部标记待确认）+ 生成解读复述（含墙名讲解）。
+ *
+ * 预填**不是**客户确认——每段墙、每处门窗都留一条待确认项，走跟手绘/上传一样的
+ * Q# 核对（FR-15.5）。两个入口共用：`/floorplan-template`（客户点按钮，Phase 2
+ * 之前的路径，仍保留给"其他"分支用）；主聊天入口客户直接打字点名户型
+ * （见 `matchKnownShape` 调用处）。
+ */
+async function applyFloorplanTemplate(
+  conv: Conversation,
+  templateId: string,
+  lang: UiLanguage,
+  at: string,
+): Promise<{ plan: FloorPlan; interpretation: string } | undefined> {
+  const template = floorplanTemplateById(templateId);
+  if (!template) return undefined;
+
+  const previousPlans = appCtx.repos.floorPlans.filter((p) => p.conversationId === conv.id);
+  const carriedAppliances = normalizeAppliances(previousPlans.flatMap((p) => p.appliances ?? []));
+  for (const old of previousPlans) await appCtx.repos.floorPlans.remove(old.id);
+
+  let plan = createChatSourcedFloorPlan(conv.id, at);
+  const wallIds: string[] = [];
+  for (const w of template.walls) {
+    plan = addWallRun(plan, {
+      label: w.label,
+      length: w.length,
+      ...(w.kind ? { kind: w.kind } : {}),
+      ...(w.depth !== undefined ? { depth: w.depth } : {}),
+      ...(w.startsAtCorner !== undefined ? { startsAtCorner: w.startsAtCorner } : {}),
+    }, at);
+    wallIds.push(plan.parsedGeometry.wallRuns[plan.parsedGeometry.wallRuns.length - 1]!.id);
+  }
+  for (const f of template.features) {
+    plan = addFeature(plan, wallIds[f.wall]!, { kind: f.kind, offset: f.offset, width: f.width }, at);
+  }
+  plan = resolveCeilingHeight(plan, template.ceilingHeight, at);
+  if (carriedAppliances.length > 0) plan = { ...plan, appliances: carriedAppliances };
+
+  // 模板预填不是客户量的——每段墙长、每处门窗都留一条待确认项（FR-17.4 / FR-15.5）
+  const confirmItems: FloorPlan["unresolvedItems"] = [];
+  for (const r of plan.parsedGeometry.wallRuns) {
+    confirmItems.push({
+      id: `tpl_${randomUUID().slice(0, 8)}`,
+      target: { kind: "wallRun", id: r.id },
+      field: "length",
+      reason: msg(lang,
+        `Confirm "${r.label}" is about ${r.length}" (from the ${template.id} template).`,
+        `请确认「${r.label}」大约是 ${r.length}"（来自 ${template.id} 模板）。`),
+      suggestion: r.length,
+      resolved: false,
+    });
+    for (const f of r.features) {
+      confirmItems.push({
+        id: `tpl_${randomUUID().slice(0, 8)}`,
+        target: { kind: "feature", id: f.id },
+        field: f.kind,
+        reason: msg(lang,
+          `Confirm the ${f.kind} on "${r.label}" (from the template) — offset ${f.offset}", width ${f.width}".`,
+          `请确认「${r.label}」上的${f.kind}（模板预填）——距起点 ${f.offset}"，宽 ${f.width}"。`),
+        suggestion: f.offset,
+        resolved: false,
+      });
+    }
+  }
+  plan = { ...plan, unresolvedItems: [...plan.unresolvedItems, ...confirmItems], updatedAt: at };
+  await appCtx.repos.floorPlans.upsert(plan);
+
+  const templateNote = lang === "zh" ? template.noteZh : template.noteEn;
+  const wallExplain = SHAPE_WALL_EXPLANATION[template.id];
+  const explainLine = wallExplain ? (lang === "zh" ? wallExplain.zh : wallExplain.en) : "";
+  const interpretation = [
+    msg(lang,
+      `Applied the "${templateId}" template as a starting point: ${templateNote} `
+        + "These are standard numbers, not measured — please confirm below.",
+      `已按「${templateId}」模板预填作为起点：${templateNote} `
+        + "这些是标准数值，不是量出来的——请在下面逐项确认。"),
+    explainLine,
+  ].filter(Boolean).join("\n");
+
+  return { plan, interpretation };
+}
+
+/**
  * 户型模板快选（FR-17.4）：客户选"我家像哪个"，跳过从零手绘。
  *
  * 预填**不是**客户确认——每段墙、每处门窗都留一条待确认项，走跟手绘/上传
@@ -3076,68 +3194,13 @@ app.post("/api/conversations/:id/floorplan-template", requireAccount, async (c) 
     });
   }
 
-  const template = floorplanTemplateById(templateId);
-  if (!template) return c.json({ error: `Unknown template: ${templateId}` }, 400);
-
-  for (const old of previousPlans) await appCtx.repos.floorPlans.remove(old.id);
-  let plan = createChatSourcedFloorPlan(conv.id, at);
-  const wallIds: string[] = [];
-  for (const w of template.walls) {
-    plan = addWallRun(plan, {
-      label: w.label,
-      length: w.length,
-      ...(w.kind ? { kind: w.kind } : {}),
-      ...(w.depth !== undefined ? { depth: w.depth } : {}),
-      ...(w.startsAtCorner !== undefined ? { startsAtCorner: w.startsAtCorner } : {}),
-    }, at);
-    wallIds.push(plan.parsedGeometry.wallRuns[plan.parsedGeometry.wallRuns.length - 1]!.id);
-  }
-  for (const f of template.features) {
-    plan = addFeature(plan, wallIds[f.wall]!, { kind: f.kind, offset: f.offset, width: f.width }, at);
-  }
-  plan = resolveCeilingHeight(plan, template.ceilingHeight, at);
-  if (carriedAppliances.length > 0) plan = { ...plan, appliances: carriedAppliances };
-
-  // 模板预填不是客户量的——每段墙长、每处门窗都留一条待确认项（FR-17.4 / FR-15.5）
-  const confirmItems: FloorPlan["unresolvedItems"] = [];
-  for (const r of plan.parsedGeometry.wallRuns) {
-    confirmItems.push({
-      id: `tpl_${randomUUID().slice(0, 8)}`,
-      target: { kind: "wallRun", id: r.id },
-      field: "length",
-      reason: msg(fpLang,
-        `Confirm "${r.label}" is about ${r.length}" (from the ${template.id} template).`,
-        `请确认「${r.label}」大约是 ${r.length}"（来自 ${template.id} 模板）。`),
-      suggestion: r.length,
-      resolved: false,
-    });
-    for (const f of r.features) {
-      confirmItems.push({
-        id: `tpl_${randomUUID().slice(0, 8)}`,
-        target: { kind: "feature", id: f.id },
-        field: f.kind,
-        reason: msg(fpLang,
-          `Confirm the ${f.kind} on "${r.label}" (from the template) — offset ${f.offset}", width ${f.width}".`,
-          `请确认「${r.label}」上的${f.kind}（模板预填）——距起点 ${f.offset}"，宽 ${f.width}"。`),
-        suggestion: f.offset,
-        resolved: false,
-      });
-    }
-  }
-  plan = { ...plan, unresolvedItems: [...plan.unresolvedItems, ...confirmItems], updatedAt: at };
-  await appCtx.repos.floorPlans.upsert(plan);
+  const applied = await applyFloorplanTemplate(conv, templateId, fpLang, at);
+  if (!applied) return c.json({ error: `Unknown template: ${templateId}` }, 400);
+  let plan = applied.plan;
 
   const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
   const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
-  const templateNote = fpLang === "zh" ? template.noteZh : template.noteEn;
-  const interpretation = [
-    msg(fpLang,
-      `Applied the "${templateId}" template as a starting point: ${templateNote} `
-        + "These are standard numbers, not measured — please confirm below.",
-      `已按「${templateId}」模板预填作为起点：${templateNote} `
-        + "这些是标准数值，不是量出来的——请在下面逐项确认。"),
-    ...sitePrompts,
-  ].filter(Boolean).join("\n");
+  const interpretation = [applied.interpretation, ...sitePrompts].filter(Boolean).join("\n");
   const echoMsg: ChatMessage = {
     role: "user",
     content: msg(fpLang, `[Picked floor-plan template: ${templateId}]`, `[选择户型模板：${templateId}]`),

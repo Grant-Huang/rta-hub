@@ -119,3 +119,58 @@ export const FLOORPLAN_TEMPLATES: Readonly<Record<string, FloorplanTemplate>> = 
 export function floorplanTemplateById(id: string): FloorplanTemplate | undefined {
   return FLOORPLAN_TEMPLATES[id];
 }
+
+/**
+ * 客户用文字报出的户型名 → 已知模板 id。
+ *
+ * L型+岛台必须排在纯 L 型前面：两者的文本都会命中"L型"，先判定更具体的那个。
+ */
+const SHAPE_PATTERNS: { id: string; re: RegExp }[] = [
+  {
+    id: "l-island-kitchen",
+    re: /l\s*[- ]?shape.{0,10}island|l\s*型.{0,6}(岛台|中岛)|(?:带|加)\s*岛台.{0,6}l\s*型|岛台.{0,6}l\s*型/i,
+  },
+  { id: "u-shaped-kitchen", re: /u\s*[- ]?shape|u\s*型/i },
+  { id: "galley-kitchen", re: /galley|走廊型|双排型|两排型|通道型/i },
+  { id: "one-wall-kitchen", re: /one[- ]?wall|单壁型|一字型|一字\s*厨房/i },
+  { id: "floorplan-minimal", re: /l\s*[- ]?shape|l\s*型/i },
+];
+
+/** 文字里点名的是哪个已知户型模板；没点名任何一个则 undefined。 */
+export function matchKnownShape(text: string): string | undefined {
+  for (const { id, re } of SHAPE_PATTERNS) {
+    if (re.test(text)) return id;
+  }
+  return undefined;
+}
+
+/**
+ * 每种户型的墙名讲解——客户选完形状后，同一句回复里解释"北墙/西墙/东墙"
+ * 这类罗盘方位对应到日常怎么称呼（主墙/左墙/右墙），方便后续沟通与画图标注。
+ * 不改 WallRun.label 本身（仍是罗盘词，几何/渲染大量代码依赖这个），
+ * 只在这句解释文案里搭一次桥。
+ */
+export const SHAPE_WALL_EXPLANATION: Readonly<Record<string, { en: string; zh: string }>> = {
+  "one-wall-kitchen": {
+    en: "One wall to work with — we'll just call it \"the wall\".",
+    zh: "单壁型只有一段墙，后面就直接叫「这面墙」。",
+  },
+  "u-shaped-kitchen": {
+    en: "Three walls: the one facing you as you walk in (labeled \"North\") is the main wall; "
+      + "your left (\"West\") is the left wall, your right (\"East\") is the right wall.",
+    zh: "U型三段墙：正对着你走进来的那面（系统里标「North / 北墙」）是主墙；"
+      + "左手边（「West / 西墙」）是左墙，右手边（「East / 东墙」）是右墙。",
+  },
+  "l-island-kitchen": {
+    en: "Two walls meeting in an L (\"North\" and \"East\"), plus an island in the middle of the room.",
+    zh: "L型两段墙首尾相接（「North / 北墙」和「East / 东墙」），中间是岛台。",
+  },
+  "galley-kitchen": {
+    en: "Two walls facing each other across an aisle (\"North\" and \"South\") — not corner-joined.",
+    zh: "走廊型是两段面对面的墙（「North / 北墙」和「South / 南墙」），中间是过道，两段墙不是转角相接。",
+  },
+  "floorplan-minimal": {
+    en: "Two walls meeting in an L (\"North\" and \"East\").",
+    zh: "L型两段墙首尾相接（「North / 北墙」和「East / 东墙」）。",
+  },
+};

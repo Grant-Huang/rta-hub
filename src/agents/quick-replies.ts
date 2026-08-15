@@ -42,8 +42,8 @@ const CATALOG_EN: Record<string, CatalogEntry> = {
     alternative: "Upload a floor plan for more accuracy — we can read sizes from the drawing.",
   },
   layout: {
-    hint: "Tap one",
-    options: ["I-shape", "L-shape", "U-shape", "With island"],
+    hint: "Tap one, or type it",
+    options: ["One-wall", "Galley", "L-shape", "L-shape + island", "U-shape"],
   },
   style: {
     hint: "e.g. modern / farmhouse / nordic",
@@ -81,8 +81,8 @@ const CATALOG_ZH: Record<string, CatalogEntry> = {
     options: ["现代简约", "美式乡村", "北欧", "轻奢", "传统欧式"],
   },
   layout: {
-    hint: "可选布局",
-    options: ["一字型", "L 型", "U 型", "带岛台"],
+    hint: "点一个，或者打字告诉我",
+    options: ["一字型", "走廊型", "L型", "L型+岛台", "U型"],
   },
   budget: {
     hint: "给个范围就行，不确定也可以直说",
