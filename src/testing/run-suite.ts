@@ -29,7 +29,7 @@ export async function startAndRunTestSuite(
 ): Promise<TestUserRun> {
   const count = Math.min(8, Math.max(1, input.count ?? 3));
   const runCritic = input.runCritic !== false;
-  const accountId = input.accountId ?? "ca_demo_consumer";
+  const accountId = input.accountId ?? "ca_test";
   const sessionRunId = deps.sessionRunId
     ?? `test_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}_${randomUUID().slice(0, 6)}`;
   const runId = `tur_${randomUUID().slice(0, 8)}`;

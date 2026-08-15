@@ -53,7 +53,7 @@
       <button type="button" class="ghost" id="btnAll">全选</button>
       <button type="button" id="btnStart">启动测试</button>
     </div>
-    <p class="hint">会话写入当前 DATA_DIR，origin=test；用演示账号 ca_demo_consumer 可在客户 UI 看到「test-」标题。</p>
+    <p class="hint">会话写入当前 DATA_DIR，origin=test；用测试账号 <code>test</code> / <code>ca_test</code> 在客户 UI 登录后可看到「test-」标题。</p>
     <div class="err" id="err" hidden></div>
     <div class="points" id="points"></div>
   </section>
@@ -191,7 +191,7 @@ $("btnStart").onclick = async () => {
         count: Number($("count").value) || 3,
         pointIds: selectedIds(),
         runCritic: $("runCritic").checked,
-        accountId: "ca_demo_consumer",
+        accountId: "ca_test",
       }),
     });
     await loadRuns();

@@ -50,6 +50,35 @@ test("没有 cookie/头，请求受保护端点 401", async () => {
   assert.equal(r.status, 401);
 });
 
+test("测试账号 test / Grant123 口令登录后，cookie 能列出该账号会话", async () => {
+  const r = await req("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ login: "test", password: "Grant123" }),
+  });
+  assert.equal(r.status, 200);
+  const { account } = await r.json() as { account: { id: string; email: string } };
+  assert.equal(account.id, "ca_test");
+  assert.equal(account.email, "test@rta-hub.local");
+  const cookie = cookieFrom(r);
+
+  const created = await req("/api/conversations", { method: "POST", cookie });
+  assert.equal(created.status, 201);
+  const { conversation } = await created.json() as { conversation: { id: string } };
+
+  const list = await req("/api/conversations", { method: "GET", cookie });
+  const { conversations } = await list.json() as { conversations: { id: string }[] };
+  assert.ok(conversations.some((c) => c.id === conversation.id));
+});
+
+test("测试账号错误口令 → 401，不签发 cookie", async () => {
+  const r = await req("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ login: "test", password: "wrong" }),
+  });
+  assert.equal(r.status, 401);
+  assert.equal(r.headers.get("set-cookie"), null);
+});
+
 test("请求验证码 → dry-run 下响应里带 devCode（本地没配 SMTP 时的唯一取回方式）", async () => {
   const r = await req("/api/auth/request-code", {
     method: "POST", body: JSON.stringify({ email: "new-customer@example.com" }),

@@ -102,6 +102,8 @@ export async function createAppContext(opts: CreateContextOptions = {}): Promise
   if (opts.seedIfEmpty !== false && repos.companies.all().length === 0) {
     await seedInitialData(ctx);
   }
+  // 已有 data/ 时不会再跑空库种子；测试账号仍须补上，否则 inkpath 本地发布登不进去。
+  await ensureDemoAccounts(ctx);
 
   if (!opts.skipSessionRun) {
     const existing = repos.sessionRuns.byId(runId);
@@ -121,15 +123,22 @@ export async function createAppContext(opts: CreateContextOptions = {}): Promise
   return ctx;
 }
 
+/** 演示 / 测试账号：每次启动补齐缺失项（不覆盖已有记录）。 */
+export async function ensureDemoAccounts(ctx: AppContext): Promise<void> {
+  for (const account of seed.demoAccounts) {
+    if (!ctx.repos.accounts.byId(account.id)) {
+      await ctx.repos.accounts.insert(account);
+    }
+  }
+}
+
 /** 首次启动时写入试点公司与演示账号。 */
 export async function seedInitialData(ctx: AppContext): Promise<void> {
   const { repos } = ctx;
   // 每家公司发一个访问令牌——没有它，公司侧端点就是"谁填哪个 id 就读哪家数据"
   await repos.companies.upsert({ ...seed.pilotCompany, accessToken: generateCompanyToken() });
   await repos.companies.upsert({ ...seed.unsubscribedCompany, accessToken: generateCompanyToken() });
-  for (const account of seed.demoAccounts) {
-    if (!repos.accounts.byId(account.id)) await repos.accounts.insert(account);
-  }
+  await ensureDemoAccounts(ctx);
   await repos.specVersions.upsert(seed.pilotSpecVersion);
 
   const bundle: SpecBundle = {

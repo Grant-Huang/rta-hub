@@ -69,6 +69,7 @@
     <div class="row">
       <select id="acctSel" title="Demo account" data-i18n-title="demoAcctTitle">
         <option value="ca_demo_consumer" data-i18n="demoAcctConsumer">Consumer — Alex</option>
+        <option value="ca_test">test (password login)</option>
         <option value="ca_demo_trade" data-i18n="demoAcctTrade">Trade — Riverside Builders</option>
         <option value="ca_demo_admin" data-i18n="demoAcctAdmin">Platform Ops (admin)</option>
       </select>
@@ -161,6 +162,14 @@ function renderLoginCard() {
       <input id="loginEmail" type="email" placeholder="${esc(t("emailPlaceholder"))}" style="${fieldStyle}" />
       <button type="button" id="sendCodeBtn">${esc(t("sendCodeBtn"))}</button>
     </div>
+    <p class="hint" style="margin-top:12px">${esc(t("passwordLoginHint"))}</p>
+    <div class="row">
+      <input id="loginUser" placeholder="${esc(t("loginPlaceholder"))}" value="test"
+             style="${fieldStyle};width:140px" autocomplete="username" />
+      <input id="loginPassword" type="password" placeholder="${esc(t("passwordPlaceholder"))}"
+             style="${fieldStyle};width:140px" autocomplete="current-password" />
+      <button type="button" id="passwordSignInBtn">${esc(t("passwordSignInBtn"))}</button>
+    </div>
     <div id="loginMsg"></div>`;
   const submit = async () => {
     const email = $("loginEmail").value.trim();
@@ -180,6 +189,28 @@ function renderLoginCard() {
   };
   $("sendCodeBtn").addEventListener("click", submit);
   $("loginEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  const passwordSignIn = async () => {
+    const login = $("loginUser").value.trim();
+    const password = $("loginPassword").value;
+    if (!login || !password) return;
+    $("passwordSignInBtn").disabled = true;
+    const res = await fetch("/api/auth/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ login, password }),
+    });
+    const body = await res.json().catch(() => ({}));
+    $("passwordSignInBtn").disabled = false;
+    if (!res.ok) {
+      $("loginMsg").innerHTML = `<p class="err">${esc(body.error || t("passwordSignInFail"))}</p>`;
+      return;
+    }
+    authAccount = body.account;
+    setAccountId(body.account.id);
+    renderLoginCard();
+    await load();
+  };
+  $("passwordSignInBtn").addEventListener("click", passwordSignIn);
+  $("loginPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") passwordSignIn(); });
 }
 
 function renderCodeStep(email, devCode) {

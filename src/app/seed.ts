@@ -381,4 +381,12 @@ export const demoAccounts: CustomerAccount[] = [
     platformRoles: ["platform_admin"],
     consentRecords: [{ termsVersion: "2026-01", consentedAt: NOW, channel: "web_signup" }],
   },
+  {
+    id: "ca_test",
+    accountType: "consumer",
+    email: "test@rta-hub.local",
+    displayName: "test",
+    province: "ON",
+    consentRecords: [{ termsVersion: "2026-01", consentedAt: NOW, channel: "web_signup" }],
+  },
 ];

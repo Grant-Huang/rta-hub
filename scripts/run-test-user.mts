@@ -41,7 +41,7 @@ async function main() {
       count,
       pointIds: suggestedPointIds(),
       runCritic: true,
-      accountId: "ca_demo_consumer",
+      accountId: "ca_test",
     },
   );
 

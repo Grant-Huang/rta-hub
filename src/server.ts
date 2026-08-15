@@ -48,6 +48,9 @@ import {
 } from "./auth/session.js";
 import { requestLoginCode, verifyLoginCode } from "./auth/email-otp.js";
 import {
+  isTestAccountLogin, TEST_ACCOUNT_ID, verifyTestAccountPassword,
+} from "./auth/password-login.js";
+import {
   aggregateSignals, buildMentionSignal, clientFacingMessage, parseMentions, routeByText,
 } from "./routing/mention.js";
 import {
@@ -974,6 +977,33 @@ app.post("/api/auth/verify-code", async (c) => {
     });
   }
 
+  const token = issueAccountSessionToken(accountSessionCfg, account.id);
+  const secure = new URL(c.req.url).protocol === "https:";
+  c.header("set-cookie", accountSessionCookieHeader(token, secure));
+  return c.json({
+    ok: true,
+    account: { id: account.id, email: account.email, displayName: account.displayName },
+  });
+});
+
+/**
+ * 测试账号口令登录：用户名 `test` / 邮箱 `test@rta-hub.local`，默认口令 Grant123。
+ * 签发与验证码登录同一套会话 cookie。
+ */
+app.post("/api/auth/login", async (c) => {
+  const body = await jsonBody<{ login?: string; email?: string; password?: string }>(c);
+  const login = (body.login || body.email || "").trim();
+  const password = body.password ?? "";
+  if (!login || !password) {
+    return c.json({ error: "Login and password required" }, 400);
+  }
+  if (!isTestAccountLogin(login) || !verifyTestAccountPassword(password)) {
+    return c.json({ error: "Invalid login or password" }, 401);
+  }
+  const account = appCtx.repos.accounts.byId(TEST_ACCOUNT_ID);
+  if (!account) {
+    return c.json({ error: "Test account is not seeded" }, 500);
+  }
   const token = issueAccountSessionToken(accountSessionCfg, account.id);
   const secure = new URL(c.req.url).protocol === "https:";
   c.header("set-cookie", accountSessionCookieHeader(token, secure));
