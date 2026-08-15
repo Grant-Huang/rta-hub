@@ -29,12 +29,24 @@ import { authorizeCompany, generateCompanyToken } from "./tenancy/company-auth.j
 import {
   adminPrincipal,
   companyPrincipal,
-  customerPrincipal,
+  isDemandSide,
+  resolvePrincipal,
   AccessDeniedError,
   assertL1Read,
   assertL1Write,
   type Principal,
 } from "./auth/index.js";
+import {
+  ACCOUNT_SESSION_COOKIE,
+  accountSessionCookieHeader,
+  clearAccountSessionCookieHeader,
+  issueAccountSessionToken,
+  resolveAccountSessionConfig,
+  startupNoticeForAccountSession,
+  verifyAccountSessionToken,
+  type AccountSessionConfig,
+} from "./auth/session.js";
+import { requestLoginCode, verifyLoginCode } from "./auth/email-otp.js";
 import {
   aggregateSignals, buildMentionSignal, clientFacingMessage, parseMentions, routeByText,
 } from "./routing/mention.js";
@@ -234,7 +246,7 @@ import {
   assertLaunchReady, launchGateReport, launchGateSummary, LaunchGatesNotMet,
 } from "./app/launch-gates.js";
 import {
-  checkPassword, cookieHeader, issueToken, rateLimit, resolveSiteGate,
+  checkPassword, cookieHeader, issueToken, rateLimit, readCookie, resolveSiteGate,
   siteGate, siteGateDisabledExplicitly, SiteGateMisconfigured, startupNotice, unlockPage,
   type SiteGateConfig,
 } from "./app/site-gate.js";
@@ -248,6 +260,7 @@ type AppVars = { account: CustomerAccount; principal: Principal };
 type Ctx = Context<{ Variables: AppVars }>;
 
 let appCtx: AppContext;
+let accountSessionCfg: AccountSessionConfig = { secret: "", ephemeral: true };
 
 /** `c.req.param` 在 strict 下返回 string | undefined；路由已保证存在，统一收口。 */
 function param(c: Ctx, name: string): string {
@@ -298,16 +311,31 @@ app.post("/__unlock", async (c) => {
 });
 
 /**
- * MVP 鉴权：`X-Account-Id` → consumer/trade Principal（分身份域）。
+ * 鉴权：`X-Account-Id` → consumer/trade Principal（分身份域）。
  * 模型预留 session/JWT（AuthScheme）；见 docs/ACCESS_CONTROL.md §6。
  * 数据过滤走 AccountScope。
+ *
+ * 优先级：先看有没有登录态 cookie（`/api/auth/verify-code` 签发，E1 第一步），
+ * 有且验证通过就以它为准；没有 cookie 才退回裸头 `X-Account-Id`（不校验，
+ * 谁填哪个 id 就读哪个账号）——这条退路是刻意留的向后兼容，company/trade/
+ * 脚本化测试都还靠它，不在这次改动范围内。也就是说：这一步只是新增了一条
+ * 更可信的路径，没有关掉旧的裸头信任，见 `auth/principal.ts` 模块注释。
  */
 async function requireAccount(c: Ctx, next: Next) {
-  const id = c.req.header("x-account-id");
-  const account = id ? appCtx.repos.accounts.byId(id) : undefined;
-  if (!account) return c.json({ error: "Unauthenticated: provide account id in X-Account-Id header" }, 401);
-  c.set("account", account);
-  c.set("principal", customerPrincipal(account));
+  const sessionToken = readCookie(c.req.header("cookie"), ACCOUNT_SESSION_COOKIE);
+  const sessionAccountId = verifyAccountSessionToken(accountSessionCfg, sessionToken);
+  const principal = resolvePrincipal({
+    scheme: sessionAccountId ? "session" : "header_mvp",
+    sessionAccountId,
+    accountIdHeader: c.req.header("x-account-id"),
+    lookupAccount: (id) => appCtx.repos.accounts.byId(id),
+    lookupCompany: () => undefined,
+  });
+  if (!isDemandSide(principal)) {
+    return c.json({ error: "Unauthenticated: sign in or provide account id in X-Account-Id header" }, 401);
+  }
+  c.set("account", principal.account);
+  c.set("principal", principal);
   await next();
 }
 
@@ -882,6 +910,97 @@ app.get("/samples/:name", (c) => {
       : "image/png";
   c.header("cache-control", "public, max-age=3600");
   return c.body(readFileSync(file), 200, { "content-type": mime });
+});
+
+// ── 账号登录（E1 第一步：邮箱验证码，见 auth/session.ts + auth/email-otp.ts）──
+
+/** 发登录验证码。不区分邮箱是否已注册——第一次验证成功即建号，见 /verify-code。 */
+app.post("/api/auth/request-code", async (c) => {
+  const body = await jsonBody<{ email: string }>(c);
+  const email = (body.email || "").trim();
+  if (!email || !email.includes("@")) {
+    return c.json({ error: "Valid email required" }, 400);
+  }
+  const result = requestLoginCode(email);
+  if (!result.ok) {
+    return c.json(
+      { error: "Too many attempts, try again later", retryAfterSec: result.retryAfterSec },
+      429,
+    );
+  }
+  const sender = resolveSenderIdentity();
+  const sendResult = await sendEmail({
+    kind: "auth_code",
+    to: email,
+    subject: `Your RTA-Hub sign-in code: ${result.code}`,
+    text: `Your sign-in code is ${result.code}. It expires in 10 minutes.\n`
+      + `If you didn't request this, you can ignore this email.\n\n— ${sender.name}`,
+  }, { sender });
+  // 未配置 SMTP 时是 dry-run，没有真的发信——本地/联调环境把码带在响应里，
+  // 不然开发者永远拿不到验证码。生产环境必须配 SMTP，否则等于没有登录入口。
+  return c.json({
+    ok: true,
+    ...(sendResult.dryRun
+      ? { devCode: result.code, note: "SMTP not configured: dry-run, code returned for local testing only" }
+      : {}),
+  });
+});
+
+/** 校验验证码；通过则签发账号会话 cookie（找不到该邮箱的账号就新建一个）。 */
+app.post("/api/auth/verify-code", async (c) => {
+  const body = await jsonBody<{ email: string; code: string }>(c);
+  const email = (body.email || "").trim();
+  const code = (body.code || "").trim();
+  if (!email || !code) return c.json({ error: "Email and code required" }, 400);
+
+  const verify = verifyLoginCode(email, code);
+  if (!verify.ok) {
+    const status = verify.reason === "rate_limited" ? 429 : 401;
+    return c.json({ error: "Invalid or expired code", reason: verify.reason }, status);
+  }
+
+  const normalized = email.toLowerCase();
+  let account = appCtx.repos.accounts.find((a) => a.email.toLowerCase() === normalized);
+  if (!account) {
+    account = await appCtx.repos.accounts.insert({
+      id: `ca_${randomUUID().slice(0, 8)}`,
+      accountType: "consumer",
+      email,
+      displayName: email.split("@")[0] || email,
+      // 定价必需字段，注册时还不知道——给个默认值，后续在 /me 里改；
+      // 报价用的省份走会话内确认的那份，不是这里（两者是分开的字段）。
+      province: "ON",
+      consentRecords: [{ termsVersion: appCtx.termsVersion, consentedAt: now(), channel: "email_login" }],
+    });
+  }
+
+  const token = issueAccountSessionToken(accountSessionCfg, account.id);
+  const secure = new URL(c.req.url).protocol === "https:";
+  c.header("set-cookie", accountSessionCookieHeader(token, secure));
+  return c.json({
+    ok: true,
+    account: { id: account.id, email: account.email, displayName: account.displayName },
+  });
+});
+
+app.post("/api/auth/logout", (c) => {
+  const secure = new URL(c.req.url).protocol === "https:";
+  c.header("set-cookie", clearAccountSessionCookieHeader(secure));
+  return c.json({ ok: true });
+});
+
+/** 前端开场用来判断"这个浏览器已经登录了吗"。没有/过期一律返回 account: null，不报错。 */
+app.get("/api/auth/me", (c) => {
+  const token = readCookie(c.req.header("cookie"), ACCOUNT_SESSION_COOKIE);
+  const accountId = verifyAccountSessionToken(accountSessionCfg, token);
+  const account = accountId ? appCtx.repos.accounts.byId(accountId) : undefined;
+  if (!account) return c.json({ account: null });
+  return c.json({
+    account: {
+      id: account.id, email: account.email, displayName: account.displayName,
+      accountType: account.accountType,
+    },
+  });
 });
 
 app.get("/", (c) => c.html(readFileSync(path.join(__dirname, "../web/index.html"), "utf-8")));
@@ -5746,6 +5865,7 @@ export async function createApp(opts: Parameters<typeof createAppContext>[0] = {
   gate = siteGateDisabledExplicitly()
     ? { secret: "", enabled: false }
     : resolveSiteGate();
+  accountSessionCfg = resolveAccountSessionConfig();
   return app;
 }
 
@@ -5783,6 +5903,7 @@ export async function start(port = Number(process.env.PORT || 8790)) {
     console.log(`[rta-hub] SMTP：${smtp ? "已配置" : "未配置 —— 发送为 dry-run"}`);
     console.log(`[rta-hub] 留存 cron：${cronMs > 0 ? `每 ${cronMs}ms` : "未启用（设 RETENTION_CRON_MS）"}`);
     console.log(`[rta-hub] ${startupNotice(gate)}`);
+    console.log(`[rta-hub] ${startupNoticeForAccountSession(accountSessionCfg)}`);
     for (const line of tierReport(resolveModelTiers())) console.log(`[rta-hub] ${line}`);
     for (const line of launchGateReport()) console.log(`[rta-hub] ${line}`);
   });

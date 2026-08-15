@@ -4,11 +4,19 @@
  * 分层来源：REQUIREMENTS §3.4 / FR-9 / FR-11 / FR-16；隔离细则见 docs/ACCESS_CONTROL.md。
  * 鉴权顺序必须是「先证明你是谁，再按身份过滤」（见 company-auth.ts）。
  *
- * ## 鉴权方案（MVP → 预留）
+ * ## 鉴权方案（MVP + E1 起步）
  *
  * MVP 用请求头证明身份（`X-Account-Id` / `X-Company-Token` / `X-Admin-Token`），
- * 便于本地与集成测试。模型通过 `AuthScheme` / `AuthContext` 预留 session / JWT：
- * 将来只换 `resolvePrincipal` 的凭证解析，不改 Capability 矩阵与 Scope 过滤。
+ * 便于本地与集成测试；这条路径仍在，company/trade/admin 与测试脚本都还靠它。
+ * `session` 方案（E1 第一步：邮箱验证码登录，见 `auth/session.ts` + `auth/email-otp.ts`）
+ * 已接线——`requireAccount`（`server.ts`）验证过签名 cookie 后，把账号 id
+ * 交给这里的 `sessionAccountId`，`resolvePrincipal` 只做「按 id 查账号→按账号
+ * 类型分域」，不碰 cookie/HMAC。`jwt` 仍是预留枚举，未接线时不得假装已认证。
+ * 换凭证方案不改 Capability 矩阵与 Scope 过滤。
+ *
+ * 注意：`session` 上线目前只是**新增**了一条更可信的路径，`header_mvp` 没有
+ * 被禁用——没带 session cookie 的请求仍然能用裸头冒充任意账号（检查清单
+ * E1 尚未完全关闭，只是往前走了一步）。
  */
 import type { AccountType, CustomerAccount } from "../domain/types.js";
 import type { CabinetCompany } from "../domain/types.js";
@@ -118,9 +126,16 @@ export interface ResolvePrincipalInput {
   lookupCompany: (id: string) => CabinetCompany | undefined;
   /**
    * 预留：显式指定凭证方案。省略时按 header_mvp。
-   * session/jwt 未实现时仍回落 anonymous（不静默提权）。
+   * jwt 未实现时仍回落 anonymous（不静默提权）。
    */
   scheme?: AuthScheme;
+  /**
+   * scheme = "session" 时用：中间件已经验证过签名/未过期的账号 id
+   * （见 `auth/session.ts`）。这里只做"按 id 查账号→按账号类型分域"，
+   * 不在这个纯函数里碰 cookie/HMAC——凭证校验和身份映射分开，
+   * 方便各自单测。
+   */
+  sessionAccountId?: string;
 }
 
 /**
@@ -133,8 +148,15 @@ export interface ResolvePrincipalInput {
  */
 export function resolvePrincipal(input: ResolvePrincipalInput): Principal {
   const scheme: AuthScheme = input.scheme ?? "header_mvp";
+
+  if (scheme === "session") {
+    if (!input.sessionAccountId) return ANONYMOUS;
+    const account = input.lookupAccount(input.sessionAccountId);
+    return account ? customerPrincipal(account) : ANONYMOUS;
+  }
+
   if (scheme !== "header_mvp") {
-    // session / jwt 接线前不接受伪造 scheme 提权
+    // jwt 接线前不接受伪造 scheme 提权
     return ANONYMOUS;
   }
 
