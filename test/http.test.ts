@@ -908,9 +908,13 @@ test("推定的家电尺寸要跟着**报价单**一起走，不能只写在图�
     `没跑推定值披露检查：${body.audit.checked.join()}`);
   assert.match(body.quoteListText, /Wall oven|烤箱/i, "报价单上没提烤箱");
   assert.match(body.quoteListText, /assumed|reserved|推定|预留/i, "报价单上没说那个尺寸是推定的");
-  // 客户真给了尺寸的那一件不该被说成"推定"——那会让客户以为自己没说过
-  assert.equal(/冰箱按 .*推定|冰箱按 .*预留|Refrigerator reserved|Refrigerator.*assumed/i.test(body.quoteListText), false,
-    `客户给过尺寸的冰箱被写成了推定：${body.quoteListText}`);
+  // 客户真给了宽度的那一件不该被说成"宽度是推定的"——那会让客户以为自己没说过。
+  // 冰箱高度这里确实没问过，仍然按常见值推定并如实披露（另一条独立的
+  // provenance track，见 ApplianceSpec.heightProvenance），这一句不在禁止之列。
+  assert.equal(
+    /冰箱按 .*推定|冰箱按 .*预留|Refrigerator reserved at|Refrigerator width assumed/i.test(body.quoteListText),
+    false,
+    `客户给过宽度的冰箱被写成了宽度推定：${body.quoteListText}`);
 });
 
 test("四视图与俯视图交付前也各自跑审核", async () => {

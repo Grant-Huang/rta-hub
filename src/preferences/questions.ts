@@ -25,7 +25,7 @@ import type { SpecBundle } from "../spec/bundle.js";
 import { hasRole } from "../spec/capabilities.js";
 import { sortBoxMaterials } from "../spec/carcass.js";
 import {
-  applianceLabel, COMMON_WIDTHS, type ApplianceKind, type ApplianceSpec,
+  applianceLabel, COMMON_HEIGHTS, COMMON_WIDTHS, type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
@@ -42,7 +42,9 @@ export type PreferenceKey =
   /** 厨房里有哪些家电（多选）。 */
   | "appliances"
   /** 各个家电多宽。答"不确定"合法，走推定值并留痕（见 floorplan/appliances.ts）。 */
-  | "applianceWidths";
+  | "applianceWidths"
+  /** 冰箱多高——决定上方能不能装吊柜。只对冰箱问。 */
+  | "applianceHeights";
 
 /** 价格影响。分三种，因为能算准的程度本来就不同——不把估算伪装成精确值。 */
 export type PriceImpact =
@@ -589,6 +591,59 @@ export function applianceWidthQuestion(
   };
 }
 
+/**
+ * 冰箱多高。
+ *
+ * 只问冰箱——它是唯一「上面通常还有个柜子」的家电（烤箱/洗碗机嵌在柜体里，
+ * 灶具矮柜没有上方净空的问题）。不知道高度，冰箱上柜的尺寸就是瞎猜的，
+ * 猜大了压不下去，猜小了顶上留一截露白边。
+ *
+ * 同样接受"不确定"：走常见高度并标 `heightProvenance: "assumed"`。
+ */
+export function applianceHeightQuestion(
+  lang: UiLanguage = DEFAULT_LANGUAGE,
+): PreferenceQuestion | undefined {
+  const heights = COMMON_HEIGHTS.refrigerator;
+  if (!heights || heights.length === 0) return undefined;
+  const label = applianceLabel("refrigerator", lang);
+  const affectReason = msg(lang,
+    "Decides whether a cabinet fits above the fridge, not unit price",
+    "决定冰箱上方能不能装吊柜，不改变单价");
+
+  return {
+    key: "applianceHeights",
+    prompt: msg(lang,
+      `How tall is the ${label} (top of the appliance, in inches)?`,
+      `${label}多高（机身顶部，英寸）？`),
+    why: msg(lang,
+      "Fridges usually don't reach the ceiling — there's a small cabinet above. "
+        + "We need the height to size that cabinet (or tell you there's no room for one).",
+      "冰箱一般不会顶到天花板——上面通常还有一个小柜子。"
+        + "需要知道高度才能定这个柜子的尺寸（或者如实告诉你根本装不下）。"),
+    multiSelect: false,
+    options: [
+      ...heights.map((h, i) => option({
+        id: `refrigerator:height:${h}`,
+        label: `${h}"`,
+        priceImpact: { kind: "unknown", reason: affectReason },
+        ...(i === Math.floor(heights.length / 2) ? { recommended: true } : {}),
+      }, lang)),
+      option({
+        id: "refrigerator:height:unsure",
+        label: msg(lang, "I'll measure and come back", "我量好了再说"),
+        detail: msg(lang,
+          "Reserve a common height for now; the drawing will mark it as assumed",
+          "先按常见高度预留；图纸上会标明为推定"),
+        priceImpact: {
+          kind: "unknown",
+          reason: msg(lang, "Common height reserved; changeable later", "先按常见高度预留，之后可改"),
+        },
+      }, lang),
+    ],
+    skippable: true,
+  };
+}
+
 /** 常见宽度的口语化说明。没有说法的就不编一个。 */
 function widthDetail(
   kind: ApplianceKind,
@@ -838,7 +893,8 @@ function isAnswered(key: PreferenceKey, prefs: CustomerPreferences): boolean {
     // （贸易账号一个人有多个项目，各自的家电不同）。所以它们不走这条判断，
     // 由 buildApplianceQuestions 按户型自己的状态决定还该问什么。
     case "appliances":
-    case "applianceWidths": return false;
+    case "applianceWidths":
+    case "applianceHeights": return false;
   }
 }
 
@@ -859,12 +915,19 @@ export function buildApplianceQuestions(input: {
   const lang = input.language ?? DEFAULT_LANGUAGE;
   if (!input.kindsAnswered) return [applianceQuestion(lang)];
 
-  // 只对**推定尺寸**的家电追问宽度——客户已经给了准确数字的不再打扰
+  // 只对**推定尺寸**的家电追问宽度——客户已经给了准确数字的不再打扰。
+  // 宽度还没定的先问宽度，冰箱高度等宽度确认后再问——一件件来，不一次甩两问。
   const out: PreferenceQuestion[] = [];
   for (const a of input.known) {
-    if (a.provenance !== "assumed") continue;
-    const q = applianceWidthQuestion(a.kind, lang);
-    if (q) out.push(q);
+    if (a.provenance === "assumed") {
+      const q = applianceWidthQuestion(a.kind, lang);
+      if (q) out.push(q);
+      continue;
+    }
+    if (a.kind === "refrigerator" && a.heightProvenance === "assumed") {
+      const q = applianceHeightQuestion(lang);
+      if (q) out.push(q);
+    }
   }
   return out.slice(0, Math.max(1, input.maxPerTurn));
 }

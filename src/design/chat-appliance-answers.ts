@@ -13,7 +13,8 @@ import {
 } from "../floorplan/appliances.js";
 import type { BlockedEdit } from "./confirm-lock.js";
 
-export type ChatApplianceApplyKind = "kinds" | "widths" | "confirmAssumed" | "defer" | "placement";
+export type ChatApplianceApplyKind =
+  | "kinds" | "widths" | "confirmAssumed" | "defer" | "placement" | "height";
 
 export interface ChatApplianceApplyResult {
   plan: FloorPlan;
@@ -39,6 +40,34 @@ const FRIDGE_ELSEWHERE_RE =
 
 export function isFridgeElsewhere(text: string): boolean {
   return FRIDGE_ELSEWHERE_RE.test(text);
+}
+
+/**
+ * 冰箱高度——决定上方能不能装吊柜（见 ApplianceSpec.height 的注释）。
+ *
+ * 必须带「高/tall/height」这类明确指向高度的词才算数，否则会跟宽度解析
+ * （`widthNear`）抢同一个数字——「fridge 33 tall」与「fridge 33 wide」的区别
+ * 只在这个词上。
+ */
+const FRIDGE_HEIGHT_RE = new RegExp(
+  // "fridge 70 tall/height/high"
+  "\\b(?:fridge|refrigerator)\\b[^.!?\\n]{0,20}?(\\d{2,3})\\s*(?:[\"″]|in(?:ch(?:es)?)?|寸)?\\s*(?:tall|height|high)\\b"
+  // "70 tall/high ... fridge"
+  + "|\\b(\\d{2,3})\\s*(?:[\"″]|in(?:ch(?:es)?)?|寸)?\\s*(?:tall|high)\\b[^.!?\\n]{0,20}?\\b(?:fridge|refrigerator)\\b"
+  // "fridge height/height of the fridge is 70"
+  + "|\\b(?:fridge|refrigerator)\\b[^.!?\\n]{0,20}?\\bheight\\b[^.!?\\n]{0,10}?(\\d{2,3})"
+  + "|冰箱[^。！？\\n]{0,10}?高(?:度)?[^0-9]{0,4}(\\d{2,3})"
+  + "|(\\d{2,3})\\s*(?:寸|英寸)?\\s*高[^。！？\\n]{0,10}?冰箱",
+  "i",
+);
+
+function fridgeHeightFromChat(text: string): number | undefined {
+  const m = FRIDGE_HEIGHT_RE.exec(text);
+  if (!m) return undefined;
+  const raw = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5];
+  const n = raw !== undefined ? Number(raw) : undefined;
+  if (n === undefined || !Number.isFinite(n) || n < 54 || n > 90) return undefined;
+  return n;
 }
 
 /** 客户只说「推定可以」、尚未点名家电时，用北美常见三件套落库。 */
@@ -163,6 +192,30 @@ export function applyChatApplianceAnswers(
     } else {
       list = [...list, applianceFrom({ kind: "refrigerator", placement: "elsewhere" })];
       applied.push("placement");
+    }
+  }
+
+  const fridgeHeight = fridgeHeightFromChat(text);
+  if (fridgeHeight !== undefined) {
+    const idx = list.findIndex((a) => a.kind === "refrigerator");
+    if (idx >= 0) {
+      const prev = list[idx]!;
+      if (prev.heightProvenance === "customer" && prev.height !== fridgeHeight) {
+        blockedEdits.push({
+          kind: "appliance", label: `${applianceLabel("refrigerator", "en")} height`,
+          current: prev.height!, attempted: fridgeHeight,
+        });
+      } else if (prev.height !== fridgeHeight || prev.heightProvenance !== "customer") {
+        list = [
+          ...list.slice(0, idx),
+          { ...prev, height: fridgeHeight, heightProvenance: "customer" },
+          ...list.slice(idx + 1),
+        ];
+        applied.push("height");
+      }
+    } else {
+      list = [...list, applianceFrom({ kind: "refrigerator", height: fridgeHeight })];
+      applied.push("height");
     }
   }
 

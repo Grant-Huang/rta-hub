@@ -37,8 +37,8 @@ import {
 } from "./corner-reserve.js";
 import { planAppliances, type AppliancePlan, type PlacedAppliance } from "./appliance-plan.js";
 import {
-  APPLIANCE_LABEL, applianceLabel, applianceFrom, defaultAssumedAppliances, reservedWidth,
-  type ApplianceKind, type ApplianceSpec,
+  APPLIANCE_DEFAULTS, APPLIANCE_LABEL, applianceLabel, applianceFrom, defaultAssumedAppliances,
+  reservedWidth, type ApplianceKind, type ApplianceSpec,
 } from "../floorplan/appliances.js";
 
 /**
@@ -708,6 +708,7 @@ export function generateLayout(
     // 它要占多宽，就得先算出来再让开。
     const serving = planApplianceCabinets(run, forThisRun, modules, {
       includeWall: opts.includeWall !== false, usable, language: lang,
+      ceilingHeight: opts.ceilingHeight,
     });
     warnings.push(...serving.warnings);
     placements.push(...serving.placements);
@@ -1173,6 +1174,7 @@ function planApplianceCabinets(
     includeWall: boolean;
     usable?: { start: number; end: number };
     language?: UiLanguage;
+    ceilingHeight?: number;
   },
 ): { placements: Placement[]; warnings: LayoutWarning[] } {
   const placements: Placement[] = [];
@@ -1214,11 +1216,37 @@ function planApplianceCabinets(
         });
         continue;
       }
+      // 上柜能占多高，取决于冰箱本体有多高：层高减掉冰箱高度、再留顶线（与
+      // pickWallCabinetHeight 同一条算法，只是锚点从台面高度换成了冰箱顶）。
+      // 冰箱高度不明时按常见档位算——同一条 provenance 披露链路，
+      // 见 ApplianceSpec.heightProvenance；provenanceNote 会说这是推定的。
+      const fridgeHeight = p.spec.height ?? APPLIANCE_DEFAULTS.refrigerator.height ?? 70;
+      const sortedHeights = [...over.heightOptions].sort((a, b) => b - a);
+      const available = opts.ceilingHeight !== undefined
+        ? opts.ceilingHeight - fridgeHeight - CROWN_ALLOWANCE
+        : undefined;
+      const chosenHeight = available === undefined
+        ? sortedHeights[0]
+        : sortedHeights.find((h) => h <= available);
+      if (chosenHeight === undefined) {
+        warnings.push({
+          code: "APPLIANCE_NO_ROOM", wallRunId: run.id,
+          message: msg(lang,
+            `Fridge on ${run.label} is ${fridgeHeight}" tall — with a ${opts.ceilingHeight}" ceiling ` +
+              `there's no room for any fridge upper in this catalog (shortest is ` +
+              `${Math.min(...over.heightOptions)}"). Consider putting the fridge in a separate pantry ` +
+              `instead of on this cabinet wall.`,
+            `${run.label}的冰箱高 ${fridgeHeight}"，层高 ${opts.ceilingHeight}" 下装不进这家最矮的` +
+              `冰箱上柜（最矮 ${Math.min(...over.heightOptions)}"）。可以考虑把冰箱放进单独的` +
+              `餐边柜/pantry，而不是排在这面橱柜墙上。`),
+        });
+        continue;
+      }
       const x = clamp(p.x + p.width / 2 - width / 2, width);
       placements.push({
         kind: "cabinet", layer: "wall", wallRunId: run.id,
         x, width,
-        height: over.heightOptions[0] ?? 15,
+        height: chosenHeight,
         // 冰箱上柜与冰箱齐深，不是普通吊柜的 12"
         depth: over.depthOptions[0] ?? 24,
         moduleId: over.id, moduleCode: over.code,
