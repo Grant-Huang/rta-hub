@@ -143,3 +143,18 @@ test("实图冻结 A/B：两步把北墙窗 offset 读准，但上下水仍错�
   );
   assert.equal(B.featureWallHits, A.featureWallHits, "特征墙归属没有比单次更好");
 });
+
+test("实图耗时夹具：两步比单次更慢（walls+features 两次调用）", () => {
+  const report = JSON.parse(
+    readFileSync(path.join(here, "fixtures", "l-island-qwen2.5vl-ab-timing.json"), "utf8"),
+  ) as {
+    A: { elapsedMs: number; steps: { step: string; elapsedMs: number }[] };
+    B: { elapsedMs: number; steps: { step: string; elapsedMs: number }[] };
+    deltaMs: number;
+  };
+  assert.equal(report.A.steps[0]?.step, "oneshot");
+  assert.deepEqual(report.B.steps.map((s) => s.step), ["walls", "features"]);
+  assert.ok(report.A.elapsedMs > 0);
+  assert.ok(report.B.elapsedMs > report.A.elapsedMs, "两步总耗时应高于单次");
+  assert.equal(report.deltaMs, report.B.elapsedMs - report.A.elapsedMs);
+});

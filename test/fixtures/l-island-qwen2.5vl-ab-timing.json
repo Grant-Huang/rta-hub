@@ -1,0 +1,175 @@
+{
+  "at": "2026-08-15T22:47:37.149Z",
+  "model": "qwen2.5vl",
+  "A": {
+    "elapsedMs": 105719,
+    "steps": [
+      {
+        "step": "oneshot",
+        "elapsedMs": 105715
+      }
+    ],
+    "score": {
+      "wallHits": 3,
+      "featureWallHits": 2,
+      "featureOffsetHits": 2,
+      "features": [
+        {
+          "slot": "North",
+          "kind": "window",
+          "wallOk": true,
+          "offsetOk": true,
+          "offset": 42
+        },
+        {
+          "slot": "East",
+          "kind": "plumbing",
+          "wallOk": false,
+          "offsetOk": false,
+          "offset": 120
+        },
+        {
+          "slot": "East",
+          "kind": "door",
+          "wallOk": true,
+          "offsetOk": true,
+          "offset": 88
+        }
+      ]
+    },
+    "walls": [
+      {
+        "slot": "North",
+        "label": "NORTH WALL",
+        "length": 144,
+        "depth": 0,
+        "features": [
+          {
+            "kind": "window",
+            "offset": 42,
+            "width": 36,
+            "confidence": 1
+          },
+          {
+            "kind": "plumbing",
+            "offset": 120,
+            "width": 24,
+            "confidence": 1
+          }
+        ]
+      },
+      {
+        "slot": "East",
+        "label": "EAST WALL",
+        "length": 120,
+        "depth": 0,
+        "features": [
+          {
+            "kind": "door",
+            "offset": 88,
+            "width": 32,
+            "confidence": 1
+          }
+        ]
+      },
+      {
+        "slot": "Island",
+        "label": "ISLAND",
+        "length": 72,
+        "depth": 36,
+        "kind": "island"
+      }
+    ]
+  },
+  "B": {
+    "elapsedMs": 134004,
+    "steps": [
+      {
+        "step": "walls",
+        "elapsedMs": 78247
+      },
+      {
+        "step": "features",
+        "elapsedMs": 55754
+      }
+    ],
+    "score": {
+      "wallHits": 3,
+      "featureWallHits": 2,
+      "featureOffsetHits": 1,
+      "features": [
+        {
+          "slot": "North",
+          "kind": "window",
+          "wallOk": true,
+          "offsetOk": true,
+          "offset": 48
+        },
+        {
+          "slot": "East",
+          "kind": "plumbing",
+          "wallOk": false,
+          "offsetOk": false,
+          "offset": 108
+        },
+        {
+          "slot": "East",
+          "kind": "door",
+          "wallOk": true,
+          "offsetOk": false,
+          "offset": 96
+        }
+      ]
+    },
+    "walls": [
+      {
+        "slot": "North",
+        "label": "NORTH WALL",
+        "length": 144,
+        "features": [
+          {
+            "kind": "window",
+            "offset": 48,
+            "width": 36,
+            "confidence": 100
+          },
+          {
+            "kind": "plumbing",
+            "offset": 108,
+            "width": 24,
+            "confidence": 100
+          }
+        ]
+      },
+      {
+        "slot": "East",
+        "label": "EAST WALL",
+        "length": 120,
+        "features": [
+          {
+            "kind": "door",
+            "offset": 96,
+            "width": 32,
+            "confidence": 100
+          }
+        ]
+      },
+      {
+        "slot": "Island",
+        "label": "ISLAND",
+        "length": 72,
+        "depth": 36,
+        "kind": "island",
+        "features": [
+          {
+            "kind": "plumbing",
+            "offset": 24,
+            "width": 24,
+            "confidence": 100
+          }
+        ]
+      }
+    ]
+  },
+  "deltaMs": 28285
+}

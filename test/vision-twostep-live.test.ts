@@ -58,7 +58,7 @@ test("A/B 实图：单次 vs 两步，同时对比耗时", async (t) => {
     const stepTimings: { step: string; elapsedMs: number }[] = [];
     const extractor = createOllamaVisionExtractor(baseURL, {
       model,
-      timeoutMs: 180_000,
+      timeoutMs: 360_000,
       twoStep,
       onTiming: (info) => {
         stepTimings.push(info);
