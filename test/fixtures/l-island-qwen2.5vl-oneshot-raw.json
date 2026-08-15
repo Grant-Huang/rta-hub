@@ -1,0 +1,41 @@
+{
+  "ceilingHeight": 96,
+  "ceilingHeightConfidence": 1,
+  "overallConfidence": 1,
+  "wallRuns": [
+    {
+      "label": "NORTH WALL",
+      "slot": "North",
+      "length": 144,
+      "lengthConfidence": 1,
+      "startsAtCorner": true,
+      "endsAtCorner": false,
+      "features": [
+        { "kind": "window", "offset": 42, "width": 36, "confidence": 1 },
+        { "kind": "plumbing", "offset": 108, "width": 24, "confidence": 1 }
+      ]
+    },
+    {
+      "label": "EAST WALL",
+      "slot": "East",
+      "length": 120,
+      "lengthConfidence": 1,
+      "startsAtCorner": true,
+      "endsAtCorner": false,
+      "features": [
+        { "kind": "door", "offset": 96, "width": 32, "confidence": 1 }
+      ]
+    },
+    {
+      "label": "ISLAND",
+      "slot": "Island",
+      "length": 72,
+      "lengthConfidence": 1,
+      "startsAtCorner": false,
+      "endsAtCorner": false,
+      "kind": "island",
+      "depth": 36
+    }
+  ],
+  "templateGuess": { "id": "l-island-kitchen", "confidence": 1 }
+}
