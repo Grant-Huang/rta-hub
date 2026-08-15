@@ -6,7 +6,10 @@
  * 避免「聊过了但检查表仍待确认」。
  */
 import type { FloorPlan, WallRun } from "../floorplan/types.js";
-import { chatConfirmedPlumbing, isDeferPlumbing } from "./chat-site-answers.js";
+import { isIsland } from "../floorplan/types.js";
+import {
+  chatConfirmedPlumbing, isDeferElectrical, isDeferGas, isDeferIsland, isDeferPlumbing,
+} from "./chat-site-answers.js";
 import { assumedOnes, applianceLabel } from "../floorplan/appliances.js";
 import { DEFAULT_LANGUAGE, msg, type UiLanguage } from "../i18n/language.js";
 
@@ -15,6 +18,9 @@ export type SiteQuestionKind =
   | "plumbing"
   | "window"
   | "door"
+  | "gas"
+  | "electrical"
+  | "island"
   | "wall_confirm"
   | "wall_length"
   | "appliance_kinds"
@@ -77,6 +83,9 @@ export function buildSiteQuestions(
   const req = requirements;
   const deferPlumbing = isDeferPlumbing(req) || chatConfirmedPlumbing(req);
   const deferWindows = /no windows?|without windows?|没有窗|无窗|这几面墙没有窗|walls? have no windows?/i.test(req);
+  const deferGas = isDeferGas(req);
+  const deferElectrical = isDeferElectrical(req);
+  const deferIsland = isDeferIsland(req);
   const questions: SiteQuestion[] = [];
   let n = 1;
 
@@ -179,6 +188,53 @@ export function buildSiteQuestions(
           doorPending
             ? `Q${q}: 门洞位置是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和宽度。`
             : `Q${q}: 有门洞吗？说出墙名与宽度，或说「没有门洞」。`),
+      });
+    }
+
+    const gasPending = pendingFeatureConfirm(plan, "gas");
+    if ((!runs.some((r) => hasKind(r, "gas")) && !deferGas) || gasPending) {
+      add({
+        id: "sq_gas",
+        kind: "gas",
+        mark: "Gas?",
+        promptFor: (q) => msg(lang,
+          gasPending
+            ? `Q${q}: The gas hookup shown is from the template, not measured yet — does it look about right, or tell me the real wall/position?`
+            : `Q${q}: Is there a gas line for the range? Which wall, roughly where? Or say "no gas / electric range".`,
+          gasPending
+            ? `Q${q}: 燃气接口是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和位置。`
+            : `Q${q}: 有接灶具的燃气接口吗？在哪面墙、大概位置？没有的话可以说「没有燃气，用电」。`),
+      });
+    }
+
+    const electricalPending = pendingFeatureConfirm(plan, "electrical");
+    if ((!runs.some((r) => hasKind(r, "electrical")) && !deferElectrical) || electricalPending) {
+      add({
+        id: "sq_electrical",
+        kind: "electrical",
+        mark: "Electrical?",
+        promptFor: (q) => msg(lang,
+          electricalPending
+            ? `Q${q}: The electrical hookup shown is from the template, not measured yet — does it look about right, or tell me the real wall/position?`
+            : (deferGas
+              ? `Q${q}: Since there's no gas, where's the electrical hookup for the range (and fridge/oven)? Which wall, roughly where?`
+              : `Q${q}: Where's the electrical hookup for the fridge/oven (usually combined)? Which wall, roughly where?`),
+          electricalPending
+            ? `Q${q}: 强电接口是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和位置。`
+            : (deferGas
+              ? `Q${q}: 既然没有燃气，灶具（以及冰箱/烤箱）的强电接口在哪面墙、大概位置？`
+              : `Q${q}: 冰箱/烤箱（通常合并）的强电接口在哪面墙、大概位置？`)),
+      });
+    }
+
+    if (!runs.some((r) => isIsland(r)) && !deferIsland) {
+      add({
+        id: "sq_island",
+        kind: "island",
+        mark: "Island?",
+        promptFor: (q) => msg(lang,
+          `Q${q}: Is there room for an island? If so, roughly what size (e.g. "60x36")? Or say "no island".`,
+          `Q${q}: 有没有位置做岛台？如果有，大概多大（如「60x36」）？没有可以说「不做岛台」。`),
       });
     }
   }

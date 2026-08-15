@@ -204,9 +204,16 @@ test("端到端：必备信息收完之前，快捷回答/回复里都不出现�
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({ text: 'fridge 33", range 30", range hood 30", dishwasher 24"' }),
   });
-  const body3 = await json<MessagesResponse>(r3);
+  noIntentFields(await json<MessagesResponse>(r3));
 
-  const fields3 = body3.quickReplies.map((q) => q.field);
+  // 4) 燃气/强电/岛台也答完——必备信息才真正收完，风格/预算/省份才该出现。
+  const r4 = await req(`/api/conversations/${convId}/messages`, {
+    method: "POST", accountId: CONSUMER,
+    body: JSON.stringify({ text: "No gas, electric range. North wall electrical. No island." }),
+  });
+  const body4 = await json<MessagesResponse>(r4);
+
+  const fields3 = body4.quickReplies.map((q) => q.field);
   assert.ok(
     fields3.includes("style") || fields3.includes("budget") || fields3.includes("province"),
     `必备信息收完后，应该开始出现风格/预算/省份候选，实际 quickReplies field：${fields3.join(",")}`,
