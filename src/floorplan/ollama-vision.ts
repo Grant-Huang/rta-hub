@@ -71,7 +71,7 @@ Legend (prefer the drawing's own legend if present; otherwise these common marks
 
 Rules:
 - Feature kind must be one of: window, door, plumbing, gas, electrical, obstruction.
-- For EVERY kitchen wall and the island, scan for those marks. Put what you see in that wall's features[]. An empty features array means you looked and found none — not that you skipped the wall.
+- For EVERY kitchen run and the island, scan for those marks. Put what you see in that wall's features[]. An empty features array means you looked and found none — not that you skipped the wall.
 - If a mark is drawn but its numbers are missing, still emit kind (and offset/width when readable); omit missing numbers and lower confidence. Do not invent a mark that is not drawn.
 - offset is inches from THAT wall's starting corner (the labeled corner on the sketch), not from the room origin. A door is often near the far end — do not default offset to 0.
 - An island is NOT a fourth perimeter wall. Emit it as kind "island" with length (long side) and depth (short side). Island startsAtCorner and endsAtCorner are false.
