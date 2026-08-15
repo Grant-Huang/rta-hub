@@ -413,11 +413,15 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   }
 
   // —— 家电能否装进现有墙长（尽早报，禁止「收齐再拒绝」）——
+  //
+  // 只要有宽度（不管是客户给的还是推定的）就查，不等全部确认——「收齐再
+  // 拒绝」正是这条要治的病。以前这里还要求 assumedOnes 为空或客户已接受
+  // 推定，副作用是：只要列表里有**任何**未确认的推定值（哪怕只是灶具自动
+  // 带上的推定烟机，跟放不放得下毫无关系），整个放不下的提示就被压下去，
+  // 客户看到的只是"请确认尺寸"，看不到真正的"你的冰箱+灶具根本放不下"。
   {
-    const sizesOk = appliances.length > 0
-      && (assumedOnes(appliances).length === 0 || isConfirmAssumedAppliances(req));
     const wallsWithLen = plan?.parsedGeometry.wallRuns.filter((r) => r.length > 0) ?? [];
-    if (sizesOk && wallsWithLen.length > 0 && plan) {
+    if (appliances.length > 0 && wallsWithLen.length > 0 && plan) {
       const fit = planAppliances(plan.parsedGeometry, appliances, lang);
       if (fit.warnings.length > 0) {
         const detail = fit.warnings.map((w) => w.message).join("\n");

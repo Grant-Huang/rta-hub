@@ -160,14 +160,14 @@ export function applianceFrom(input: {
   };
 }
 
-/** FR-22：按 overlay 生成默认冰箱+灶具（推定）。 */
+/** FR-22：按 overlay 生成默认冰箱+灶具+抽油烟机（推定）。 */
 export function defaultAssumedAppliances(
   overlayWidths?: Partial<Record<ApplianceKind, number>>,
 ): ApplianceSpec[] {
-  return [
+  return normalizeAppliances([
     applianceFrom({ kind: "refrigerator" }, overlayWidths),
     applianceFrom({ kind: "range" }, overlayWidths),
-  ];
+  ]);
 }
 
 /**
@@ -229,9 +229,28 @@ export function violationCaveat(
     `If the real size is smaller, the issue above may not apply — tell me the exact size and I'll re-layout.`;
 }
 
-/** 归一化并去重（同一种家电只留一台）。 */
+/**
+ * 归一化并去重（同一种家电只留一台）；有灶具没提烟机时**补一台推定的**。
+ *
+ * 这条是本模块头部原则（"家电是客户已经拥有或已经选定的东西，不是我们替
+ * 他决定的"）唯一的例外，例外的理由很直接：现实里几乎没有厨房会装了灶具
+ * 却不装抽油烟机（或同类排烟家电），客户不主动提起，多半是因为默认"当然
+ * 会有"，而不是真的不需要。既然要补，就按这个模块一贯的规矩来——补的是
+ * `provenance: "assumed"`，会走 `assumedOnes`/`provenanceNote`/
+ * `violationCaveat` 同一条披露链路，客户能在报价单和图纸说明里看到、
+ * 能像其他推定尺寸一样确认或改掉，不是悄悄塞进图里。
+ */
 export function normalizeAppliances(list: readonly ApplianceSpec[]): ApplianceSpec[] {
   const byKind = new Map<ApplianceKind, ApplianceSpec>();
   for (const a of list) byKind.set(a.kind, a);
+  const cooking = byKind.get("range") ?? byKind.get("cooktop");
+  if (cooking && !byKind.has("rangeHood")) {
+    byKind.set("rangeHood", {
+      kind: "rangeHood",
+      width: cooking.width,
+      clearanceEachSide: APPLIANCE_DEFAULTS.rangeHood.clearanceEachSide,
+      provenance: "assumed",
+    });
+  }
   return [...byKind.values()];
 }
