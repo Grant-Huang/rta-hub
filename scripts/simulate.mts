@@ -430,12 +430,17 @@ async function main(): Promise<void> {
       if (!hasPlumbing) {
         failures.push(`${k.id}. ${k.name}：场景未声明上下水，违反 FR-15（不能猜）`);
       }
-      // 以会话里已说过的用户话 + facts 为准，避免引导后再叠一段重复 seal
+      // 只认会话里客户**已经说过**的话——facts.* 只是备选答案模板，不代表
+      // 已经发给助手；之前把 facts.province 之类也塞进 covered 一起判断，
+      // 导致这条检查永远命中自己（facts.province 本身就含 "Ontario"），
+      // 于是省份 seal 永远被当成"已覆盖"而跳过、从未真正发出去——省份从
+      // "账号默认值即视为已确认"改成"需要客户明确确认"后，这个假阳性
+      // 就会让本该发送的确认文案被吞掉，省份永远停在 needs_confirm。
       const saidUser = timeline
         .filter((b) => b.kind === "say" && b.role === "user")
         .map((b) => (b.kind === "say" ? b.text : ""))
         .join("\n");
-      const covered = [saidUser, facts.style ?? "", facts.province ?? "", facts.budget ?? ""].join("\n");
+      const covered = saidUser;
       const planSnap = await call(`/api/floorplans/${floorPlanId}`, { acct });
       const planApps = (planSnap.floorPlan?.appliances ?? []) as { provenance?: string }[];
       const appsConfirmed = planApps.length > 0

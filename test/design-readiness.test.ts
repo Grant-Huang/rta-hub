@@ -221,7 +221,7 @@ test("风格 brief 写出标准术语，禁止「已记在需求里」", () => {
   assert.doesNotMatch(r.confirmationText, /noted in your requirements/i);
 });
 
-test("账号已有省份（注册必填）时，不必在聊天里重复说一遍才算已确认", () => {
+test("账号已有省份（注册必填）时，仅作建议值——needs_confirm，不当已确认；客户明确确认/改口后才算 ok", () => {
   const plan = readyPlan();
   plan.appliances = [{
     kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer",
@@ -242,7 +242,33 @@ test("账号已有省份（注册必填）时，不必在聊天里重复说一�
     accountProvince: "ON",
   });
   const province1 = withAccount.items.find((i) => i.id === "province");
-  assert.equal(province1?.status, "ok", "账号上已有省份，不该继续追问");
+  assert.equal(province1?.status, "needs_confirm", "账号省份只是建议值，客户没确认过之前不能当已确认");
   assert.match(province1!.brief, /Ontario|ON/);
-  assert.equal(withAccount.readyToAskDesign, true);
+  assert.equal(withAccount.readyToAskDesign, false, "省份未确认应继续挡住出图，跟风格/预算一样");
+
+  // 客户在聊天里明确提过省份——算确认
+  const confirmedInChat = evaluateDesignReadiness({
+    conversation: conv({ designRequirements: "Modern style\nBudget CAD $10-20k\nNo windows\nFridge 36\"\nOntario ON" }),
+    plan,
+    language: "en",
+    accountProvince: "ON",
+  });
+  const province2 = confirmedInChat.items.find((i) => i.id === "province");
+  assert.equal(province2?.status, "ok");
+  assert.equal(confirmedInChat.readyToAskDesign, true);
+
+  // 客户用已确认面板的下拉框改过（走 preferences.shared.province，不经聊天正则）
+  const confirmedViaDropdown = evaluateDesignReadiness({
+    conversation: conv({
+      designRequirements: "Modern style\nBudget CAD $10-20k\nNo windows\nFridge 36\"",
+      preferences: { shared: { province: "BC" } },
+    }),
+    plan,
+    language: "en",
+    accountProvince: "ON",
+  });
+  const province3 = confirmedViaDropdown.items.find((i) => i.id === "province");
+  assert.equal(province3?.status, "ok");
+  assert.match(province3!.brief, /British Columbia|BC/, "下拉框改过的省份应覆盖账号建议值");
+  assert.equal(confirmedViaDropdown.readyToAskDesign, true);
 });

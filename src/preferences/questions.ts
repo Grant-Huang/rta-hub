@@ -19,8 +19,9 @@
 import { format, fromCents, mulQty, percentOf, type Money } from "../domain/money.js";
 import type {
   AccessoryOption, AssemblyOption, CompanyPreferences, GenericCatalog, HardwareOption,
-  Modifier, ModuleSpec, SharedPreferences,
+  Modifier, ModuleSpec, Province, SharedPreferences,
 } from "../domain/types.js";
+import { ALL_PROVINCES } from "../domain/types.js";
 import type { SpecBundle } from "../spec/bundle.js";
 import { hasRole } from "../spec/capabilities.js";
 import { sortBoxMaterials } from "../spec/carcass.js";
@@ -935,6 +936,12 @@ export function validatePreferences(
       throw new PreferenceError("language must be en or zh");
     }
     shared.language = raw.language;
+  }
+  if (raw.province !== undefined) {
+    if (!ALL_PROVINCES.includes(raw.province as Province)) {
+      throw new PreferenceError("Invalid province");
+    }
+    shared.province = raw.province;
   }
   if (raw.layoutHints !== undefined && typeof raw.layoutHints === "object") {
     shared.layoutHints = { ...raw.layoutHints };

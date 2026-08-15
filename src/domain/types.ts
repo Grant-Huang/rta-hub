@@ -307,6 +307,12 @@ export interface DeliveryAuditRecord {
 /** 跨公司通用的偏好——换公司不失效。 */
 export interface SharedPreferences {
   budgetBand?: "economy" | "standard" | "premium" | "unsure";
+  /**
+   * 客户明确确认（或改口）过的省份——与账号注册省份分开存。账号省份只是
+   * 开场建议值，不能当成"客户说过"；客户在对话里确认/改口，或用已确认
+   * 面板的下拉框改过，才写这里（见 `readiness.ts` 的省份 needs_confirm 逻辑）。
+   */
+  province?: Province;
   storage?: "drawers" | "doors" | "balanced";
   tradeoff?: "price" | "quality" | "lookAndFeel";
   assembly?: AssemblyOption;
