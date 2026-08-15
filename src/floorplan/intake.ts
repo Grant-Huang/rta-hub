@@ -10,6 +10,18 @@ import { INTAKE_SAMPLES } from "../samples/catalog.js";
 const REUPLOAD_PENDING_MIN = 3;
 
 /**
+ * 客户是在问"这是什么样"，不是在报出自己家的答案。
+ *
+ * 检测要放在"点名户型"识别之前——同一句话如果既提了户型词又带这类词
+ * （"U型是什么样子"），是想看示例图，不能当成客户已经确认了 U 型。
+ */
+const WANTS_EXAMPLE = /不确定|不太确定|不知道|不太懂|看不懂|分不清|什么样|长什么样|举例|例子|参考图|看看图|看图|show me|not sure|don'?t know|what.{0,12}look like|(?:an\s+)?example/i;
+
+export function wantsShapeExample(text: string): boolean {
+  return WANTS_EXAMPLE.test(text);
+}
+
+/**
  * 是否建议用户按示例补标注后重新上传。
  *
  * 零墙段 / 抽取失败 / 大量 unresolved / 整体置信度很低 时为 true。
@@ -44,23 +56,28 @@ export function shouldSuggestReupload(
   return false;
 }
 
-/** 开场欢迎语：先问户型图 / 手绘 / 设计草图。 */
+/**
+ * 开场欢迎语：先问户型是哪种形状，纯文字回答（Phase 2）。
+ *
+ * 不再一开场就摆出 5 张缩略图——客户仍然要打字/点文字选项说出户型
+ * （"U型"这类），不是点图直接选中；拿不准哪个像可以直接说想看示例图，
+ * 系统再按需展示（见 `web/index.html` 的意图识别）。
+ */
 export function floorplanFirstWelcome(lang: UiLanguage = DEFAULT_LANGUAGE): string {
   return msg(lang,
-    "Hi — I'm your cabinet design assistant. Let's start with the kitchen site — two equally good ways to begin, pick whichever is faster for you:\n"
-      + "1. **Upload a floor plan / hand sketch** — tap + (see the example below for what to mark: wall lengths + openings + ceiling). "
-      + "If it matches one of the 5 common layouts, we'll spot that and only ask about what the sketch didn't show clearly.\n"
-      + "2. **Or just pick the layout that looks like yours** — tap \"looks like mine\" on one of the 5 layout examples below "
-      + "(one-wall / galley / L-shape / L-shape + island / U-shape). No sketching needed — we'll ask for that layout's specific wall lengths next.\n"
-      + "Optional: already have a rough design idea (fridge / sink / cooktop)? Upload a sketch too — see the design example.\n\n"
+    "Hi — I'm your cabinet design assistant. Let's start with your kitchen's layout: "
+      + "what shape is it — **one-wall, galley, L-shape, L-shape + island, or U-shape**? "
+      + "Tell me in a word or two (tap a quick option below, or just type it).\n"
+      + "Not sure which one matches? Just say so and I'll show you an example picture — "
+      + "you'll still need to tell me which one it is afterward.\n"
+      + "You can also upload a floor plan or hand sketch instead — tap +.\n\n"
       + "We'll turn what we get into an editable block diagram to discuss. Style, budget, and province can come next.\n"
       + "For a specific seller, @ the company name.",
-    "你好，我是橱柜设计顾问。先从厨房现场开始——两种方式同样好用，哪个方便就用哪个：\n"
-      + "1. **上传户型图/手绘简图** —— 点 + 上传（下面有示例，标注墙长、开口、层高）。"
-      + "如果看起来像 5 种常见布局里的一种，系统会认出来，只追问草图上没读清楚的部分。\n"
-      + "2. **或者直接选一个最像自己家的布局** —— 在下面 5 张布局示例上点「我家像这个」"
-      + "（单壁型 / 走廊型 / L型 / L型+岛台 / U型）。不用手绘，选完直接问这个布局对应的具体墙长。\n"
-      + "可选：已有初步布置想法（冰箱/水槽/灶台）？也可上传设计草图——见设计示例。\n\n"
+    "你好，我是橱柜设计顾问。先说说你家厨房是哪种布局——"
+      + "**一字型、走廊型、L型、L型+岛台，还是U型**？"
+      + "打字告诉我就行（也可以点下面的快捷选项，或直接打字）。\n"
+      + "拿不准哪个像自己家？直接说想看示例图，我发给你看——看完还是要告诉我是哪一种。\n"
+      + "也可以改成上传户型图/手绘简图——点 + 上传。\n\n"
       + "拿到信息后我会用统一的柜块拼接图复述现场，方便一起改尺寸和布局。风格、预算、省份稍后再聊。\n"
       + "点名某家公司用 @公司名。");
 }

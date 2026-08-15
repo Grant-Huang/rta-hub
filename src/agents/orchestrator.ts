@@ -542,7 +542,7 @@ export function missingFields(requirements: string): string[] {
   const text = requirements.toLowerCase();
   const checks: [string, RegExp][] = [
     ["kitchen size", /(\d+\s*(尺|米|m|ft|英尺|feet|'|″|inch|寸|sq\.?\s*ft))|尺寸|面积|平米|平方|one wall|two walls|kitchen\s*~/],
-    ["layout", /布局|l\s*[- ]?shape|u\s*[- ]?shape|i\s*[- ]?shape|l\s*型|u\s*型|一字|岛台|island|galley|with island/],
+    ["layout", /布局|l\s*[- ]?shape|u\s*[- ]?shape|i\s*[- ]?shape|l\s*型|u\s*型|一字|岛台|island|galley|with island|one[- ]?wall|单壁型|走廊型|双排型|两排型|通道型/],
     // 关键词表要认得**客户真会说的词**，尤其是快捷回答按钮上印的那几个
     // （`quick-replies.ts`）。认不出来的后果不是"少收一个字段"，而是客户点了
     // 按钮、系统下一轮又问同一个问题——比不给按钮更糟。
