@@ -120,3 +120,26 @@ test("单次完整提示词仍禁止 Kitchen wall A / 137 泄漏", () => {
   assert.equal(/Kitchen wall A/i.test(prompt), false);
   assert.equal(/"length"\s*:\s*137/.test(prompt), false);
 });
+
+test("实图冻结 A/B：两步把北墙窗 offset 读准，但上下水仍错墙", () => {
+  const oneshot = JSON.parse(
+    readFileSync(path.join(here, "fixtures", "l-island-qwen2.5vl-oneshot-raw.json"), "utf8"),
+  ) as RawExtraction;
+  const twostep = JSON.parse(
+    readFileSync(path.join(here, "fixtures", "l-island-qwen2.5vl-twostep-raw.json"), "utf8"),
+  ) as RawExtraction;
+  const A = scoreAgainstTruth(oneshot);
+  const B = scoreAgainstTruth(twostep);
+  assert.equal(A.wallHits, 3);
+  assert.equal(B.wallHits, 3);
+  const aWin = oneshot.wallRuns?.find((r) => r.slot === "North")?.features?.find((f) => f.kind === "window");
+  const bWin = twostep.wallRuns?.find((r) => r.slot === "North")?.features?.find((f) => f.kind === "window");
+  assert.equal(aWin?.offset, 42);
+  assert.equal(bWin?.offset, 48, "两步把窗的 offset 从 42 纠正到 48");
+  assert.equal(
+    twostep.wallRuns?.find((r) => r.slot === "North")?.features?.some((f) => f.kind === "plumbing"),
+    true,
+    "两步仍把上下水放在北墙",
+  );
+  assert.equal(B.featureWallHits, A.featureWallHits, "特征墙归属没有比单次更好");
+});
