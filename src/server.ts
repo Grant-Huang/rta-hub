@@ -1920,6 +1920,28 @@ function engagementConfirmedPayload(conv: Conversation, eg: CompanyEngagement) {
     handoffRevision: eg.handoff.revision ?? 1,
     requirementsDigest: eg.handoff.requirementsDigest
       ?? digestFromBriefSections(readiness.sections, readiness.confirmedFacts, lang).requirementsDigest,
+    pricedProductList: pricedProductListFor(conv.id, eg.companyId),
+  };
+}
+
+/**
+ * 厂商会话下方的产品清单——只展示，不触发生成。报价生成入口还是主会话的
+ * POST /api/quotes；这里按会话+厂商找该厂商最新一份已出的报价，没有就是
+ * undefined，前端提示"还没有报价"。
+ */
+function pricedProductListFor(conversationId: string, companyId: string) {
+  const quotes = appCtx.repos.quotes
+    .filter((q) => q.conversationId === conversationId && q.companyId === companyId);
+  if (!quotes.length) return undefined;
+  const latest = quotes.reduce((a, b) => (a.createdAt > b.createdAt ? a : b));
+  return {
+    quoteId: latest.id,
+    currency: latest.currency,
+    lineItems: latest.lineItems,
+    subtotal: latest.subtotal,
+    taxes: latest.taxes,
+    total: latest.total,
+    createdAt: latest.createdAt,
   };
 }
 
