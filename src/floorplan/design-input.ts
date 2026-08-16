@@ -18,7 +18,7 @@
 import { randomUUID } from "node:crypto";
 import type { FloorPlan, FloorPlanUnresolved, WallFeatureKind, WallRun } from "./types.js";
 import { quantize } from "./types.js";
-import { addFeature, addWallRun, createChatSourcedFloorPlan, resolveCeilingHeight } from "./parse.js";
+import { addFeature, addWallRun, createChatSourcedFloorPlan, isWallLengthPending, resolveCeilingHeight } from "./parse.js";
 import { APPLIANCE_DEFAULTS, normalizeAppliances, type ApplianceKind, type ApplianceSpec, type Provenance } from "./appliances.js";
 
 export class DesignInputError extends Error {}
@@ -304,10 +304,7 @@ export function applyDesignInput(
  * 的"确认锁"复用：已确认的字段不许被聊天解析静默覆盖（见 `confirm-lock.ts`）。
  */
 export function wallRunProvenance(plan: FloorPlan, wallRunId: string): Provenance {
-  const pending = plan.unresolvedItems.some(
-    (u) => !u.resolved && u.target.kind === "wallRun" && u.target.id === wallRunId,
-  );
-  return pending ? "assumed" : "customer";
+  return isWallLengthPending(plan, wallRunId) ? "assumed" : "customer";
 }
 
 export function featureProvenance(plan: FloorPlan, featureId: string): Provenance {
