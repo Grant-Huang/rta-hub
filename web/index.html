@@ -127,15 +127,19 @@
   .confirmed .kv dd { margin:0; color:#e6e8eb; word-break:break-word; }
   .confirmed .kv dd.tbd, .confirmed .tbd { color:#8b94a3; font-style:italic; }
   .confirmed h3 { margin:0 0 8px; font-size:12.5px; color:#9aa4b2; font-weight:600; }
-  .brief-card { margin:0 0 12px; padding:10px 0; border-bottom:1px solid #1c2129; }
-  .brief-card:last-child { border-bottom:none; }
-  .brief-head { display:flex; justify-content:space-between; gap:8px; align-items:baseline; margin-bottom:4px; }
-  .brief-title { font-size:12.5px; font-weight:600; color:#e6e8eb; }
-  .brief-status { font-size:10.5px; color:#8b94a3; }
-  .brief-card.status-clarify .brief-status { color:#d8c37b; }
-  .brief-card.status-untouched .brief-status { color:#6a7382; }
-  .brief-card.status-locked .brief-status { color:#7bd88f; }
-  .brief-body { font-size:12.5px; line-height:1.55; color:#c6cdd6; white-space:pre-wrap; }
+  /* 分组头——已确认栏按 space→site→appliances→intent→seller 分组渲染，
+     每组一个头（标题 + 聚合状态），组内直接是该分组的原子事实行，不再有
+     第二份叙事文字复述同一批数字。 */
+  .fact-group { margin:0 0 16px; }
+  .fact-group:last-child { margin-bottom:0; }
+  .fact-group-head { display:flex; justify-content:space-between; gap:8px; align-items:baseline;
+    padding-bottom:4px; border-bottom:1px solid #262b33; margin-bottom:2px; }
+  .fact-group-title { font-size:12.5px; font-weight:600; color:#e6e8eb; }
+  .fact-group-status { font-size:10.5px; color:#8b94a3; }
+  .fact-group-status.status-clarify { color:#d8c37b; }
+  .fact-group-status.status-untouched { color:#6a7382; }
+  .fact-group-status.status-locked { color:#7bd88f; }
+  .fact-group-status.status-provisional { color:#7ba7bd; }
   .fact-list { margin:0 0 14px; padding:0; list-style:none; }
   .fact-list li { display:grid; grid-template-columns:minmax(72px,38%) 1fr auto; gap:6px 10px; padding:5px 0; border-bottom:1px solid #1c2129; font-size:12.5px; align-items:center; }
   .fact-list .fact-label { color:#8b93a0; }
@@ -143,9 +147,13 @@
   .fact-list li.fact-missing .fact-value { color:#6a7382; }
   .fact-list li.fact-clarify .fact-value { color:#d8c37b; }
   .fact-list li.fact-confirmed .fact-value { color:#7bd88f; }
+  .fact-list .fact-actions { display:flex; gap:4px; justify-self:end; }
   .fact-list .fact-edit-btn { font-size:11px; padding:2px 7px; border-radius:6px; background:#1c2129;
     color:#8b94a3; border:1px solid #2a313c; cursor:pointer; white-space:nowrap; }
   .fact-list .fact-edit-btn:hover { border-color:#4d7bd7; color:#e6e8eb; }
+  .fact-list .fact-confirm-btn { font-size:11px; padding:2px 7px; border-radius:6px; background:#1c3a2b;
+    color:#7bd88f; border:1px solid #2d5c3f; cursor:pointer; white-space:nowrap; }
+  .fact-list .fact-confirm-btn:hover { border-color:#7bd88f; }
   .fact-list .fact-edit-row { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:4px; }
   .fact-list .fact-edit-row input { width:78px; font-size:12.5px; padding:3px 6px; border-radius:6px;
     background:#0f1318; border:1px solid #3a4250; color:#e6e8eb; }
@@ -397,7 +405,6 @@ let confirmed = {
   missingFields: [],
   briefSections: null,
   confirmedFacts: [],
-  openItems: [],
   readyToAskDesign: false,
   confirmationText: '',
 };
@@ -500,7 +507,7 @@ function resetConfirmed() {
     doorStyleId: null, doorStyleName: null,
     prefs: null, floorPlan: null, layoutNote: null,
     requirements: '', missingFields: [],
-    briefSections: null, confirmedFacts: [], openItems: [],
+    briefSections: null, confirmedFacts: [],
     readyToAskDesign: false, confirmationText: '',
   };
   renderConfirmed();
@@ -600,47 +607,24 @@ function renderEngagementConfirmed(confirmedBody, companyName) {
   if (!el || !confirmedBody) return;
   const brief = confirmedBody.designBrief || {};
   const sections = brief.sections || [];
+  const facts = brief.confirmedFacts || [];
   const company = confirmedBody.companySpecific || {};
   const doorId = confirmedBody.doorStyleId || company.doorStyleId;
   const doorName = confirmedBody.doorStyleName
     || (doorId && (spec?.doorStyles || []).find((d) => d.id === doorId)?.name)
     || doorId;
-  const statusLabel = {
-    locked: t('briefLocked'),
-    provisional: t('briefProvisional'),
-    untouched: t('briefUntouched'),
-    clarify: t('briefClarify'),
-  };
   const companyLines = Object.entries(company)
     .filter(([k, v]) => v != null && v !== '' && !(Array.isArray(v) && !v.length) && k !== 'doorStyleId')
     .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
   if (doorId) companyLines.unshift(`doorStyle: ${doorName || doorId}`);
 
-  const facts = brief.confirmedFacts || [];
-  const factsHtml = facts.length
-    ? `<h3>${t('confirmedFactsTitle')}</h3>
-      <ul class="fact-list">${facts.map((f) => `
-        <li class="${factStatusClass(f.status)}">
-          <span class="fact-label">${esc(f.label)}</span>
-          <span class="fact-value">${esc(f.value)}</span>
-        </li>`).join('')}</ul>`
-    : '';
-  const briefHtml = sections.length
-    ? `<h3>${t('confirmedBasis')}</h3>
-      ${sections.map((s) => `
-        <div class="brief-card status-${esc(s.status)}">
-          <div class="brief-head">
-            <span class="brief-title">${esc(s.title)}</span>
-            <span class="brief-status">${esc(statusLabel[s.status] || s.status)}</span>
-          </div>
-          <div class="brief-body">${esc(s.body)}</div>
-        </div>`).join('')}`
-    : (factsHtml ? '' : `<p class="hint">${t('confirmedEmpty')}</p>`);
+  // 厂商侧只读——同一份分组渲染，但不带编辑/确认按钮（那两个动作都会改
+  // 到共享的户型数据，只在客户自己的主会话面板里开放）。
+  const groupsHtml = factGroupsHtml(sections, facts, false);
 
   el.innerHTML = `
     <div class="confirmed-block">
-      ${factsHtml}
-      ${briefHtml}
+      ${groupsHtml || `<p class="hint">${t('confirmedEmpty')}</p>`}
       <div class="sync-row" style="margin-top:12px">
         ${confirmedBody.shared?.differsFromParent
           ? `<button type="button" id="engPromoteBtn">${t('engPromote')}</button>
@@ -713,45 +697,50 @@ async function pullEngagementShared(eidOverride) {
 $('engagementOfferYes')?.addEventListener('click', acceptEngagementOffer);
 $('engagementOfferNo')?.addEventListener('click', hideEngagementOffer);
 
+/**
+ * 已确认面板的统一渲染：按 `sections` 顺序（space→site→appliances→intent→
+ * seller，几何最基础排最前）逐组输出一个分组头 + 该组的原子事实行。主会话
+ * 与厂商会话共用——两边的数据都来自同一套 `evaluateDesignReadiness`，没
+ * 理由各写一份 HTML。`interactive=false` 时（厂商会话）不渲染编辑/确认
+ * 按钮——那两个动作会改到共享的户型数据，只在客户自己的主会话面板开放。
+ *
+ * 每一行自己的状态色 + `value`（missing/needs_confirm 时就是 askHint）已经
+ * 是完整信息，不再需要单独一条"还需要确认"的提示兜底。
+ */
+function factGroupsHtml(sections, facts, interactive) {
+  const statusLabel = {
+    locked: t('briefLocked'),
+    provisional: t('briefProvisional'),
+    untouched: t('briefUntouched'),
+    clarify: t('briefClarify'),
+  };
+  return (sections || []).map((s) => {
+    const rows = (facts || []).filter((f) => f.groupId === s.id);
+    if (!rows.length) return '';
+    return `
+      <div class="fact-group">
+        <div class="fact-group-head">
+          <span class="fact-group-title">${esc(s.title)}</span>
+          <span class="fact-group-status status-${esc(s.status)}">${esc(statusLabel[s.status] || s.status)}</span>
+        </div>
+        <ul class="fact-list">${rows.map((f) => renderFactRow(f, interactive)).join('')}</ul>
+      </div>`;
+  }).join('');
+}
+
 function renderConfirmed() {
   const el = $('confirmedPane');
   if (!el) return;
   if (activeEngagementId) return; // 子轨用 renderEngagementConfirmed
 
-  // 优先用服务端 designBrief 叙事（FR-15）；事实行明确列出尺寸/位置
   if (confirmed.briefSections?.length || (confirmed.confirmedFacts || []).length) {
-    const open = (confirmed.openItems || [])
-      .filter((i) => i.status === 'missing' || i.status === 'needs_confirm');
-    const openHint = open.length
-      ? `<p class="hint" style="margin-bottom:12px">${t('stillNeed')}: ${esc(open.map((i) => i.askHint || i.brief).slice(0, 3).join(uiLang === 'zh' ? '；' : '; '))}</p>`
-      : (confirmed.readyToAskDesign
-        ? `<p class="hint" style="margin-bottom:12px">${t('intakeReady')}</p>`
-        : '');
-    const statusLabel = {
-      locked: t('briefLocked'),
-      provisional: t('briefProvisional'),
-      untouched: t('briefUntouched'),
-      clarify: t('briefClarify'),
-    };
-    const facts = confirmed.confirmedFacts || [];
-    const factsHtml = facts.length
-      ? `<h3>${t('confirmedFactsTitle')}</h3>
-        <ul class="fact-list">${facts.map(renderFactRow).join('')}</ul>`
-      : '';
-    const sectionsHtml = (confirmed.briefSections || []).map((s) => `
-        <div class="brief-card status-${esc(s.status)}">
-          <div class="brief-head">
-            <span class="brief-title">${esc(s.title)}</span>
-            <span class="brief-status">${esc(statusLabel[s.status] || s.status)}</span>
-          </div>
-          <div class="brief-body">${esc(s.body)}</div>
-        </div>`).join('');
+    const groupsHtml = factGroupsHtml(confirmed.briefSections, confirmed.confirmedFacts, true);
     el.innerHTML = `
       ${designImportExportToolbarHtml()}
-      ${openHint}
-      ${factsHtml}
-      ${sectionsHtml ? `<h3>${t('confirmedBasis')}</h3>${sectionsHtml}` : ''}
-      ${confirmed.layoutNote ? `<div class="brief-card"><div class="brief-head"><span class="brief-title">${t('layoutResult')}</span></div><div class="brief-body">${esc(confirmed.layoutNote)}</div></div>` : ''}
+      ${groupsHtml || `<p class="hint">${t('confirmedEmpty')}</p>`}
+      ${confirmed.layoutNote
+        ? `<div class="fact-group"><div class="fact-group-head"><span class="fact-group-title">${esc(t('layoutResult'))}</span></div><p class="hint" style="padding:4px 0">${esc(confirmed.layoutNote)}</p></div>`
+        : ''}
     `;
     return;
   }
@@ -776,7 +765,6 @@ function applyDesignBrief(brief) {
   if (!brief) return;
   confirmed.briefSections = brief.sections || [];
   confirmed.confirmedFacts = brief.confirmedFacts || [];
-  confirmed.openItems = brief.openItems || [];
   confirmed.readyToAskDesign = !!brief.readyToAskDesign;
   confirmed.confirmationText = brief.confirmationText || '';
   renderConfirmed();
@@ -787,15 +775,20 @@ function applyDesignBrief(brief) {
  * ConfirmedFact）有值才带"改"按钮——风格/预算/省份这类没有 editTarget，
  * 仍然只读，走对话改。
  */
-function renderFactRow(f) {
-  if (editingFactKey === f.key && f.editTarget) return renderFactEditRow(f);
+function renderFactRow(f, interactive) {
+  if (interactive && editingFactKey === f.key && f.editTarget) return renderFactEditRow(f);
+  const actions = [];
+  if (interactive && f.confirmTarget) {
+    actions.push(`<button type="button" class="fact-confirm-btn" data-fact-confirm="${esc(f.key)}">${esc(t('factConfirmBtn'))}</button>`);
+  }
+  if (interactive && f.editTarget) {
+    actions.push(`<button type="button" class="fact-edit-btn" data-fact-edit="${esc(f.key)}">${esc(t('factEditBtn'))}</button>`);
+  }
   return `
     <li class="${factStatusClass(f.status)}">
       <span class="fact-label">${esc(f.label)}</span>
       <span class="fact-value">${esc(f.value)}</span>
-      ${f.editTarget
-        ? `<button type="button" class="fact-edit-btn" data-fact-edit="${esc(f.key)}">${esc(t('factEditBtn'))}</button>`
-        : '<span></span>'}
+      <span class="fact-actions">${actions.join('')}</span>
     </li>`;
 }
 
@@ -853,6 +846,8 @@ $('confirmedPane')?.addEventListener('click', (e) => {
   }
   const saveBtn = e.target.closest('[data-fact-save]');
   if (saveBtn) { saveFactEdit(saveBtn.dataset.factSave); return; }
+  const confirmBtn = e.target.closest('[data-fact-confirm]');
+  if (confirmBtn) { confirmFact(confirmBtn.dataset.factConfirm); return; }
   if (e.target.closest('[data-export-design]')) { exportDesignInput(); return; }
   if (e.target.closest('[data-import-design]')) { triggerImportDesign(); }
 });
@@ -996,6 +991,54 @@ async function saveFactEdit(key) {
     factEditErr = '';
     if (body.designBrief) applyDesignBrief(body.designBrief);
     await renderFloorPlan(body);
+  } catch (err) {
+    factEditErr = t('factSaveFail', err.message || String(err));
+    renderConfirmed();
+  }
+}
+
+/**
+ * 已确认面板里的"一键确认"——直接按 `confirmTarget`（服务端已经算好该提交
+ * 什么值，见 readiness.ts）提交，不用客户重新输入。跟 `saveFactEdit` 的
+ * 区别：那个是"改成别的值"（打开表单重填），这个是"就按显示的这个值"。
+ * 只在 interactive 渲染下才会出现按钮，所以不用像 saveFactEdit 那样处理
+ * 厂商会话场景——这里永远是主会话。
+ */
+async function confirmFact(key) {
+  const fact = (confirmed.confirmedFacts || []).find((f) => f.key === key);
+  if (!fact?.confirmTarget || !conversationId) return;
+  const ct = fact.confirmTarget;
+  try {
+    if (ct.kind === 'province') {
+      const { ok, body } = await api(`/api/conversations/${conversationId}/preferences`, {
+        method: 'POST', body: JSON.stringify({ companyId: currentCompanyId() || '', province: ct.code }),
+      });
+      if (!ok) {
+        factEditErr = body.error || t('submitFail');
+        renderConfirmed();
+        return;
+      }
+      factEditErr = '';
+      // /preferences 不带回 designBrief——重新拉一次会话快照刷新已确认面板。
+      const snap = await api(`/api/conversations/${conversationId}`);
+      if (snap.ok && snap.body.designBrief) applyDesignBrief(snap.body.designBrief);
+      else renderConfirmed();
+      return;
+    }
+    if (ct.kind === 'appliance') {
+      if (!floorPlanId) return;
+      const { ok, body } = await api(`/api/floorplans/${floorPlanId}/resolve`, {
+        method: 'POST', body: JSON.stringify({ appliances: [{ kind: ct.applianceKind, width: ct.width }] }),
+      });
+      if (!ok) {
+        factEditErr = body.error || t('submitFail');
+        renderConfirmed();
+        return;
+      }
+      factEditErr = '';
+      if (body.designBrief) applyDesignBrief(body.designBrief);
+      await renderFloorPlan(body);
+    }
   } catch (err) {
     factEditErr = t('factSaveFail', err.message || String(err));
     renderConfirmed();
