@@ -602,6 +602,29 @@ async function openEngagement(eid) {
   switchPanelTab('confirmed');
 }
 
+/** 只展示、不触发生成——报价的生成入口还是主会话的「出报价」。 */
+function pricedProductListHtml(list) {
+  if (!list || !list.lineItems?.length) return `<p class="hint">${t('engProductListEmpty')}</p>`;
+  const rows = list.lineItems.map((l) => `<tr>
+    <td>${esc(l.moduleCode)}</td>
+    <td class="hint">${l.width}" × ${l.height}" × ${l.depth}"</td>
+    <td class="num">${l.qty}</td>
+    <td class="num">${money(l.unitListPrice)}</td>
+    <td class="num">${money(l.unitNetPrice)}</td>
+    <td class="num">${money(l.lineSubtotal)}</td></tr>`).join('');
+  return `
+    <table>
+      <thead><tr><th>${t('sku')}</th><th>${t('spec')}</th><th class="num">${t('qty')}</th>
+        <th class="num">${t('listPrice')}</th><th class="num">${t('unitAfter')}</th><th class="num">${t('lineSub')}</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="totals">
+      <div><span>${t('subtotal')}</span><span>${money(list.subtotal)}</span></div>
+      ${list.taxes.map((tx) => `<div><span>${esc(tx.name)} ${tx.ratePercent}%</span><span>${money(tx.amount)}</span></div>`).join('')}
+      <div class="grand"><span>${t('grandTotal', esc(list.currency))}</span><span>${money(list.total)}</span></div>
+    </div>`;
+}
+
 function renderEngagementConfirmed(confirmedBody, companyName) {
   const el = $('confirmedPane');
   if (!el || !confirmedBody) return;
@@ -642,6 +665,10 @@ function renderEngagementConfirmed(confirmedBody, companyName) {
             return `<dt>${esc(line.slice(0, i))}</dt><dd>${esc(line.slice(i + 2))}</dd>`;
           }).join('')}</dl>`
         : `<p class="hint">${t('engCompanyEmpty')}</p>`}
+    </div>
+    <div class="confirmed-block">
+      <h3>${t('engProductListTitle')}</h3>
+      ${pricedProductListHtml(confirmedBody.pricedProductList)}
     </div>`;
   $('engPromoteBtn')?.addEventListener('click', promoteEngagementShared);
   $('engPullBtn')?.addEventListener('click', (ev) => {

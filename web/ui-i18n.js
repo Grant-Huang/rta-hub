@@ -44,6 +44,9 @@ window.RTA_UI = {
     engSharedConfirmed: "Project confirmed (shared)",
     engCompanyConfirmed: (name) => `Seller-specific summary${name ? ` · ${name}` : ""}`,
     engCompanyEmpty: "No seller-specific picks yet (door style, SKUs, etc.).",
+    engProductListTitle: "Product list & pricing",
+    engProductListEmpty:
+      "No quote yet — once the customer confirms a layout and gets a quote in the main conversation, pricing for your catalog will show up here automatically.",
     engPromote: "Sync to main project",
     engPromoteHint: "Copies shared house/requirements only—not seller SKUs.",
     engPromoteConfirm:
@@ -498,6 +501,8 @@ window.RTA_UI = {
     engSharedConfirmed: "项目已确认（共享）",
     engCompanyConfirmed: (name) => `厂商专用确认小结${name ? ` · ${name}` : ""}`,
     engCompanyEmpty: "尚无厂商专用选型（门板、SKU 等）。",
+    engProductListTitle: "产品清单与报价",
+    engProductListEmpty: "还没有报价——客户在主会话里确认方案并出报价后，你这边会自动看到按你家目录算的价格。",
     engPromote: "同步到主项目",
     engPromoteHint: "只同步房屋/用户要求等共享项，不同步厂商 SKU。",
     engPromoteConfirm:
