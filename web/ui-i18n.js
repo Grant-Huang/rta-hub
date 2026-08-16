@@ -24,7 +24,7 @@ window.RTA_UI = {
     prefs: "Preferences & budget",
     compare: "Compare",
     flowHint:
-      "Flow: upload a floor plan → fill in sizes → auto layout with four views → quote → confirm send.<br/>Without a vision model configured, you'll be guided to enter wall lengths by hand after upload.",
+      "Flow: auto layout with four views → quote → confirm send.<br/>Without a vision model configured, you'll be guided to enter wall lengths by hand after upload.",
     gateNeedSizes:
       "<b>② Generate layout</b> still needs floor-plan sizes: enter each wall length and ceiling height in the conversation — this button lights up when they're complete.",
     gateNeedFloor:
@@ -151,7 +151,7 @@ window.RTA_UI = {
     gateErgo:
       "<b>③ Get quote</b> is blocked by ergonomic checks: fix the issues above first. Layouts that fail those checks can't be quoted.",
     gateNeedLayout: "<b>③ Get quote</b> needs a layout first: finish the step above.",
-    steps: ["Floor plan", "Sizes", "Layout & views", "Quote", "Confirm send"],
+    steps: ["Layout & views", "Quote"],
     msgCount: (n, q) => `${n} msg${n === 1 ? "" : "s"}${q ? ` · ${q} quote${q === 1 ? "" : "s"}` : ""}`,
     switchedConv:
       "Switched to this conversation. Regenerate artifacts here — drawings and quotes are timestamped and can't be reused across chats.",
@@ -478,7 +478,7 @@ window.RTA_UI = {
     prefs: "偏好与预算",
     compare: "比价",
     flowHint:
-      "流程：上传户型图 → 补齐尺寸 → 自动排布出四视图 → 生成报价 → 确认发送。<br/>没有配置视觉模型时，上传后会引导你手动录入墙段尺寸。",
+      "流程：自动排布出四视图 → 生成报价 → 确认发送。<br/>没有配置视觉模型时，上传后会引导你手动录入墙段尺寸。",
     gateNeedSizes:
       "<b>② 生成方案</b>还差户型尺寸：在对话里把每段墙的长度和层高填完，填齐了这个按钮自动亮。",
     gateNeedFloor:
@@ -603,7 +603,7 @@ window.RTA_UI = {
     gateErgo:
       "<b>③ 出报价</b>被人体工程检查拦住了：先按上面的提示调整方案，通不过的方案不出报价。",
     gateNeedLayout: "<b>③ 出报价</b>要先有一版方案：把上一步做完。",
-    steps: ["户型图", "尺寸补齐", "方案与四视图", "报价", "确认发送"],
+    steps: ["方案与四视图", "报价"],
     msgCount: (n, q) => `${n} 条${q ? ` · ${q} 份报价` : ""}`,
     switchedConv:
       "已切到这段会话。产出物需要重新生成——图纸与报价都带着时间戳，不能跨会话复用。",

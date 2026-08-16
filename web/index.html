@@ -2525,7 +2525,6 @@ async function sendWithAttachments(text) {
     return;
   }
   floorPlanId = body.floorPlan?.id;
-  stepIndex = 1; renderSteps();
   if (body.interpretation) addMsg('assistant', body.interpretation);
   else if (body.extractionNote) addMsg('system', body.extractionNote);
   for (const r of body.replies || []) {
@@ -2624,7 +2623,7 @@ async function renderFloorPlan(body) {
   }
 
   gates.fpReady = !!body.ready; refreshGates();
-  if (body.ready) { stepIndex = 2; renderSteps(); await maybeOfferDesign(); }
+  if (body.ready) { await maybeOfferDesign(); }
   else {
     await maybeOfferDesign({ allowWithoutFloor: true });
     showOutputs();
@@ -2663,7 +2662,7 @@ async function runGenerateLayout() {
     return;
   }
   layout = body;
-  stepIndex = 3; renderSteps();
+  stepIndex = 1; renderSteps();
   renderLayout(body);
   addMsg('assistant', t('layoutReadyChat'));
 }
@@ -2696,7 +2695,6 @@ async function runGetQuote() {
   currentQuote = body.quote;
   lastTradeNotice = body.tradePricing || null;
   lastFinishes = body.finishComparison || null;
-  stepIndex = 4; renderSteps();
   renderQuote();
   registerArtifact(t('quotePdf', currentQuote.id), 'application/pdf',
     { url: `/api/quotes/${currentQuote.id}/pdf` });
