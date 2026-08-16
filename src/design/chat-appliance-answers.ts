@@ -117,15 +117,37 @@ function mentionsRangeCooker(text: string): boolean {
   return /(?<!budget\s)\brange\b(?!\s*hood)/i.test(text);
 }
 
-/** 在 kind 命中后抓宽度（优先关键词之后，避免吃到上一台家电的英寸数）。 */
+const SEGMENT_BREAK_RE = /[、，,；;。！？!?\n]/;
+
+/**
+ * 在 kind 命中前后抓宽度。英文/「冰箱36寸」这类关键词在前的说法找关键词之后；
+ * 「36寸双门对开冰箱」这类中文惯用的数字在前的说法，则从上一个分隔符（或句首）
+ * 到关键词之间找离关键词最近的一个数字——避免吃到上一件家电的英寸数。
+ */
 function widthNear(text: string, kindRe: RegExp): number | undefined {
   const m = kindRe.exec(text);
   if (!m || m.index === undefined) return undefined;
+
   const after = text.slice(m.index + m[0].length, m.index + m[0].length + 32);
-  const w = after.match(/^\s*[:=]?\s*(\d{2,3})\s*(?:["″]|in(?:ch(?:es)?)?|寸)?/);
-  if (!w) return undefined;
-  const n = Number(w[1]);
-  if (n >= 12 && n <= 60) return n;
+  const afterMatch = after.match(/^\s*[:=]?\s*(\d{2,3})\s*(?:["″]|in(?:ch(?:es)?)?|寸)?/);
+  if (afterMatch) {
+    const n = Number(afterMatch[1]);
+    if (n >= 12 && n <= 60) return n;
+  }
+
+  let breakIdx = 0;
+  for (let i = m.index - 1; i >= 0; i -= 1) {
+    if (SEGMENT_BREAK_RE.test(text[i]!)) { breakIdx = i + 1; break; }
+  }
+  const before = text.slice(breakIdx, m.index);
+  const beforeMatch = before.match(
+    /(\d{2,3})\s*(?:["″]|in(?:ch(?:es)?)?|寸)?[^0-9、，,；;。！？!?\n]{0,12}$/,
+  );
+  if (beforeMatch) {
+    const n = Number(beforeMatch[1]);
+    if (n >= 12 && n <= 60) return n;
+  }
+
   return undefined;
 }
 
