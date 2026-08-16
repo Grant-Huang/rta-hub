@@ -106,18 +106,32 @@ export function buildSiteQuestions(
   const confirmCandidates: Candidate[] = [];
   const applianceCandidates: Candidate[] = [];
 
-  if (
-    plan.parsedGeometry.ceilingHeight == null
-    || plan.unresolvedItems.some((u) => u.field === "ceilingHeight" && !u.resolved)
-  ) {
-    blockingCandidates.push({
-      id: "sq_ceiling",
-      kind: "ceiling",
-      mark: "Ceiling?",
-      promptFor: (q) => msg(lang,
-        `Q${q}: What is the ceiling height in inches? (e.g. "ceiling 96")`,
-        `Q${q}: 层高多少英寸？（如「层高 96」）`),
-    });
+  {
+    const ceil = plan.parsedGeometry.ceilingHeight;
+    const ceilingPending = plan.unresolvedItems.some(
+      (u) => u.field === "ceilingHeight" && !u.resolved);
+    // 跟墙长同一个道理：完全没读到数字才是硬缺口；已经读到一个值（哪怕还没
+    // 客户确认——FR-15.5 视觉结果不能自动标已确认）跟墙面特征一样，是"看一眼
+    // 对不对"，归进 confirmCandidates，不该被当成"什么都不知道"单独拦在最前面。
+    if (ceil == null) {
+      blockingCandidates.push({
+        id: "sq_ceiling",
+        kind: "ceiling",
+        mark: "Ceiling?",
+        promptFor: (q) => msg(lang,
+          `Q${q}: What is the ceiling height in inches? (e.g. "ceiling 96")`,
+          `Q${q}: 层高多少英寸？（如「层高 96」）`),
+      });
+    } else if (ceilingPending) {
+      confirmCandidates.push({
+        id: "sq_ceiling",
+        kind: "ceiling",
+        mark: "Ceiling?",
+        promptFor: (q) => msg(lang,
+          `Q${q}: Confirm ceiling height (read ~${ceil}")?`,
+          `Q${q}: 请确认层高（读到约 ${ceil}"）？`),
+      });
+    }
   }
 
   for (const run of runs) {

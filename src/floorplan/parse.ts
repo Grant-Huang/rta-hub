@@ -450,7 +450,6 @@ export function interpretationSummary(
   const lang = language;
   const runs = plan.parsedGeometry.wallRuns;
   const ceil = plan.parsedGeometry.ceilingHeight;
-  const pending = plan.unresolvedItems.filter((u) => !u.resolved);
   // 排障用的尾标——客户读不出含义，但一眼能告诉运营这次是不是真的用了 OCR 兜底
   // （而不是 OCR_BASE_URL 没配、静默退回纯 VL）。跟提示语拼在同一句里，不单开一条消息。
   const ocrTag = outcome.status === "ok" ? (outcome.ocrGrounded ? " [g:ocr+vl]" : " [g:vl]") : "";
@@ -479,21 +478,16 @@ export function interpretationSummary(
   if (ceil != null) {
     parts.push(msg(lang, `Ceiling ~${ceil}".`, `层高约 ${ceil}"。`));
   }
-  if (pending.length > 0) {
-    // 没被标 Q# 的墙已经算确认——这句话跟在"请确认 N 处"后面，说明白"不是
-    // 全部都还悬而未决，只有标了 Q# 的那几处需要你看一眼"。
-    parts.push(msg(lang,
-      `Please confirm ${pending.length} item(s) I'm unsure about (see Q# on the diagram) — `
-        + "the rest is already confirmed and editable anytime in the Confirmed panel on the right.",
-      `有 ${pending.length} 处我拿不准，请按图上的 Q# 确认一下——`
-        + "其余的已经算确认，如需修改可在右侧「已确认」栏随时编辑。"));
-  } else {
-    parts.push(msg(lang,
-      "If a wall label doesn't match your room, tell me which is which — "
-        + "otherwise this is already confirmed and editable anytime in the Confirmed panel on the right.",
-      "如果墙名和你家对不上，告诉我哪面是哪面——"
-        + "否则这些都已算确认，如需修改可在右侧「已确认」栏随时编辑。"));
-  }
+  // 这里不再报"有 N 处不确定"或提"图上 Q#"——这份摘要在 buildSiteQuestions
+  // 分批出题之前生成，不知道这一轮实际会问几条，报错了数字比不报更容易让
+  // 客户觉得答非所问（"说好 8 处，怎么只问了 1 条"）。真正会问几条、问哪些，
+  // 交给紧随其后的 Q# 列表自己说话（数量本身就是答案）；没被那份列表点到的，
+  // 就是已经算确认，可以在右侧「已确认」栏改。
+  parts.push(msg(lang,
+    "If a wall label doesn't match your room, tell me which is which. "
+      + "Anything not asked below is already confirmed and editable anytime in the Confirmed panel on the right.",
+    "如果墙名和你家对不上，告诉我哪面是哪面。"
+      + "下面没有被追问到的部分，已经算确认，可以在右侧「已确认」栏随时修改。"));
   return parts.join(lang === "zh" ? "" : " ") + ocrTag;
 }
 

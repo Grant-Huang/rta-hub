@@ -104,6 +104,50 @@ test("零墙段（needsManualWalls）时墙面特征批的前置条件不成立�
   assert.deepEqual(site.questions.map((q) => q.kind), ["appliance_kinds"]);
 });
 
+test("层高已经读到一个值（如识图推定96寸），但仍待确认：跟墙面特征同批一起问，不单独拦在最前面", () => {
+  // 复现真实回归场景：视觉抽取给出层高数值但置信度不够高，ceilingFromVision
+  // 照样会留一条 unresolvedItems（FR-15.5：视觉结果不能自动标已确认）。
+  // 这条不该被当成"完全不知道层高"单独问一轮——它跟"墙长已经读到但待确认"
+  // 是同一类"看一眼对不对"，该跟墙面特征捆一批。
+  const plan = basePlan({
+    parsedGeometry: {
+      wallRuns: [
+        { id: "wr_n", label: "North", length: 144, startsAtCorner: true, endsAtCorner: true, features: [] },
+      ],
+      ceilingHeight: 96,
+      confidence: 0.8,
+    },
+    unresolvedItems: [
+      { id: "u1", target: { kind: "global" }, field: "ceilingHeight", reason: "x", resolved: false },
+    ],
+  });
+  const site = buildSiteQuestions(plan, "", "en");
+  const kinds = site.questions.map((q) => q.kind);
+  assert.ok(kinds.includes("ceiling"), "层高该出现在这一批里");
+  assert.ok(kinds.includes("plumbing"), "层高不该单独拦住墙面特征这一批");
+  const ceilingQ = site.questions.find((q) => q.kind === "ceiling");
+  assert.match(ceilingQ!.prompt, /confirm/i, "有值待确认的措辞该是「确认」而不是「是多少」");
+  assert.match(ceilingQ!.prompt, /96/, "措辞里该带上已经读到的数值，不是从零问起");
+});
+
+test("层高完全没读到值：仍然是硬缺口，单独一批先问", () => {
+  const plan = basePlan({
+    parsedGeometry: {
+      wallRuns: [
+        { id: "wr_n", label: "North", length: 144, startsAtCorner: true, endsAtCorner: true, features: [] },
+      ],
+      ceilingHeight: undefined,
+      confidence: 0.8,
+    },
+    unresolvedItems: [
+      { id: "u1", target: { kind: "global" }, field: "ceilingHeight", reason: "x", resolved: false },
+    ],
+  });
+  const site = buildSiteQuestions(plan, "", "en");
+  assert.deepEqual(site.questions.map((q) => q.kind), ["ceiling"]);
+  assert.match(site.questions[0]!.prompt, /what is the ceiling height/i);
+});
+
 test("家电已知、且有推定宽度：家电批出的是 appliance_width，不是 appliance_kinds", () => {
   const plan = basePlan({
     parsedGeometry: { wallRuns: [], ceilingHeight: 96, confidence: 0.8 },
