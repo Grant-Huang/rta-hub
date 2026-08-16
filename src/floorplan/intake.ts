@@ -22,9 +22,32 @@ export function wantsShapeExample(text: string): boolean {
 }
 
 /**
+ * 这条待确认项是不是"图上真没读出来"，而不是"读到了、按 FR-15.5 例行要你确认一下"。
+ *
+ * `parse.ts` 的 `wallLengthFromVision` / `ceilingFromVision` / `ingestRawFeature`
+ * 无论置信度多高都会挂一条待确认项——这是刻意设计（视觉结果不能自动当成
+ * 已确认），但也意味着 `unresolvedItems.length` 本身不能当"这次扫描质量差"的
+ * 信号：一间普通厨房光墙长+窗+门+上下水就轻松凑够 3 条，哪怕每个字段都读对了。
+ * 真正"读不出来"的信号是：这条待确认项对应的字段在几何里**压根没有值**
+ * （墙长仍是 0、层高仍是 undefined、特征没能落成 WallFeature）。
+ */
+function isGenuinelyUnreadable(plan: FloorPlan, item: FloorPlan["unresolvedItems"][number]): boolean {
+  if (item.target.kind === "wallRun" && item.field === "length") {
+    const run = plan.parsedGeometry.wallRuns.find((r) => r.id === item.target.id);
+    return !run || run.length <= 0;
+  }
+  if (item.target.kind === "global" && item.field === "ceilingHeight") {
+    return plan.parsedGeometry.ceilingHeight == null;
+  }
+  if (item.target.kind === "feature") return false; // 已经落成具体特征，只是例行确认
+  if (item.target.kind === "wallRun") return true; // feature.kind / feature.<kind>.offset：没能落成特征
+  return true; // 兜底（如全局 note）：不认识就按"没读出来"算，不静默放过
+}
+
+/**
  * 是否建议用户按示例补标注后重新上传。
  *
- * 零墙段 / 抽取失败 / 大量 unresolved / 整体置信度很低 时为 true。
+ * 零墙段 / 抽取失败 / 大量**真读不出来**的项 / 整体置信度很低 时为 true。
  * 视觉未配置（notConfigured）不逼重传——应走手输。
  */
 export function shouldSuggestReupload(
@@ -38,20 +61,21 @@ export function shouldSuggestReupload(
   if (runs.length === 0) return true;
 
   const pending = plan.unresolvedItems.filter((u) => !u.resolved);
-  if (pending.length >= REUPLOAD_PENDING_MIN) return true;
+  const unreadable = pending.filter((u) => isGenuinelyUnreadable(plan, u));
+  if (unreadable.length >= REUPLOAD_PENDING_MIN) return true;
 
   if (
     plan.parseConfidence > 0
     && plan.parseConfidence < 0.5
-    && pending.length >= 2
+    && unreadable.length >= 2
   ) {
     return true;
   }
 
-  const wallLenPending = pending.filter(
-    (u) => u.field === "length" || (u.target.kind === "wallRun" && u.field.includes("length")),
+  const wallLenUnreadable = unreadable.filter(
+    (u) => u.target.kind === "wallRun" && u.field === "length",
   );
-  if (runs.length >= 2 && wallLenPending.length >= runs.length) return true;
+  if (runs.length >= 2 && wallLenUnreadable.length >= runs.length) return true;
 
   return false;
 }
