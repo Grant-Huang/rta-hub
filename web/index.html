@@ -130,6 +130,10 @@
   .confirmed .kv dd { margin:0; color:#e6e8eb; word-break:break-word; }
   .confirmed .kv dd.tbd, .confirmed .tbd { color:#8b94a3; font-style:italic; }
   .confirmed h3 { margin:0 0 8px; font-size:12.5px; color:#9aa4b2; font-weight:600; }
+  .fp-sketch { margin:0 0 14px; }
+  .fp-sketch img { max-width:100%; max-height:280px; object-fit:contain; display:block;
+                   background:#fff; border-radius:8px; }
+  .fp-sketch-meta { display:flex; gap:8px; align-items:center; margin-top:6px; }
   /* 分组头——已确认栏按 space→site→appliances→intent→seller 分组渲染，
      每组一个头（标题 + 聚合状态），组内直接是该分组的原子事实行，不再有
      第二份叙事文字复述同一批数字。 */
@@ -410,6 +414,8 @@ let confirmed = {
   confirmedFacts: [],
   readyToAskDesign: false,
   confirmationText: '',
+  /** 本会话刚上传的户型图 data URL，供已确认栏预览/下载。 */
+  floorPlanPreviews: [],
 };
 
 /** 三态颜色：已确认(绿) / 待确认——含推荐(黄) / 未提及(灰)。两处 confirmed 渲染共用。 */
@@ -512,6 +518,7 @@ function resetConfirmed() {
     requirements: '', missingFields: [],
     briefSections: null, confirmedFacts: [],
     readyToAskDesign: false, confirmationText: '',
+    floorPlanPreviews: [],
   };
   renderConfirmed();
 }
@@ -650,6 +657,7 @@ function renderEngagementConfirmed(confirmedBody, companyName) {
 
   el.innerHTML = `
     <div class="confirmed-block">
+      ${renderFloorPlanSketchHtml()}
       ${groupsHtml || `<p class="hint">${t('confirmedEmpty')}</p>`}
       <div class="sync-row" style="margin-top:12px">
         ${confirmedBody.shared?.differsFromParent
@@ -727,6 +735,22 @@ async function pullEngagementShared(eidOverride) {
 $('engagementOfferYes')?.addEventListener('click', acceptEngagementOffer);
 $('engagementOfferNo')?.addEventListener('click', hideEngagementOffer);
 
+function renderFloorPlanSketchHtml() {
+  const previews = confirmed.floorPlanPreviews || [];
+  if (!previews.length) return '';
+  const items = previews.map((p, i) => {
+    const isImg = (p.mime || '').startsWith('image/');
+    return `<div class="fp-sketch">
+      ${isImg && p.dataUrl ? `<img alt="${esc(p.name)}" src="${p.dataUrl}" />` : ''}
+      <div class="fp-sketch-meta">
+        <span class="hint">${esc(p.name)}</span>
+        <button type="button" class="fact-edit-btn" data-dl-sketch="${i}">${esc(t('fpSketchDownload'))}</button>
+      </div>
+    </div>`;
+  }).join('');
+  return `<h3>${t('fpSketchTitle')}</h3>${items}`;
+}
+
 /**
  * 已确认面板的统一渲染：按 `sections` 顺序（space→site→appliances→intent→
  * seller，几何最基础排最前）逐组输出一个分组头 + 该组的原子事实行。主会话
@@ -767,6 +791,7 @@ function renderConfirmed() {
     const groupsHtml = factGroupsHtml(confirmed.briefSections, confirmed.confirmedFacts, true);
     el.innerHTML = `
       ${designImportExportToolbarHtml()}
+      ${renderFloorPlanSketchHtml()}
       ${groupsHtml || `<p class="hint">${t('confirmedEmpty')}</p>`}
       ${confirmed.layoutNote
         ? `<div class="fact-group"><div class="fact-group-head"><span class="fact-group-title">${esc(t('layoutResult'))}</span></div><p class="hint" style="padding:4px 0">${esc(confirmed.layoutNote)}</p></div>`
@@ -777,7 +802,7 @@ function renderConfirmed() {
 
   // 回退：尚无 brief 时用轻量提示——导入按钮尤其在这个状态下有用
   // （还没聊过任何东西，直接导入一份现成的设计输入作为起点）。
-  el.innerHTML = `${designImportExportToolbarHtml()}<p class="hint">${t('confirmedEmpty')}</p>`;
+  el.innerHTML = `${designImportExportToolbarHtml()}${renderFloorPlanSketchHtml()}<p class="hint">${t('confirmedEmpty')}</p>`;
 }
 
 /** 已确认面板顶部的导入/导出小工具条——两个按钮共用一条通用错误提示。 */
@@ -879,7 +904,17 @@ $('confirmedPane')?.addEventListener('click', (e) => {
   const confirmBtn = e.target.closest('[data-fact-confirm]');
   if (confirmBtn) { confirmFact(confirmBtn.dataset.factConfirm); return; }
   if (e.target.closest('[data-export-design]')) { exportDesignInput(); return; }
-  if (e.target.closest('[data-import-design]')) { triggerImportDesign(); }
+  if (e.target.closest('[data-import-design]')) { triggerImportDesign(); return; }
+  const sketchDl = e.target.closest('[data-dl-sketch]');
+  if (sketchDl) {
+    const p = (confirmed.floorPlanPreviews || [])[Number(sketchDl.dataset.dlSketch)];
+    if (!p?.dataUrl) return;
+    void downloadArtifact({ name: p.name, mime: p.mime, source: p.dataUrl })
+      .catch((err) => {
+        factEditErr = err.message || t('downloadFail');
+        renderConfirmed();
+      });
+  }
 });
 
 /**
@@ -1343,7 +1378,18 @@ async function resolveArtifactBlob(a) {
     return res.blob();
   }
   const raw = typeof a.source === 'function' ? a.source() : a.source;
-  return new Blob([raw], { type: a.mime });
+  const { artifactSourceToBytes } = await import('/artifact-blob.js');
+  const parts = artifactSourceToBytes(raw);
+  return new Blob([parts], { type: a.mime });
+}
+
+async function downloadArtifact(a) {
+  const blob = await resolveArtifactBlob(a);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = a.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function showArtifactPreview(idx) {
@@ -1402,12 +1448,7 @@ $('downloads').addEventListener('click', async (e) => {
     const a = artifacts[Number(dl.dataset.dl)];
     if (!a) return;
     try {
-      const blob = await resolveArtifactBlob(a);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url; link.download = a.name;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await downloadArtifact(a);
     } catch (err) {
       $('content').insertAdjacentHTML('afterbegin',
         `<div class="err">${esc(err.message || t('downloadFail'))}</div>`);
@@ -1426,12 +1467,7 @@ $('content').addEventListener('click', async (e) => {
   const a = artifacts[Number(dl.dataset.dl)];
   if (!a) return;
   try {
-    const blob = await resolveArtifactBlob(a);
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url; link.download = a.name;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await downloadArtifact(a);
   } catch (err) {
     $('content').insertAdjacentHTML('afterbegin',
       `<div class="err">${esc(err.message || t('downloadFail'))}</div>`);
@@ -2636,10 +2672,19 @@ async function sendWithAttachments(text) {
       ]);
   }
   renderQuickReplies([], { suppressGeometry: true });
+  confirmed.floorPlanPreviews = batch
+    .filter((p) => p.dataUrl)
+    .map((p) => ({
+      name: p.file.name || 'floorplan',
+      mime: p.file.type || 'image/png',
+      dataUrl: p.dataUrl,
+    }));
   await renderFloorPlan(body);
   for (const p of batch) {
-    registerArtifact(p.file.name || 'floorplan', p.file.type || 'image/png', p.dataUrl || '');
+    registerArtifact(p.file.name || 'floorplan', p.file.type || 'image/png', p.dataUrl || '', { silent: true });
   }
+  renderConfirmed();
+  switchPanelTab('confirmed');
   refreshConversations();
 }
 
