@@ -248,6 +248,89 @@ function genericHelp(language: UiLanguage): StaffAgentOutcome {
 }
 
 /**
+ * 员工第一次打开这条常驻线程时看到的引导——主动列出发布一版规格前需要
+ * 备齐的资产，以及上传文件时系统认哪些格式。不是"等员工问了才说"，
+ * 因为大多数新入驻的厂商根本不知道要准备这些东西。
+ *
+ * 五金/配件加价项、运费规则**没有列进来**：这两类字段在类型和定价引擎里
+ * 已经存在，但目前既不在文件导入的表格里，也不在这里能识别的聊天意图
+ * 里——没有落地路径的东西不能写进引导语，写了就是承诺一个做不到的事。
+ */
+export function welcomeMessage(language: UiLanguage): string {
+  if (language === "zh") {
+    return "欢迎！在这里跟我聊几句，或者直接发文件，就能把产品规格和报价立起来。\n\n" +
+      "发布一版规格前需要备齐：\n" +
+      "1. 柜型清单——型号码、类型（地柜/吊柜/高柜/转角柜…）、可选宽高深尺寸\n" +
+      "2. 价格组——门板花色分档\n" +
+      "3. 门板样式——每种门板归属哪个价格组\n" +
+      "4. 价格矩阵——每个型号在每个价格组下的标价\n" +
+      "5. 箱体板材加价档（可选，如「全夹板 +20%」）\n\n" +
+      "门店地址、全店统一的标准折扣，直接跟我说一句就行（如「门店地址是：…」「标准折扣 15%」）。\n\n" +
+      "上传文件支持 .xlsx / .json（直接按表结构解析）；.pdf 也收，但要靠 AI 抽取，" +
+      "抽出来的内容我会挑出来跟你逐条确认。Word/.txt 暂不支持——表格结构不可靠，麻烦转存成 Excel。\n\n" +
+      "现在要发文件，还是先聊？";
+  }
+  return "Welcome! Chat with me here, or just send a file, to get your product specs and pricing live.\n\n" +
+    "Before a spec version can be published, I need:\n" +
+    "1. Module list — codes, types (base/wall/tall/corner…), available width/height/depth options\n" +
+    "2. Price groups — the door-finish price tiers\n" +
+    "3. Door styles — which price group each door style belongs to\n" +
+    "4. Price matrix — the list price for each module in each price group\n" +
+    "5. Box-material upcharge tiers (optional, e.g. \"plywood box +20%\")\n\n" +
+    'Store address and a storewide standard discount can just be said in chat ' +
+    '(e.g. "store address: …", "standard discount 15%").\n\n' +
+    "For uploads: .xlsx and .json are parsed directly from their table structure; .pdf is also accepted " +
+    "but goes through AI extraction, and I'll walk you through confirming anything it pulls out. " +
+    "Word/.txt aren't supported — there's no reliable table structure to read, so please save as Excel instead.\n\n" +
+    "Want to send a file now, or talk through it first?";
+}
+
+export interface OnboardingReminder {
+  text: string;
+  /**
+   * 用来判断这条提醒是否已经出现在线程最后一条消息里。
+   *
+   * 追问场景不能直接拿 `text` 整句去比：`renderNextQuestionPrompt` 生成的句子
+   * 会因为「记下了。」这类前缀、剩余条数变化而跟上一条不完全相同，逐字比对会
+   * 把"同一条追问"误判成"新内容"，每次开页面都重复贴一遍。改成只比对追问本身
+   * 的题干（`OnboardingQuestion.prompt`，两处生成都原样嵌入），前缀/计数怎么变
+   * 都认得出是同一条。
+   */
+  dedupeKey: string;
+}
+
+/**
+ * 每次打开这条线程都要重新判断：厂商入驻完成了吗（发布过至少一版规格）？
+ * 没完成的话，还欠什么——不能指望厂商自己记得上次聊到哪、还差哪一项。
+ *
+ * 已发布过至少一版规格（`publishedSpecVersionId` 有值）就不再提醒——后续
+ * 改价/加型号是维护动作，不是"入驻没走完"，不该被同一套提醒缠上。
+ */
+export function onboardingReminder(
+  publishedSpecVersionId: string | undefined,
+  session: OnboardingSession | undefined,
+  language: UiLanguage,
+): OnboardingReminder | undefined {
+  if (publishedSpecVersionId) return undefined;
+
+  if (!session) {
+    const text = welcomeMessage(language);
+    return { text, dedupeKey: text };
+  }
+
+  const pending = nextUnanswered(session);
+  if (pending) {
+    return { text: renderNextQuestionPrompt(session, language), dedupeKey: pending.prompt };
+  }
+
+  // 没有待答项了：借用 renderNextQuestionPrompt 的"已清空"分支而不是另写一句——
+  // 回答最后一条追问时，聊天里已经用这句话确认过了；用词不一致会让去重比对
+  // 失效（GET 又贴一遍看起来一样但字面不同的话），厂商会觉得系统在重复自己。
+  const text = renderNextQuestionPrompt(session, language);
+  return { text, dedupeKey: text };
+}
+
+/**
  * 意图路由。**先**看这句话是不是明确的地址/折扣设置——不管当前是不是正卡在入驻
  * 追问上，员工都应该能随时插一句"门店地址是…"而不被当成在回答上一条追问
  * （追问答案本身是精确 token，不会被误判成地址/折扣意图，见 extractProfileIntent

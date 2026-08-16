@@ -35,10 +35,17 @@ async function newCompany(): Promise<{ id: string; token: string }> {
   return { id, token: r.accessToken };
 }
 
-test("新公司的员工线程一开始是空的", async () => {
+test("新公司第一次打开线程会看到引导语，列出要备齐的资产和支持的文件格式", async () => {
   const { id, token } = await newCompany();
   const r = await req(`/api/company/${id}/staff-chat`, { company: token });
-  assert.deepEqual(r.thread.messages, []);
+  assert.equal(r.thread.messages.length, 1);
+  assert.equal(r.thread.messages[0].role, "assistant");
+  assert.match(r.thread.messages[0].content, /[Pp]rice matrix/);
+  assert.match(r.thread.messages[0].content, /\.xlsx/);
+
+  // 再打开一次不会重复种引导语
+  const again = await req(`/api/company/${id}/staff-chat`, { company: token });
+  assert.equal(again.thread.messages.length, 1);
 });
 
 test("说「门店地址是：...」直接落地到 CabinetCompany.storeAddress", async () => {
@@ -123,6 +130,58 @@ test("答不上追问的自由文本，Agent 明确说没听懂，不悄悄划�
 
   const session = await req(`/api/company/${id}/spec/sessions/${upload.session.id}`, { company: token });
   assert.ok(session.unresolvedCount > 0, "没答上的那条不该被悄悄划掉");
+});
+
+test("每次打开页面都重新检查入驻是否完成：有待答追问就继续提醒，不会重复贴同一条", async () => {
+  const { id, token } = await newCompany();
+
+  const upload = await req(`/api/company/${id}/staff-chat/catalog`, {
+    method: "POST", company: token,
+    body: JSON.stringify({
+      priceGroups: [{ code: "STD", displayName: "Standard" }],
+      doorStyles: [{ name: "Plain White", priceGroup: "STD" }],
+      modules: [{ code: "ZQ7", type: "base", widths: "30", heights: "34-1/2", depths: "24" }],
+      priceMatrix: [{ moduleCode: "ZQ7", priceGroup: "STD", listPrice: "200.00" }],
+    }),
+  });
+  assert.ok(upload.session.unresolved.length > 0, "认不出的码应该有待确认项");
+  const afterUpload = upload.thread.messages.length;
+
+  // 上传刚完成，追问已经在最后一条消息里——重新打开页面不应该再贴一遍
+  const reopened = await req(`/api/company/${id}/staff-chat`, { company: token });
+  assert.equal(reopened.thread.messages.length, afterUpload);
+
+  // 再打开几次也一样，不会越攒越多
+  const reopenedAgain = await req(`/api/company/${id}/staff-chat`, { company: token });
+  assert.equal(reopenedAgain.thread.messages.length, afterUpload);
+
+  // 走完追问循环并发布
+  let session = await req(`/api/company/${id}/spec/sessions/${upload.session.id}`, { company: token });
+  let guard = 0;
+  while ((session.pendingQuestions ?? []).length > 0 && guard++ < 10) {
+    const q = session.pendingQuestions[0];
+    const answer = /elevation/i.test(String(q.prompt)) ? "F2_DOUBLE_DOOR" : "doorStorage";
+    await req(`/api/company/${id}/staff-chat/messages`, {
+      method: "POST", company: token, body: JSON.stringify({ text: answer }),
+    });
+    session = await req(`/api/company/${id}/spec/sessions/${upload.session.id}`, { company: token });
+  }
+  assert.equal(session.unresolvedCount, 0);
+
+  // 没有待答项了，但还没发布——打开页面应该提醒"可以发布了"，且只提醒一次
+  const readyToPublish = await req(`/api/company/${id}/staff-chat`, { company: token });
+  assert.match(readyToPublish.thread.messages.at(-1).content, /可以发布|ready to publish/i);
+  const readyLen = readyToPublish.thread.messages.length;
+  const readyAgain = await req(`/api/company/${id}/staff-chat`, { company: token });
+  assert.equal(readyAgain.thread.messages.length, readyLen);
+
+  await req(`/api/company/${id}/spec/sessions/${upload.session.id}/publish`, {
+    method: "POST", company: token, body: JSON.stringify({ publishedBy: "test" }),
+  });
+
+  // 发布完成——入驻结束，打开页面不再提醒
+  const afterPublish = await req(`/api/company/${id}/staff-chat`, { company: token });
+  assert.equal(afterPublish.thread.messages.length, readyLen);
 });
 
 test("不支持的文件类型（.txt）明确拒绝，不假装能解析", async () => {
