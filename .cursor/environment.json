@@ -1,0 +1,12 @@
+{
+  "name": "RTA-Hub",
+  "user": "ubuntu",
+  "install": "pnpm install --frozen-lockfile && npm --prefix web-ui ci && pnpm build:ui",
+  "terminals": [
+    {
+      "name": "dev-server",
+      "command": "pnpm dev"
+    }
+  ],
+  "ports": [8790]
+}
