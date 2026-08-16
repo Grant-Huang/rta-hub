@@ -66,6 +66,7 @@ import {
   mergeRequirements, missingFields, orchestratorReply,
 } from "./agents/orchestrator.js";
 import { newTrainerConversation, trainerTurn } from "./agents/trainer.js";
+import { polishReplyTone } from "./agents/reply-tone.js";
 import {
   assertCanAccessTrainer,
   assertCanManageKnowledge,
@@ -3075,10 +3076,13 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     content: textPart ? `${textPart}\n${uploadLine}` : uploadLine,
     at,
   };
-  const interpretMsg: ChatMessage = { role: "assistant", content: interpretation, at };
+  // 润色一次、复用两处——`interpretation` 既进这条消息也单独作为响应字段返回给
+  // 客户端渲染气泡，两边必须字面相等，否则重蹈刚修的"客户端字符串去重形同虚设"覆辙。
+  const polishedInterpretation = await polishReplyTone(appCtx.llm, interpretation, fpLang);
+  const interpretMsg: ChatMessage = { role: "assistant", content: polishedInterpretation, at };
   const trailerText = trailerBits.filter(Boolean).join("\n");
   const trailerMsg: ChatMessage | undefined = trailerText
-    ? { role: "assistant", content: trailerText, at }
+    ? { role: "assistant", content: await polishReplyTone(appCtx.llm, trailerText, fpLang), at }
     : undefined;
   await appCtx.repos.conversations.update(conv.id, {
     messages: [...conv.messages, echoMsg, interpretMsg, ...(trailerMsg ? [trailerMsg] : [])],
@@ -3091,7 +3095,7 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     questions: pendingQuestions(plan!),
     // 视觉抽取走没走、为什么没读出东西——四种情况看起来一样，要做的事完全不同
     extraction,
-    interpretation,
+    interpretation: polishedInterpretation,
     suggestReupload,
     intakeSamples: intakeSampleCards(fpLang),
     // FR-17.2：解读可用时前端勿再展示加墙/尺寸/形状 quick replies
@@ -3248,12 +3252,15 @@ app.post("/api/conversations/:id/floorplan-template", requireAccount, async (c) 
   const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
   const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
   const interpretation = [applied.interpretation, ...sitePrompts].filter(Boolean).join("\n");
+  // 润色一次、复用两处：进聊天消息的文本必须和响应里 `interpretation` 字段字面
+  // 相等，否则客户端按字符串比对去重会失效（同一句话在气泡和历史消息里对不上）。
+  const polishedInterpretation = await polishReplyTone(appCtx.llm, interpretation, fpLang);
   const echoMsg: ChatMessage = {
     role: "user",
     content: msg(fpLang, `[Picked floor-plan template: ${templateId}]`, `[选择户型模板：${templateId}]`),
     at,
   };
-  const interpretMsg: ChatMessage = { role: "assistant", content: interpretation, at };
+  const interpretMsg: ChatMessage = { role: "assistant", content: polishedInterpretation, at };
   await appCtx.repos.conversations.update(conv.id, {
     messages: [...conv.messages, echoMsg, interpretMsg],
   });
@@ -3263,7 +3270,7 @@ app.post("/api/conversations/:id/floorplan-template", requireAccount, async (c) 
     ready: isLayoutReady(plan),
     // 完整性优先：拿不准的地方逐条追问，不静默跳过（FR-3）
     questions: pendingQuestions(plan),
-    interpretation,
+    interpretation: polishedInterpretation,
     intakeSamples: intakeSampleCards(fpLang),
     // FR-17.2：解读可用时前端勿再展示加墙/尺寸/形状 quick replies
     suppressGeometryIntake: briefing.geometryUsable,
@@ -3324,12 +3331,15 @@ app.post("/api/conversations/:id/design-input", requireAccount, async (c) => {
         "已导入设计数据——所有项都已标记为确认过的。"),
     ...sitePrompts,
   ].filter(Boolean).join("\n");
+  // 润色一次、复用两处：同上——聊天消息文本和响应里 `interpretation` 字段必须
+  // 字面相等，否则客户端按字符串比对去重会失效。
+  const polishedInterpretation = await polishReplyTone(appCtx.llm, interpretation, fpLang);
   const echoMsg: ChatMessage = {
     role: "user",
     content: msg(fpLang, "[Imported design input]", "[导入设计输入]"),
     at,
   };
-  const interpretMsg: ChatMessage = { role: "assistant", content: interpretation, at };
+  const interpretMsg: ChatMessage = { role: "assistant", content: polishedInterpretation, at };
   await appCtx.repos.conversations.update(conv.id, {
     messages: [...conv.messages, echoMsg, interpretMsg],
   });
@@ -3338,7 +3348,7 @@ app.post("/api/conversations/:id/design-input", requireAccount, async (c) => {
     floorPlan: plan,
     ready: isLayoutReady(plan),
     questions: pendingQuestions(plan),
-    interpretation,
+    interpretation: polishedInterpretation,
     intakeSamples: intakeSampleCards(fpLang),
     suppressGeometryIntake: briefing.geometryUsable,
     ...briefing,

@@ -105,7 +105,7 @@ test("解读可用时 geometrySuppressesIntake，尺寸/形状不进 quick repli
 
 test("低置信 / 多 unresolved → 建议重传", () => {
   const p = planTwoWalls();
-  assert.equal(shouldSuggestReupload(p, { status: "ok" }), false);
+  assert.equal(shouldSuggestReupload(p, { status: "ok", ocrGrounded: false }), false);
   assert.equal(shouldSuggestReupload(p, { status: "emptyResult" }), true);
   assert.equal(shouldSuggestReupload(p, { status: "failed", reason: "timeout" }), true);
 
@@ -117,7 +117,7 @@ test("低置信 / 多 unresolved → 建议重传", () => {
       { id: "3", target: { kind: "global" }, field: "ceilingHeight", reason: "x", resolved: false },
     ],
   };
-  assert.equal(shouldSuggestReupload(many, { status: "ok" }), true);
+  assert.equal(shouldSuggestReupload(many, { status: "ok", ocrGrounded: false }), true);
 });
 
 test("开场欢迎语优先户型；示例白名单含设计草图 jpg", () => {

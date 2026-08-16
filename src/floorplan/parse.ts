@@ -32,6 +32,8 @@ export interface VisionExtractor {
 
 /** 模型的原始输出。字段全部可选——模型看不清就该留空，而不是编。 */
 export interface RawExtraction {
+  /** 这次抽取是否真的用上了 PaddleOCR 读数外援（而非静默退化为纯 VL）。 */
+  ocrGrounded?: boolean;
   ceilingHeight?: number;
   ceilingHeightConfidence?: number;
   wallRuns?: {
@@ -344,7 +346,7 @@ export interface CreateFloorPlanInput {
  * 这正是这一轮测试里「视觉模型尚未测试」卡住的地方。
  */
 export type ExtractionOutcome =
-  | { status: "ok" }
+  | { status: "ok"; ocrGrounded: boolean }
   | { status: "notConfigured" }
   | { status: "noImage" }
   | { status: "failed"; reason: string }
@@ -410,7 +412,7 @@ export async function createFloorPlanWithOutcome(
   if (extractor && image) {
     try {
       raw = await extractor.extract({ image, mimeType: input.file.mimeType });
-      extraction = raw ? { status: "ok" } : { status: "emptyResult" };
+      extraction = raw ? { status: "ok", ocrGrounded: raw.ocrGrounded === true } : { status: "emptyResult" };
     } catch (err) {
       // 抽取失败不该让上传失败——手动录入这条路一直是通的（FR-3 的降级设计）。
       // 但**失败的原因要说出来**，否则配错端点的人只会看到"请手动录入"。
@@ -449,6 +451,9 @@ export function interpretationSummary(
   const runs = plan.parsedGeometry.wallRuns;
   const ceil = plan.parsedGeometry.ceilingHeight;
   const pending = plan.unresolvedItems.filter((u) => !u.resolved);
+  // 排障用的尾标——客户读不出含义，但一眼能告诉运营这次是不是真的用了 OCR 兜底
+  // （而不是 OCR_BASE_URL 没配、静默退回纯 VL）。跟提示语拼在同一句里，不单开一条消息。
+  const ocrTag = outcome.status === "ok" ? (outcome.ocrGrounded ? " [g:ocr+vl]" : " [g:vl]") : "";
 
   if (runs.length === 0) {
     const why = extractionNote(outcome, lang);
@@ -456,7 +461,7 @@ export function interpretationSummary(
       "I received your floor plan but couldn't read wall segments yet." +
         (why ? ` ${why}` : " Please confirm or enter each wall in chat."),
       "收到户型图了，但还没读出墙段。" +
-        (why ? ` ${why}` : " 请在对话里确认或补上每一面墙。"));
+        (why ? ` ${why}` : " 请在对话里确认或补上每一面墙。")) + ocrTag;
   }
 
   const wallLine = runs.map((r) =>
@@ -489,7 +494,7 @@ export function interpretationSummary(
       "如果墙名和你家对不上，告诉我哪面是哪面——"
         + "否则这些都已算确认，如需修改可在右侧「已确认」栏随时编辑。"));
   }
-  return parts.join(lang === "zh" ? "" : " ");
+  return parts.join(lang === "zh" ? "" : " ") + ocrTag;
 }
 
 /** 把抽取结果翻成一句给客户看的话。 */

@@ -57,7 +57,8 @@ export type CallSite =
   | "geometryExtract"       // 聊天里的墙长/层高/家电结构化抽取——正则解析引擎的 LLM 主路径
   | "designCritique"        // 运营侧 DesignCritic 挑刺（FR-21）
   | "companyStaffOnboardingAnswer" // 厂商员工会话：追问答案 → faceTemplateId/roles（Type2 A）
-  | "companyStaffProfileIntent";   // 厂商员工会话：门店地址/标准折扣意图抽取（Type2 A）
+  | "companyStaffProfileIntent"    // 厂商员工会话：门店地址/标准折扣意图抽取（Type2 A）
+  | "replyTonePolish";      // 写死模板文案的语气润色（见 agents/reply-tone.ts）——只改措辞不改事实
 
 /**
  * 调用点 → 层级。
@@ -81,6 +82,9 @@ export const CALL_SITE_TIER: Record<CallSite, ModelTier> = {
   // 标准折扣一旦记错，厂商 Agent 会直接把错的折后价说给真实客户——同样是
   // 「错了不报错，只是一直错」的那类代价，不能按闲聊对待
   companyStaffProfileIntent: "reasoning",
+  // 润色错了顶多是话说得别扭（还有锚点校验兜底、失败即原样退回模板），
+  // 跟"答错一句常识，客户再问一遍就好"是同一档代价，走轻量层。
+  replyTonePolish: "chat",
 };
 
 export interface TierConfig {

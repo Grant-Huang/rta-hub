@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  createFloorPlanWithOutcome, extractionNote, type VisionExtractor,
+  createFloorPlanWithOutcome, extractionNote, interpretationSummary, type VisionExtractor,
 } from "../src/floorplan/parse.js";
 
 const input = {
@@ -78,6 +78,27 @@ test("模型读不出东西：与「报错」分开说——图糊和配置错�
     input, IMAGE, stub(async () => undefined));
   assert.equal(extraction.status, "emptyResult");
   assert.match(extractionNote(extraction, "zh")!, /太模糊|标注不清/);
+});
+
+test("读图回话末尾带排障标记——OCR 有没有真的兜底，客户看不出但运营能查", async () => {
+  const withOcr = await createFloorPlanWithOutcome(input, IMAGE, stub(async () => ({
+    wallRuns: [{ label: "北墙", length: 144, lengthConfidence: 0.9 }],
+    ocrGrounded: true,
+  })));
+  const withoutOcr = await createFloorPlanWithOutcome(input, IMAGE, stub(async () => ({
+    wallRuns: [{ label: "北墙", length: 137, lengthConfidence: 0.9 }],
+  })));
+
+  assert.match(
+    interpretationSummary(withOcr.plan, withOcr.extraction, "zh"),
+    /\[g:ocr\+vl\]$/,
+    "OCR 真的兜底了应该在结尾留痕",
+  );
+  assert.match(
+    interpretationSummary(withoutOcr.plan, withoutOcr.extraction, "zh"),
+    /\[g:vl\]$/,
+    "OCR 没生效（没配/失败/未触发）不该冒充成兜底过",
+  );
 });
 
 test("四种情况的说法互不相同——都一样就等于什么也没说", () => {
