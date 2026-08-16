@@ -41,6 +41,7 @@
 | `specTemplateParse` | 主力 | 错了整批型号的规格都是错的 |
 | `floorPlanExtract` | 视觉 | 输入是图 |
 | `designCritique` | 主力 | 运营侧 DesignCritic（FR-21）；无 key 确定性降级 |
+| `replyTonePolish` | 轻量 | 写死模板文案的语气润色（客户反馈"机械"）；锚点校验不过/无 key 就原样退回模板 |
 
 平台训练抽卡（FR-22）MVP 走确定性 `extractKnowledge`；有 LLM 时可挂轻量层，不进客户断言路径。
 

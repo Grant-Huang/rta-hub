@@ -66,6 +66,7 @@ import {
   mergeRequirements, missingFields, orchestratorReply,
 } from "./agents/orchestrator.js";
 import { newTrainerConversation, trainerTurn } from "./agents/trainer.js";
+import { polishReplyTone } from "./agents/reply-tone.js";
 import {
   assertCanAccessTrainer,
   assertCanManageKnowledge,
@@ -3065,7 +3066,7 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
   };
   const interpretMsg: ChatMessage = {
     role: "assistant",
-    content: assistantBits.filter(Boolean).join("\n"),
+    content: await polishReplyTone(appCtx.llm, assistantBits.filter(Boolean).join("\n"), fpLang),
     at,
   };
   await appCtx.repos.conversations.update(conv.id, {
@@ -3239,7 +3240,11 @@ app.post("/api/conversations/:id/floorplan-template", requireAccount, async (c) 
     content: msg(fpLang, `[Picked floor-plan template: ${templateId}]`, `[选择户型模板：${templateId}]`),
     at,
   };
-  const interpretMsg: ChatMessage = { role: "assistant", content: interpretation, at };
+  const interpretMsg: ChatMessage = {
+    role: "assistant",
+    content: await polishReplyTone(appCtx.llm, interpretation, fpLang),
+    at,
+  };
   await appCtx.repos.conversations.update(conv.id, {
     messages: [...conv.messages, echoMsg, interpretMsg],
   });
@@ -3315,7 +3320,11 @@ app.post("/api/conversations/:id/design-input", requireAccount, async (c) => {
     content: msg(fpLang, "[Imported design input]", "[导入设计输入]"),
     at,
   };
-  const interpretMsg: ChatMessage = { role: "assistant", content: interpretation, at };
+  const interpretMsg: ChatMessage = {
+    role: "assistant",
+    content: await polishReplyTone(appCtx.llm, interpretation, fpLang),
+    at,
+  };
   await appCtx.repos.conversations.update(conv.id, {
     messages: [...conv.messages, echoMsg, interpretMsg],
   });
