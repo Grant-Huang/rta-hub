@@ -190,7 +190,7 @@ import { blankTemplates, type ImportSources } from "./spec/import.js";
 import { parseJsonCatalog, parseXlsxCatalog, type JsonCatalogPayload, type UploadParseResult } from "./spec/catalog-upload.js";
 import { parsePdfCatalog, PdfCatalogExtractError } from "./spec/pdf-catalog-extract.js";
 import {
-  applyStandardDiscountPatch, companyStaffAgentReply, renderNextQuestionPrompt, welcomeMessage,
+  applyStandardDiscountPatch, companyStaffAgentReply, onboardingReminder, renderNextQuestionPrompt,
 } from "./agents/company-staff-agent.js";
 import type { CompanyOverrides } from "./render/templates.js";
 import { rtaIntro, rtaQuoteNote } from "./quote/rta-disclosure.js";
@@ -4345,18 +4345,30 @@ function staffThreadFor(companyId: string): CompanyStaffThread {
 }
 
 /**
- * 首次打开这条常驻线程时，把引导语种进去再返回——不能指望员工自己先开口问
- * "要准备什么"，大多数新入驻的厂商根本不知道有这张清单。
+ * 每次打开这条常驻线程都重新判断入驻是否完成（发布过至少一版规格）——
+ * 没完成的话补一条提醒（首次是完整引导语，之后是"还差哪一条"）。不能指望
+ * 厂商员工自己记得上次聊到哪、或者主动开口问"要准备什么"。
+ *
+ * 用 dedupeKey 而不是整句去重：同一条追问反复出现在"最后一条消息"里时，
+ * 不会因为前缀/剩余条数变了就被误判成新内容而重复贴一遍。
  */
 app.get("/api/company/:companyId/staff-chat", requireCompany, async (c) => {
   const companyId = param(c, "companyId");
+  const company = appCtx.repos.companies.byId(companyId)!;
   const thread = staffThreadFor(companyId);
-  if (thread.messages.length > 0) return c.json({ thread });
+  const session = appCtx.repos.onboardingSessions.all()
+    .find((s) => s.companyId === companyId && s.status !== "published");
+
+  const reminder = onboardingReminder(company.currentPublishedSpecVersionId, session, DEFAULT_LANGUAGE);
+  const last = thread.messages.at(-1);
+  const alreadyShown = !!reminder && last?.role === "assistant" && last.content.includes(reminder.dedupeKey);
+  if (!reminder || alreadyShown) return c.json({ thread });
 
   const seeded: CompanyStaffThread = {
     ...thread,
-    messages: [{ role: "assistant", content: welcomeMessage(DEFAULT_LANGUAGE), at: now() }],
+    messages: [...thread.messages, { role: "assistant", content: reminder.text, at: now() }],
     updatedAt: now(),
+    ...(session ? { activeOnboardingSessionId: session.id } : {}),
   };
   await appCtx.repos.companyStaffThreads.upsert(seeded);
   return c.json({ thread: seeded });

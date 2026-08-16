@@ -285,6 +285,51 @@ export function welcomeMessage(language: UiLanguage): string {
     "Want to send a file now, or talk through it first?";
 }
 
+export interface OnboardingReminder {
+  text: string;
+  /**
+   * 用来判断这条提醒是否已经出现在线程最后一条消息里。
+   *
+   * 追问场景不能直接拿 `text` 整句去比：`renderNextQuestionPrompt` 生成的句子
+   * 会因为「记下了。」这类前缀、剩余条数变化而跟上一条不完全相同，逐字比对会
+   * 把"同一条追问"误判成"新内容"，每次开页面都重复贴一遍。改成只比对追问本身
+   * 的题干（`OnboardingQuestion.prompt`，两处生成都原样嵌入），前缀/计数怎么变
+   * 都认得出是同一条。
+   */
+  dedupeKey: string;
+}
+
+/**
+ * 每次打开这条线程都要重新判断：厂商入驻完成了吗（发布过至少一版规格）？
+ * 没完成的话，还欠什么——不能指望厂商自己记得上次聊到哪、还差哪一项。
+ *
+ * 已发布过至少一版规格（`publishedSpecVersionId` 有值）就不再提醒——后续
+ * 改价/加型号是维护动作，不是"入驻没走完"，不该被同一套提醒缠上。
+ */
+export function onboardingReminder(
+  publishedSpecVersionId: string | undefined,
+  session: OnboardingSession | undefined,
+  language: UiLanguage,
+): OnboardingReminder | undefined {
+  if (publishedSpecVersionId) return undefined;
+
+  if (!session) {
+    const text = welcomeMessage(language);
+    return { text, dedupeKey: text };
+  }
+
+  const pending = nextUnanswered(session);
+  if (pending) {
+    return { text: renderNextQuestionPrompt(session, language), dedupeKey: pending.prompt };
+  }
+
+  // 没有待答项了：借用 renderNextQuestionPrompt 的"已清空"分支而不是另写一句——
+  // 回答最后一条追问时，聊天里已经用这句话确认过了；用词不一致会让去重比对
+  // 失效（GET 又贴一遍看起来一样但字面不同的话），厂商会觉得系统在重复自己。
+  const text = renderNextQuestionPrompt(session, language);
+  return { text, dedupeKey: text };
+}
+
 /**
  * 意图路由。**先**看这句话是不是明确的地址/折扣设置——不管当前是不是正卡在入驻
  * 追问上，员工都应该能随时插一句"门店地址是…"而不被当成在回答上一条追问
