@@ -13,6 +13,7 @@ import { wallRunProvenance } from "../floorplan/design-input.js";
 import { compassWallsAdjacent } from "../layout/plan-model.js";
 import type { SiteQuestion } from "./site-questions.js";
 import type { BlockedEdit } from "./confirm-lock.js";
+import { SHAPE_WALL_ALIASES } from "../samples/templates.js";
 
 const DEFAULT_PLUMBING_WIDTH = 24;
 const DEFAULT_WINDOW_WIDTH = 36;
@@ -369,7 +370,7 @@ export function parseWallLengthInches(
 
 const ORIENT_LABEL: Record<string, string> = {
   left: "Left", right: "Right", back: "Back", front: "Front",
-  long: "Long", short: "Short",
+  long: "Long", short: "Short", main: "Main",
   north: "North", south: "South", east: "East", west: "West",
   左: "Left", 右: "Right", 前: "Front", 后: "Back",
   东: "East", 南: "South", 西: "West", 北: "North",
@@ -442,7 +443,7 @@ export function applyChatWallLengths(
   // 前缀的「非单词字符」显式排除 距/离——否则「窗户距左墙54寸」这类量的是
   // 洞口到墙角的距离，会被当成「左墙 = 54」误吞（真实墙长反而没机会写入）。
   const mentionRe = new RegExp(
-    `(?:^|[^\\w距离])(?:(left|right|back|front|long|short|north|south|east|west)\\s*(?:wall|leg)?`
+    `(?:^|[^\\w距离])(?:(left|right|back|front|long|short|main|north|south|east|west)\\s*(?:wall|leg)?`
       + `|wall\\s*([A-D])\\s*墙?`
       + `|([A-D])(?:\\s+|墙|[:=])`
       + `|([东西南北左右前后主侧])(?:侧)?墙)`
@@ -451,6 +452,10 @@ export function applyChatWallLengths(
       + `(?!\\s*(?:["″]\\s*)?from)`,
     "gi",
   );
+  // 客户已经选了带"主墙/左右墙"这套说法的户型（比如 U 型）时，"main"/
+  // "left"/"right" 优先按该户型登记的罗盘墙名解析（SHAPE_WALL_ALIASES）——
+  // 系统自己在解读回复里教过客户这套说法，客户照着说就该对得上真正的墙。
+  const shapeAliases = next.shapeTemplateId ? SHAPE_WALL_ALIASES[next.shapeTemplateId] : undefined;
   let m: RegExpExecArray | null;
   while ((m = mentionRe.exec(text)) !== null) {
     const key = (m[1] ?? m[4] ?? "").toLowerCase();
@@ -458,18 +463,23 @@ export function applyChatWallLengths(
     const inches = parseWallLengthInches(m[5]!, m[6]);
     if (inches === undefined) continue;
 
-    let label = key ? (ORIENT_LABEL[key] ?? key) : (letter ? `Wall ${letter}` : "");
+    const aliasedLabel = key ? shapeAliases?.[key] : undefined;
+    let label = aliasedLabel ?? (key ? (ORIENT_LABEL[key] ?? key) : (letter ? `Wall ${letter}` : ""));
     if (!label) continue;
 
     const existing = next.parsedGeometry.wallRuns.find((r) =>
       r.label.toLowerCase() === label.toLowerCase()
-      || (key && new RegExp(`^${key}\\b`, "i").test(r.label)));
+      || (!aliasedLabel && key && new RegExp(`^${key}\\b`, "i").test(r.label)));
     if (existing) {
       const r = tryResolveWallLength(next, existing.id, inches, at, blocked);
       next = r.plan;
       if (r.changed) changed = true;
       continue;
     }
+    // 户型已经登记了这个词该对应哪面罗盘墙，却在几何里找不到同名墙段——
+    // 说明这个户型的骨架还没建（比如客户没点模板、直接手输），这种情况下
+    // 仍按登记的罗盘墙名建墙，不新建一段"Main"/"Left"这种非罗盘命名的假墙，
+    // 否则后续跟模板骨架对不上。
     next = addWallRun(next, {
       label,
       length: inches,

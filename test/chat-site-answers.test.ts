@@ -4,8 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyChatSiteAnswers, chatMentionsGeometry, parseCeilingFromChat, parseDoorFromChat,
-  parsePlumbingFromChat, parseWindowFromChat,
+  applyChatSiteAnswers, applyChatWallLengths, chatMentionsGeometry, parseCeilingFromChat,
+  parseDoorFromChat, parsePlumbingFromChat, parseWindowFromChat,
 } from "../src/design/chat-site-answers.js";
 import type { FloorPlan } from "../src/floorplan/types.js";
 
@@ -149,6 +149,39 @@ test("助手复述 L-shape 12ft / 10ft 无墙名也可落两段墙", () => {
   );
   assert.ok(r);
   assert.equal(r!.plan.parsedGeometry.wallRuns.filter((w) => w.length > 0).length, 2);
+});
+
+test("U型模板已建骨架时，客户用系统自己教过的'main/left/right wall'说法回话——必须对上对应的罗盘墙，不能拆出多余假墙（第三方测试报告 BUG-004）", () => {
+  const uShape: FloorPlan = {
+    id: "fp_u",
+    conversationId: "c1",
+    sourceFile: { name: "x.png", mimeType: "image/png", sizeBytes: 1 },
+    parseConfidence: 0.5,
+    shapeTemplateId: "u-shaped-kitchen",
+    parsedGeometry: {
+      wallRuns: [
+        { id: "wr_w", label: "West", length: 0, startsAtCorner: false, endsAtCorner: true, features: [] },
+        { id: "wr_n", label: "North", length: 0, startsAtCorner: true, endsAtCorner: true, features: [] },
+        { id: "wr_e", label: "East", length: 0, startsAtCorner: true, endsAtCorner: false, features: [] },
+      ],
+      confidence: 0.5,
+    },
+    unresolvedItems: [],
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const r = applyChatWallLengths(
+    uShape,
+    "Main Wall 108 inches (9 ft), Left Wall 101 inches, Right Wall 96 inches",
+    AT,
+  );
+  assert.ok(r);
+  const runs = r!.parsedGeometry.wallRuns;
+  // 只有原来那 3 段罗盘墙，不该因为"Left"/"Right"/"Main"这几个词多拆出新墙
+  assert.equal(runs.length, 3, `不该多出假墙，实际: ${runs.map((w) => w.label).join(", ")}`);
+  assert.equal(runs.find((w) => w.label === "North")?.length, 108, "main wall → North");
+  assert.equal(runs.find((w) => w.label === "West")?.length, 101, "left wall → West（跟系统自己的解读文案一致）");
+  assert.equal(runs.find((w) => w.label === "East")?.length, 96, "right wall → East（跟系统自己的解读文案一致）");
 });
 
 test("applyChatSiteAnswers 一次写入层高与上下水", () => {

@@ -1,13 +1,18 @@
 /**
  * 户型模板的标准几何 —— FR-17.4。
  *
- * `catalog.ts` 里的 5 张 floorplan 示例图原本只是"照着手绘"的参考；这里给每张图
- * 配一份结构化尺寸（抄自 `README.md` 的标注要求），客户选"我家像这个"时可以
- * 直接预填，不用从空白开始手绘。
+ * `walls` 里的 `label`/`kind`/`startsAtCorner`（墙面**结构**：几段墙、罗盘
+ * 方位、是否转角相接、是否岛台）是客户选"我家像这个"这个动作本身就确认过
+ * 的事实，`server.ts` 的 `applyFloorplanTemplate` 会用它们建墙壳。
  *
- * 这些数字是模板给的标准值，不是客户量的——套用方（`server.ts` 的
- * `applyFloorplanTemplate`）必须给每一段墙、每一处门窗都留一条待确认项，
- * 不能因为填了数字就当成已确认（FR-15.5）。
+ * `length`/`depth`/`features`/`ceilingHeight` 这几个**数值**字段不是客户
+ * 量的，也不允许被 `applyFloorplanTemplate` 拿去预填客户的户型数据——没有
+ * 图、只凭客户点了个形状名，系统对这些数字没有任何依据，不能因为"常见"
+ * 就替客户填一个默认值（哪怕标成"待确认"也不行，那样客户容易把"系统猜的"
+ * 误当成"系统读到的"）。这几个数值字段目前**只**被视觉识图对齐模块
+ * （`src/floorplan/template-match.ts`）使用——客户真的上传了图、但某个字段
+ * 模型没能读出来时，用作待确认提示文案里的参考建议值，绝不直接写入已确认
+ * 数据。
  */
 import type { WallFeatureKind } from "../floorplan/types.js";
 
@@ -172,6 +177,29 @@ export const SHAPE_WALL_EXPLANATION: Readonly<Record<string, { en: string; zh: s
   "floorplan-minimal": {
     en: "Two walls meeting in an L (\"North\" and \"East\").",
     zh: "L型两段墙首尾相接（「North / 北墙」和「East / 东墙」）。",
+  },
+};
+
+/**
+ * 客户会照着 `SHAPE_WALL_EXPLANATION` 教他的说法回话（"main wall"/"left
+ * wall"/"right wall"）——这些词在不同户型里对应不同的罗盘墙，通用的
+ * `ORIENT_LABEL`（`chat-site-answers.ts`）只把它们标准化成 "Main"/"Left"/
+ * "Right" 这几个词本身，找不到同名墙时会拿这几个词直接新建一段假墙，
+ * 把已经建好的罗盘墙晾在一边、客户报的尺寸也对不上正确的墙段
+ * （第三方测试报告 BUG-004：U型客户报"Main Wall 108"/"Left Wall 101"/
+ * "Right Wall 96"，被拆成两段新墙"Left"=101、"Right"=96，"Main"更是完全
+ * 没被识别，108 这个数字直接丢了）。
+ *
+ * 这里给每个有"主墙/左右墙"说法的户型登记一份"客户词 → 罗盘墙名"的映射，
+ * `applyChatWallLengths` 优先查这份表，查到了就用查到的罗盘墙名去找已建好
+ * 的墙段，而不是直接拿客户词当新墙名。没有登记的户型（比如一字型、
+ * 走廊型——本来就没有"主墙/左右墙"这套说法）不受影响。
+ */
+export const SHAPE_WALL_ALIASES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "u-shaped-kitchen": {
+    main: "North", 主: "North",
+    left: "West", 左: "West",
+    right: "East", 右: "East",
   },
 };
 
