@@ -66,6 +66,27 @@ test("中文「数字在前」说法（36寸双门对开冰箱）也要解析出
   assert.equal(dishwasher?.provenance, "customer");
 });
 
+test("英文「宽度在前 + 品类描述词 + 家电名」（36\" French Door Refrigerator）也要解析出宽度，不落回推定值（第三方测试报告 BUG-003）", () => {
+  // 回归：widthNear 找"数字在关键词前"时，数字和关键词之间只放了 12 个
+  // 字符——比"French Door "本身（连关键词前的空格正好 13 个字符）还短，
+  // 导致客户报了尺寸也被静默丢弃、悄悄落回推定值 33"，看起来就像系统
+  // 完全没收到客户已经给过的答案，之后还会继续追问同一件事。
+  const parsed = parseAppliancesFromChat('36" French Door Refrigerator');
+  const fridge = parsed.appliances.find((a) => a.kind === "refrigerator");
+  assert.equal(fridge?.width, 36);
+  assert.equal(fridge?.provenance, "customer");
+
+  // 更长的品类描述词（"Counter-Depth French Door"）同样不能把宽度挤丢。
+  const parsed2 = parseAppliancesFromChat('36" Counter-Depth French Door Refrigerator');
+  assert.equal(parsed2.appliances.find((a) => a.kind === "refrigerator")?.width, 36);
+
+  // 一句话里报好几件家电时，品类描述词不能把宽度错吃到上一件家电头上。
+  const parsed3 = parseAppliancesFromChat('36" French Door Refrigerator, 30" Gas Range, 24" Built-in Dishwasher');
+  assert.equal(parsed3.appliances.find((a) => a.kind === "refrigerator")?.width, 36);
+  assert.equal(parsed3.appliances.find((a) => a.kind === "range")?.width, 30);
+  assert.equal(parsed3.appliances.find((a) => a.kind === "dishwasher")?.width, 24);
+});
+
 test("budget range 不误判为灶具", () => {
   const parsed = parseAppliancesFromChat("Budget range CAD $10–20k is fine");
   assert.equal(parsed.appliances.length, 0);

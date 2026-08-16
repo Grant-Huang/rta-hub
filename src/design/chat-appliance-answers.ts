@@ -140,8 +140,15 @@ function widthNear(text: string, kindRe: RegExp): number | undefined {
     if (SEGMENT_BREAK_RE.test(text[i]!)) { breakIdx = i + 1; break; }
   }
   const before = text.slice(breakIdx, m.index);
+  // 数字和家电关键词之间允许隔着"French Door"/"Side by Side"/"Counter-Depth"
+  // 这类常见家电品类描述词——之前只放 12 个字符，比"French Door "（12 个字符，
+  // 算上关键词前的空格正好 13）还短一点，导致客户说「36" French Door
+  // Refrigerator」这种再正常不过的说法直接读不出宽度、悄悄退回推定值
+  // （第三方测试报告 BUG-003：客户明明报过尺寸，系统却当没收到，还按未确认
+  // 的推定值继续走）。放宽到跟 `afterMatch` 一致的窗口（32 字符），
+  // `breakIdx` 已经保证不会跨到上一个分句/上一件家电。
   const beforeMatch = before.match(
-    /(\d{2,3})\s*(?:["″]|in(?:ch(?:es)?)?|寸)?[^0-9、，,；;。！？!?\n]{0,12}$/,
+    /(\d{2,3})\s*(?:["″]|in(?:ch(?:es)?)?|寸)?[^0-9、，,；;。！？!?\n]{0,32}$/,
   );
   if (beforeMatch) {
     const n = Number(beforeMatch[1]);

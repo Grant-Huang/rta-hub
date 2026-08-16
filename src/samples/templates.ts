@@ -181,6 +181,29 @@ export const SHAPE_WALL_EXPLANATION: Readonly<Record<string, { en: string; zh: s
 };
 
 /**
+ * 客户会照着 `SHAPE_WALL_EXPLANATION` 教他的说法回话（"main wall"/"left
+ * wall"/"right wall"）——这些词在不同户型里对应不同的罗盘墙，通用的
+ * `ORIENT_LABEL`（`chat-site-answers.ts`）只把它们标准化成 "Main"/"Left"/
+ * "Right" 这几个词本身，找不到同名墙时会拿这几个词直接新建一段假墙，
+ * 把已经建好的罗盘墙晾在一边、客户报的尺寸也对不上正确的墙段
+ * （第三方测试报告 BUG-004：U型客户报"Main Wall 108"/"Left Wall 101"/
+ * "Right Wall 96"，被拆成两段新墙"Left"=101、"Right"=96，"Main"更是完全
+ * 没被识别，108 这个数字直接丢了）。
+ *
+ * 这里给每个有"主墙/左右墙"说法的户型登记一份"客户词 → 罗盘墙名"的映射，
+ * `applyChatWallLengths` 优先查这份表，查到了就用查到的罗盘墙名去找已建好
+ * 的墙段，而不是直接拿客户词当新墙名。没有登记的户型（比如一字型、
+ * 走廊型——本来就没有"主墙/左右墙"这套说法）不受影响。
+ */
+export const SHAPE_WALL_ALIASES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "u-shaped-kitchen": {
+    main: "North", 主: "North",
+    left: "West", 左: "West",
+    right: "East", 右: "East",
+  },
+};
+
+/**
  * 户型形状的短名——供"已确认"面板展示"客户说的是哪种户型"用（区别于
  * `noteEn`/`noteZh`，那两个是带墙长数字的完整句子，跟原子事实行的墙长
  * 数值重复；这里只要一个词）。

@@ -79,6 +79,24 @@ test("客户直接说英文城市名（不带省名/省码）也要认得——�
   assert.equal(matchProvince("Winnipeg")?.code, "MB");
 });
 
+test("已确认的省份不该被'问别处有没有服务'这种话里顺带提到的城市名顶掉（第三方测试报告 BUG-008）", () => {
+  // 客户先报了 Ontario，后面顺口问一句"你们在 Surrey 有安装服务吗"——问的是
+  // 服务范围，不是在说"我搬去 Surrey 了"，不该被当成省份改口。
+  assert.equal(
+    matchProvince("Ontario ON\nWhat colors do you have?\nDo you offer installation in Surrey?")?.code,
+    "ON",
+  );
+  assert.equal(
+    matchProvince("安大略省 ON\n你们在温哥华有安装服务吗？")?.code,
+    "ON",
+  );
+  // 反过来：客户是在真的自报/改口住址时，仍然要认得——只挡"问服务范围"
+  // 这一种句式，不能连累到正常的自报句。
+  assert.equal(matchProvince("I live in Toronto. Actually we moved, now in Surrey.")?.code, "BC");
+  assert.equal(matchProvince("I'm in Surrey")?.code, "BC");
+  assert.equal(matchProvince("我在温哥华")?.code, "BC");
+});
+
 test("对话确认 sink on left wall 写入 plumbing feature", () => {
   const fp = planTwoWalls();
   const parsed = parsePlumbingFromChat("sink on left wall", fp);
