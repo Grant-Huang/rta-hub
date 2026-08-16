@@ -34,10 +34,15 @@ export interface ReadinessItem {
   askHint?: string;
 }
 
+/**
+ * 分组头——只承载标题与聚合状态，不再重复罗列组内每一行的具体数字/位置：
+ * 那些数字只在 `confirmedFacts`（按 `groupId` 分到同一组）里出现一次，
+ * 面板按这份分组顺序（space → site → appliances → intent → seller，
+ * 几何最基础排最前）渲染分组头 + 组内原子行，不再有第二份叙事复述。
+ */
 export interface DesignBriefSection {
   id: string;
   title: string;
-  body: string;
   status: "locked" | "provisional" | "untouched" | "clarify";
 }
 
@@ -58,13 +63,26 @@ export type ConfirmedFactEditTarget =
     }
   | { kind: "province"; currentCode: Province };
 
+/**
+ * 一键"确认"用的目标——跟 `editTarget` 是两回事：`editTarget` 是"改成别的
+ * 值"（打开输入框重填），`confirmTarget` 是"就按这个已经在展示的值，一键
+ * 确认"（不用客户重新输入）。只在 `status` 是 `assumed`（家电推定宽度）或
+ * `needs_confirm` 且已有明确建议值（省份账号默认值）时才会带上。
+ */
+export type ConfirmedFactConfirmTarget =
+  | { kind: "appliance"; applianceKind: ApplianceKind; width: number }
+  | { kind: "province"; code: Province };
+
 /** 已确认 Tab 用的明确事实行（尺寸/位置等，禁止模糊「已记录」）。 */
 export interface ConfirmedFact {
   key: string;
   label: string;
   value: string;
   status: CheckStatus;
+  /** 所属分组 id，对应 `sections[].id`——面板按分组渲染这一行。 */
+  groupId: string;
   editTarget?: ConfirmedFactEditTarget;
+  confirmTarget?: ConfirmedFactConfirmTarget;
 }
 
 export interface DesignReadiness {
@@ -722,6 +740,63 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
   };
 }
 
+/**
+ * 每个必备项 id → 所属分组 id。跟 `buildSections` 的 `pick(...)` 分组
+ * 是同一份划分，两处都要改的话别漏了另一处。
+ */
+const ITEM_GROUP: Readonly<Record<string, string>> = {
+  walls_ceiling: "space", island: "space",
+  plumbing: "site", windows: "site", doors: "site", gas: "site", electrical: "site",
+  appliances_kinds: "appliances", appliances_sizes: "appliances", appliances_fit: "appliances",
+  style: "intent", budget: "intent", province: "intent",
+  seller: "seller",
+};
+
+/** 占位行（缺失/待确认时）用的标签——不是完整分组标题，是这一条具体是什么。 */
+const PLACEHOLDER_LABEL: Readonly<Record<string, { en: string; zh: string }>> = {
+  walls_ceiling: { en: "Wall lengths & ceiling height", zh: "墙长与层高" },
+  island: { en: "Island", zh: "岛台" },
+  plumbing: { en: "Plumbing", zh: "上下水" },
+  windows: { en: "Windows", zh: "窗" },
+  doors: { en: "Doors", zh: "门" },
+  gas: { en: "Gas hookup", zh: "燃气接口" },
+  electrical: { en: "Electrical hookup", zh: "强电接口" },
+  appliances_kinds: { en: "Appliances", zh: "家电" },
+  style: { en: "Style", zh: "风格" },
+  budget: { en: "Budget", zh: "预算" },
+  province: { en: "Province", zh: "省份" },
+  seller: { en: "Seller", zh: "厂商" },
+};
+
+/**
+ * `appliances_sizes`/`appliances_fit` 是派生/复合项，不对应单独一段物理
+ * 事实——家电存在就已经有逐台的 `appliance:` 行了（尺寸自然带出），家电
+ * 不存在则 `appliances_kinds` 的占位行已经说明原因，不用再补一条重复的
+ * "没有家电"。
+ */
+const SKIP_PLACEHOLDER: ReadonlySet<string> = new Set(["appliances_sizes", "appliances_fit"]);
+
+/** 这个必备项是否已经有至少一行原子事实代表它——有的话就不用补占位行。 */
+function hasFactFor(facts: readonly ConfirmedFact[], itemId: string, plan: FloorPlan | undefined): boolean {
+  switch (itemId) {
+    case "walls_ceiling": return facts.some((f) => f.key.startsWith("wall:") || f.key === "ceiling");
+    case "island":
+      return Boolean(plan?.parsedGeometry.wallRuns.some((r) => isIsland(r)))
+        || facts.some((f) => f.key === "island:chat");
+    case "plumbing": return facts.some((f) => f.key.startsWith("plumbing:"));
+    case "windows": return facts.some((f) => f.key.startsWith("window:"));
+    case "doors": return facts.some((f) => f.key.startsWith("door:"));
+    case "gas": return facts.some((f) => f.key.startsWith("gas:"));
+    case "electrical": return facts.some((f) => f.key.startsWith("electrical:"));
+    case "appliances_kinds": return facts.some((f) => f.key.startsWith("appliance:"));
+    case "style": return facts.some((f) => f.key === "style");
+    case "budget": return facts.some((f) => f.key === "budget");
+    case "province": return facts.some((f) => f.key === "province");
+    case "seller": return facts.some((f) => f.key === "seller");
+    default: return true;
+  }
+}
+
 /** 把检查项拆成「标签 → 明确值」行，供已确认 Tab 逐条列出。 */
 function buildConfirmedFacts(
   items: ReadinessItem[],
@@ -741,6 +816,7 @@ function buildConfirmedFacts(
           label: msg(lang, "Kitchen shape", "户型"),
           value: lang === "zh" ? shapeLabel.zh : shapeLabel.en,
           status: "ok",
+          groupId: "space",
         });
       }
     }
@@ -762,6 +838,7 @@ function buildConfirmedFacts(
           ? msg(lang, `${r.length}"${depth}`, `${r.length}"${depth}`)
           : msg(lang, "not set", "未定"),
         status: r.length <= 0 ? "missing" : lengthPending ? "needs_confirm" : "ok",
+        groupId: "space",
         editTarget: { kind: "wall", wallRunId: r.id, currentLength: r.length },
       });
     }
@@ -772,6 +849,7 @@ function buildConfirmedFacts(
       label: msg(lang, "Ceiling height", "层高"),
       value: ceil != null ? `${ceil}"` : msg(lang, "not set", "未定"),
       status: ceil == null ? "missing" : ceilPending ? "needs_confirm" : "ok",
+      groupId: "space",
       editTarget: { kind: "ceiling", currentHeight: ceil ?? 0 },
     });
     for (const kind of ["plumbing", "window", "door", "gas", "electrical"] as const) {
@@ -796,6 +874,7 @@ function buildConfirmedFacts(
               `offset ${f.offset}", width ${f.width}"`,
               `距起点 ${f.offset}"，宽 ${f.width}"`),
             status: featPending ? "needs_confirm" : "ok",
+            groupId: "site",
             editTarget: {
               kind: "feature", wallRunId: run.id, featureId: f.id,
               currentOffset: f.offset, currentWidth: f.width,
@@ -814,7 +893,11 @@ function buildConfirmedFacts(
         label: name,
         value: msg(lang, `width ${a.width}" (${tag})`, `宽 ${a.width}"（${tag}）`),
         status: a.provenance === "assumed" ? "assumed" : "ok",
+        groupId: "appliances",
         editTarget: { kind: "appliance", applianceKind: a.kind, currentWidth: a.width },
+        ...(a.provenance === "assumed"
+          ? { confirmTarget: { kind: "appliance", applianceKind: a.kind, width: a.width } }
+          : {}),
       });
     }
   }
@@ -836,8 +919,14 @@ function buildConfirmedFacts(
       label,
       value: raw || it.brief,
       status: it.status,
+      groupId: ITEM_GROUP[id]!,
       ...(id === "province" && provinceCurrentCode
-        ? { editTarget: { kind: "province", currentCode: provinceCurrentCode } }
+        ? {
+            editTarget: { kind: "province", currentCode: provinceCurrentCode },
+            ...(it.status === "needs_confirm"
+              ? { confirmTarget: { kind: "province", code: provinceCurrentCode } }
+              : {}),
+          }
         : {}),
     });
   }
@@ -866,6 +955,24 @@ function buildConfirmedFacts(
       label: msg(lang, labelEn, labelZh),
       value: it.brief.replace(stripRe, ""),
       status: it.status,
+      groupId: ITEM_GROUP[id]!,
+    });
+  }
+
+  // 每个必备项都要"永远有东西可看"：还没有任何原子行代表它的话，补一条
+  // 占位行（用 askHint/brief 当 value），面板不用再靠单独一条"还需要"提示
+  // 兜底——每一行自己的状态色 + 文案就是完整信息。
+  for (const item of items) {
+    if (item.status === "ok") continue;
+    if (SKIP_PLACEHOLDER.has(item.id)) continue;
+    if (hasFactFor(facts, item.id, plan)) continue;
+    const label = PLACEHOLDER_LABEL[item.id];
+    facts.push({
+      key: `${item.id}:placeholder`,
+      label: label ? msg(lang, label.en, label.zh) : item.id,
+      value: item.askHint ?? item.brief,
+      status: item.status,
+      groupId: ITEM_GROUP[item.id] ?? "space",
     });
   }
 
@@ -873,23 +980,10 @@ function buildConfirmedFacts(
 }
 
 /**
- * 这几项一旦 ok/assumed，`brief` 里的具体数字（墙长/位置/宽度）在"已确认"
- * 面板的原子事实行里已经逐条列出过一遍——section 卡片是叙事概览，不是
- * 第二份明细，重复贴一遍同样的数字正是用户反馈"重复信息很多"的来源。
- * 所以这里只给一句简短确认，数字看上面的明细；仍缺/待确认时照旧用完整
- * `brief`/`askHint`——那是这几项**唯一**出现细节的地方，不能省。
+ * 分组头——只算聚合状态徽标（供 UI 渲染组标题旁的"已确认/待确认/未讨论"），
+ * 不再生成具体数字的叙事文本：那些数字只在 `confirmedFacts`（按同一份
+ * `ITEM_GROUP` 分组）里出现一次。
  */
-const SECTION_ITEM_SHORT_LABEL: Readonly<Record<string, { en: string; zh: string }>> = {
-  walls_ceiling: { en: "Wall lengths & ceiling height", zh: "墙长与层高" },
-  plumbing: { en: "Plumbing", zh: "上下水" },
-  windows: { en: "Windows", zh: "窗" },
-  doors: { en: "Doors", zh: "门" },
-  gas: { en: "Gas hookup", zh: "燃气接口" },
-  electrical: { en: "Electrical hookup", zh: "强电接口" },
-  island: { en: "Island", zh: "岛台" },
-  appliances_sizes: { en: "Appliance sizes", zh: "家电尺寸" },
-};
-
 function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSection[] {
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
   const pick = (...ids: string[]) => ids.map((id) => byId[id]).filter(Boolean) as ReadinessItem[];
@@ -900,16 +994,6 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
   const intent = pick("style", "budget", "province");
   const seller = pick("seller");
 
-  const itemLine = (g: ReadinessItem): string => {
-    const shortLabel = SECTION_ITEM_SHORT_LABEL[g.id];
-    if (shortLabel && (g.status === "ok" || g.status === "assumed")) {
-      return msg(lang,
-        `${shortLabel.en}: confirmed — see the itemized list above for exact numbers.`,
-        `${shortLabel.zh}：已确认——具体数字见上方明细列表。`);
-    }
-    return g.brief;
-  };
-
   const section = (
     id: string,
     titleEn: string,
@@ -917,13 +1001,10 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
     group: ReadinessItem[],
   ): DesignBriefSection => {
     // 整组只有「全部都没谈过」才算 untouched——组里哪怕只有一项已经 ok
-    // （比如上下水已确认、只是窗户还没谈），body 里就会带出真实数据，
-    // 徽标却说"还没聊"就自相矛盾了。所以徽标状态单独算，不能直接拿
-    // "组里最差的一项" 当整组状态用：一项缺不代表整组没讨论过。
+    // （比如上下水已确认、只是窗户还没谈），徽标却说"还没聊"就自相矛盾了。
+    // 所以徽标状态单独算，不能直接拿"组里最差的一项"当整组状态用：
+    // 一项缺不代表整组没讨论过。
     const untouched = group.every((g) => g.status === "missing");
-    const body = untouched
-      ? msg(lang, "Not discussed yet.", "还没聊。")
-      : group.map(itemLine).join(lang === "zh" ? "\n" : "\n");
     const sectionStatus: DesignBriefSection["status"] = untouched
       ? "untouched"
       : group.some((g) => g.status === "missing" || g.status === "needs_confirm" || g.status === "assumed")
@@ -934,7 +1015,6 @@ function buildSections(items: ReadinessItem[], lang: UiLanguage): DesignBriefSec
     return {
       id,
       title: msg(lang, titleEn, titleZh),
-      body,
       status: sectionStatus,
     };
   };

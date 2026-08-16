@@ -1,10 +1,12 @@
 /**
- * Phase 5：已确认面板去重 + 补全缺失项。
+ * Phase 5（去重）+ 已确认栏重新设计 Phase 1（分组 + 占位行 + 一键确认）。
  *
  * `confirmedFacts`（原子、可编辑）与 `sections`（叙事分组卡片）以前各自独立
- * 把同一批墙长/特征数字复述一遍；现在 sections 里 ok/assumed 的条目只给一句
- * 简短确认，具体数字只在 confirmedFacts 里出现一次。另外补齐了此前完全没有
- * 行的必备项：户型形状、燃气/强电/岛台被明确回绝时的确认状态。
+ * 把同一批墙长/特征数字复述一遍；现在 `sections` 只是分组头（标题 + 聚合
+ * 状态徽标），不再带任何叙事文本，具体数字只在 `confirmedFacts` 里出现
+ * 一次，且每条都带 `groupId` 指向对应分组。另外补齐了此前完全没有行的
+ * 必备项：户型形状、燃气/强电/岛台被明确回绝时的确认状态，以及"完全还
+ * 没谈过"的项也会有占位行（不再需要单独一条"还需要"提示兜底）。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -48,12 +50,12 @@ function readyPlan(): FloorPlan {
   };
 }
 
-test("已确认的墙长数字只在 confirmedFacts 里出现，section 卡片只给简短确认", () => {
+test("已确认的墙长数字只在 confirmedFacts 里出现一次；section 只是分组头，不带任何叙事文本", () => {
   const plan = readyPlan();
   plan.appliances = [{ kind: "refrigerator", width: 36, clearanceEachSide: 1, provenance: "customer" }];
   const r = evaluateDesignReadiness({
     conversation: conv({
-      designRequirements: "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\"",
+      designRequirements: "Modern style\nBudget CAD $10-20k\nOntario ON\nNo windows\nFridge 36\"\nNo island",
     }),
     plan,
     language: "en",
@@ -61,18 +63,24 @@ test("已确认的墙长数字只在 confirmedFacts 里出现，section 卡片�
   const wallFact = r.confirmedFacts.find((f) => f.key === "wall:wr_1");
   assert.ok(wallFact, "墙长应该出现在原子事实行里");
   assert.match(wallFact!.value, /168/);
+  assert.equal(wallFact!.groupId, "space", "墙长应该归到 space 分组");
 
   const space = r.sections.find((s) => s.id === "space");
   assert.ok(space);
-  assert.doesNotMatch(space!.body, /168/, "section 卡片不该重复贴墙长数字——已经在上面的明细里了");
-  assert.match(space!.body, /confirmed/i, "但仍要给一句简短确认，不能什么都不说");
+  assert.equal(space!.status, "locked", "墙长与岛台都已确认，分组徽标应该是已确认");
+  assert.ok(!("body" in space!), "section 不该再带叙事文本——数字只在 confirmedFacts 里出现");
 });
 
-test("待确认/缺失项仍保留完整 brief/askHint——去重只影响已确认的条目", () => {
+test("待确认/缺失项：分组徽标准确反映状态，section 本身不承载文案", () => {
   const r = evaluateDesignReadiness({ conversation: conv(), plan: undefined, language: "en" });
   const space = r.sections.find((s) => s.id === "space");
   assert.ok(space);
-  assert.match(space!.body, /Not discussed/i);
+  assert.equal(space!.status, "untouched");
+  // 缺失时也该有占位行——具体文案在 confirmedFacts 里，不是 section
+  const wallsPlaceholder = r.confirmedFacts.find((f) => f.key === "walls_ceiling:placeholder");
+  assert.ok(wallsPlaceholder, "还没上传户型图时，space 分组也该有一条占位行");
+  assert.equal(wallsPlaceholder!.groupId, "space");
+  assert.equal(wallsPlaceholder!.status, "missing");
 });
 
 test("户型形状：客户文字确认过的模板出现在已确认面板", () => {

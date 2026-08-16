@@ -183,20 +183,36 @@ export function buildConfirmedFacts(input: {
   return facts;
 }
 
-/** 从主轨同款 Design Basis sections 提炼交接摘要（跳过未聊项）。 */
+/**
+ * 从主轨同款 Design Basis 提炼交接摘要（跳过未聊/仍缺的组）。
+ *
+ * 数据源是 `confirmedFacts`（按 `groupId` 分组），不是 `sections`——sections
+ * 已经不带叙事文本了（已确认面板本身按分组直接渲染原子行，不需要第二份
+ * 复述），但交接摘要要发给厂商侧看，需要真实的数字/位置，不能是"详见上方"
+ * 这种只在客户自己面板里才有意义的占位话。
+ */
 export function digestFromBriefSections(
-  sections: Array<{ id: string; title: string; body: string; status: string }>,
+  sections: Array<{ id: string; title: string; status: string }>,
+  facts: Array<{ groupId: string; label: string; value: string; status: string }>,
   language: "en" | "zh" = "en",
 ): { requirementsDigest: string; briefFacts: Array<{ key: string; label: string; display: string }> } {
-  const usable = sections.filter((s) =>
-    (s.status === "locked" || s.status === "provisional")
-    && s.body
-    && !/Not discussed yet|还没聊/.test(s.body));
-  const briefFacts = usable.map((s) => ({
-    key: `brief_${s.id}`,
-    label: s.title,
-    display: s.body.replace(/\n+/g, " · ").trim(),
-  }));
+  const usableGroupIds = new Set(
+    sections.filter((s) => s.status === "locked" || s.status === "provisional").map((s) => s.id),
+  );
+  const byGroup = new Map<string, string[]>();
+  for (const f of facts) {
+    if (!usableGroupIds.has(f.groupId) || f.status === "missing") continue;
+    const arr = byGroup.get(f.groupId) ?? [];
+    arr.push(`${f.label}: ${f.value}`);
+    byGroup.set(f.groupId, arr);
+  }
+  const briefFacts = sections
+    .filter((s) => byGroup.has(s.id))
+    .map((s) => ({
+      key: `brief_${s.id}`,
+      label: s.title,
+      display: byGroup.get(s.id)!.join(" · "),
+    }));
   const requirementsDigest = briefFacts.map((f) => `${f.label}: ${f.display}`).join(
     language === "zh" ? "；" : "; ",
   );

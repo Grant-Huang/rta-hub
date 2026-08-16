@@ -135,8 +135,15 @@ test("接受推定后家电区为 assumed 标签且不再阻断出图", () => {
   assert.equal(r.readyToAskDesign, true);
   const applSection = r.sections.find((s) => s.id === "appliances");
   assert.equal(applSection?.status, "clarify");
-  assert.match(applSection!.body, /33"|Refrigerator/i);
-  assert.ok(r.confirmedFacts.some((f) => f.key.startsWith("appliance:") && f.status === "assumed"));
+  const assumedFridge = r.confirmedFacts.find(
+    (f) => f.key === "appliance:refrigerator" && f.status === "assumed");
+  assert.ok(assumedFridge, "推定的冰箱宽度应该出现在原子事实行里");
+  assert.match(assumedFridge!.value, /33"/);
+  assert.deepEqual(
+    assumedFridge!.confirmTarget,
+    { kind: "appliance", applianceKind: "refrigerator", width: 33 },
+    "推定值应该带一键确认目标，客户不用重新输入宽度",
+  );
 });
 
 test("墙长与家电宽度冲突时 appliances_fit 立即阻断就绪", () => {
@@ -229,24 +236,30 @@ test("家电后定不能冒充就绪", () => {
   assert.equal(r.items.find((i) => i.id === "appliances_sizes")?.status, "missing");
 });
 
-test("Tab1 sections 未谈及时写 Not discussed，而不是铺满 TBD 字段", () => {
+test("Tab1 sections 未谈及时徽标是 untouched，且 confirmedFacts 里有占位行说明还缺什么", () => {
   const r = evaluateDesignReadiness({ conversation: conv(), plan: undefined, language: "en" });
   const site = r.sections.find((s) => s.id === "site");
   assert.ok(site);
-  assert.match(site!.body, /Not discussed/i);
+  assert.equal(site!.status, "untouched");
+  const plumbingPlaceholder = r.confirmedFacts.find((f) => f.key === "plumbing:placeholder");
+  assert.ok(plumbingPlaceholder, "上下水还没谈过时也该有一条占位行");
+  assert.equal(plumbingPlaceholder!.groupId, "site");
 });
 
 test("组内一项已确认、另一项还缺时，徽标不能标成整组「未讨论」", () => {
   // 上下水已确认（有 plumbing feature），窗还没谈——不是"整组没聊"，
-  // 是"聊了一半"，body 里也确实带出了上下水的真实数据。
+  // 是"聊了一半"，confirmedFacts 里也确实能看到上下水已确认、窗仍缺。
   const plan = readyPlan();
   const r = evaluateDesignReadiness({ conversation: conv(), plan, language: "en" });
   const site = r.sections.find((s) => s.id === "site");
   assert.ok(site);
   assert.notEqual(site!.status, "untouched", "上下水已确认，不该说整组还没讨论过");
   assert.equal(site!.status, "clarify");
-  assert.match(site!.body, /Plumbing/i, "body 应该带出已确认的上下水数据，不能被 untouched 掩盖");
-  assert.doesNotMatch(site!.body, /Not discussed/i);
+  const plumbingFact = r.confirmedFacts.find((f) => f.key.startsWith("plumbing:") && f.groupId === "site");
+  assert.ok(plumbingFact, "上下水已确认应该带出真实数据，不能被 untouched 掩盖");
+  assert.equal(plumbingFact!.status, "ok");
+  const windowsPlaceholder = r.confirmedFacts.find((f) => f.key === "windows:placeholder");
+  assert.ok(windowsPlaceholder, "窗还没谈过应该有占位行，不是完全不见");
 });
 
 test("风格 brief 写出标准术语，禁止「已记在需求里」", () => {
@@ -294,6 +307,13 @@ test("账号已有省份（注册必填）时，仅作建议值——needs_confi
   assert.equal(province1?.status, "needs_confirm", "账号省份只是建议值，客户没确认过之前不能当已确认");
   assert.match(province1!.brief, /Ontario|ON/);
   assert.equal(withAccount.readyToAskDesign, false, "省份未确认应继续挡住出图，跟风格/预算一样");
+  const provinceFact = withAccount.confirmedFacts.find((f) => f.key === "province");
+  assert.ok(provinceFact, "建议值也该出现在原子事实行里");
+  assert.deepEqual(
+    provinceFact!.confirmTarget,
+    { kind: "province", code: "ON" },
+    "needs_confirm 且有明确建议值时，应该带一键确认目标",
+  );
 
   // 客户在聊天里明确提过省份——算确认
   const confirmedInChat = evaluateDesignReadiness({
