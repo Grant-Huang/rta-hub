@@ -334,15 +334,16 @@ export function createOllamaVisionExtractor(
       const b64 = stripDataUrl(image);
       if (!b64) return undefined;
       const ocrBlock = await runOcr(image, mimeType);
+      const ocrGrounded = ocrBlock !== undefined;
 
       if (!twoStep) {
         const parsed = await generate("oneshot", floorPlanVisionPrompt(hint, ocrBlock), b64, mimeType);
-        return parsed ? toRawExtraction(parsed) : undefined;
+        return parsed ? { ...toRawExtraction(parsed), ocrGrounded } : undefined;
       }
 
       const wallsParsed = await generate("walls", floorPlanVisionWallsPrompt(hint, ocrBlock), b64, mimeType);
       if (!wallsParsed) return undefined;
-      const walls = toRawExtraction(wallsParsed);
+      const walls = { ...toRawExtraction(wallsParsed), ocrGrounded };
       if (!walls.wallRuns?.length) return walls;
 
       const featParsed = await generate(
