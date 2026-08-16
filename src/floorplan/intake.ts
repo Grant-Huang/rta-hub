@@ -87,9 +87,9 @@ export function reuploadPrompt(lang: UiLanguage = DEFAULT_LANGUAGE): string {
   return msg(lang,
     "Many sizes/features are still unclear. Please annotate clearer lengths and openings "
       + "(see the floor-plan example), then upload again with +. "
-      + "Or answer the Q# on the block diagram one by one.",
+      + "Or just answer the questions below one at a time in chat.",
     "图上仍有不少尺寸/开口我拿不准。请对照户型示例把墙长和开口标清楚后，再点 + 重新上传；"
-      + "也可以按块图上的 Q# 逐项确认。");
+      + "也可以直接在对话里按下面的问题逐条回答。");
 }
 
 /** 开场示例卡片（给前端画按钮）。 */
