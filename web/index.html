@@ -107,7 +107,10 @@
   .suggest-item .si-sub { font-size:11px; color:#8b94a3; }
   .composer button[type=submit] { flex:0 0 auto; height:36px; }
   .composer.sending { opacity:0.72; pointer-events:none; }
-  .msg.pending { opacity:0.75; font-style:italic; color:#8b94a3; }
+  .msg.pending { opacity:0.9; color:#8b94a3; display:flex; align-items:baseline; gap:7px; }
+  .thinking-spinner { color:#e08a4d; font-weight:600; min-width:0.9em; display:inline-block; }
+  .thinking-verb { color:#8b94a3; }
+  .thinking-elapsed { font-size:11px; color:#5c6470; }
   button { background:#2a5bd7; border:none; color:#fff; padding:7px 13px; border-radius:8px;
            font-size:13px; cursor:pointer; }
   button:disabled { opacity:.45; cursor:not-allowed; }
@@ -1176,6 +1179,58 @@ function addMsg(role, text) {
   return div;
 }
 
+// ── 「正在思考」占位气泡 ──────────────────────────────────────────────────
+//
+// 参考 Claude Code CLI 的等待态：旋转符号 + 会换词的动词 + 已耗时秒数，
+// 而不是一句不动的静态文字——静态文字在等待超过几秒时，客户分不清是卡住了
+// 还是仍在处理。三个计时器各管一件事，`stop()` 一次性清掉，调用方不用记住
+// 拆哪几个。
+const THINKING_SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const prefersReducedMotion = () =>
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function startThinkingBubble() {
+  const div = document.createElement('div');
+  div.className = 'msg assistant pending';
+  div.innerHTML = `<span class="thinking-spinner"></span><span class="thinking-verb"></span><span class="thinking-elapsed"></span>`;
+  $('chatLog').appendChild(div);
+  scrollChatToBottom();
+
+  const spinnerEl = div.querySelector('.thinking-spinner');
+  const verbEl = div.querySelector('.thinking-verb');
+  const elapsedEl = div.querySelector('.thinking-elapsed');
+  const reduced = prefersReducedMotion();
+  spinnerEl.textContent = reduced ? '✳' : THINKING_SPINNER_FRAMES[0];
+
+  const verbs = t('thinkingVerbs');
+  let verbIdx = Math.floor(Math.random() * verbs.length);
+  verbEl.textContent = verbs[verbIdx] + '…';
+
+  let frame = 0;
+  const spinTimer = reduced ? null : setInterval(() => {
+    frame = (frame + 1) % THINKING_SPINNER_FRAMES.length;
+    spinnerEl.textContent = THINKING_SPINNER_FRAMES[frame];
+  }, 90);
+  const verbTimer = setInterval(() => {
+    verbIdx = (verbIdx + 1) % verbs.length;
+    verbEl.textContent = verbs[verbIdx] + '…';
+  }, 2200);
+  const startedAt = Date.now();
+  const elapsedTimer = setInterval(() => {
+    elapsedEl.textContent = ` (${Math.max(1, Math.round((Date.now() - startedAt) / 1000))}s)`;
+  }, 500);
+
+  return {
+    el: div,
+    stop() {
+      if (spinTimer) clearInterval(spinTimer);
+      clearInterval(verbTimer);
+      clearInterval(elapsedTimer);
+      div.remove();
+    },
+  };
+}
+
 /** 新内容出现后滚到底。输入框是固定的，滚的只是消息流。 */
 function scrollChatToBottom() {
   const log = $('chatLog');
@@ -1905,21 +1960,20 @@ async function sendChat(text) {
   form?.classList.add('sending');
   if (quickBlock) { quickBlock.remove(); quickBlock = null; }
   addMsg('user', text);
-  const pending = addMsg('assistant', t('thinking'));
-  pending.classList.add('pending');
+  const pending = startThinkingBubble();
   let ok, body;
   try {
     ({ ok, body } = await api(`/api/conversations/${conversationId}/messages`, {
       method: 'POST', body: JSON.stringify({ text }),
     }));
   } catch (err) {
-    pending.remove();
+    pending.stop();
     addMsg('system', t('networkFail', err.message || err));
     chatSending = false;
     form?.classList.remove('sending');
     return;
   }
-  pending.remove();
+  pending.stop();
   if (body.code === 'CONVERSATION_ARCHIVED') {
     conversationArchived = true;
     setComposerArchived(true);
@@ -1986,8 +2040,7 @@ async function sendEngagementChat(text) {
   const form = $('chatForm');
   form?.classList.add('sending');
   addMsg('user', text);
-  const pending = addMsg('assistant', t('thinking'));
-  pending.classList.add('pending');
+  const pending = startThinkingBubble();
   let ok, body;
   try {
     ({ ok, body } = await api(
@@ -1995,13 +2048,13 @@ async function sendEngagementChat(text) {
       { method: 'POST', body: JSON.stringify({ text }) },
     ));
   } catch (err) {
-    pending.remove();
+    pending.stop();
     addMsg('system', t('networkFail', err.message || err));
     chatSending = false;
     form?.classList.remove('sending');
     return;
   }
-  pending.remove();
+  pending.stop();
   if (!ok) {
     addMsg('assistant', body.error || t('noResponse'));
     chatSending = false;
@@ -2539,10 +2592,19 @@ async function sendWithAttachments(text) {
   $('chatLog').appendChild(wrap);
   scrollChatToBottom();
 
-  const { ok, body } = await api(`/api/conversations/${conversationId}/floorplan`, {
-    method: 'POST',
-    body: JSON.stringify({ text: text || undefined, files: filesPayload }),
-  });
+  const pending = startThinkingBubble();
+  let ok, body;
+  try {
+    ({ ok, body } = await api(`/api/conversations/${conversationId}/floorplan`, {
+      method: 'POST',
+      body: JSON.stringify({ text: text || undefined, files: filesPayload }),
+    }));
+  } catch (err) {
+    pending.stop();
+    addMsg('system', t('networkFail', err.message || err));
+    return;
+  }
+  pending.stop();
   if (!ok || body.code === 'CONVERSATION_ARCHIVED') {
     if (body.code === 'CONVERSATION_ARCHIVED') {
       conversationArchived = true;
