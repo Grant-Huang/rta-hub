@@ -191,7 +191,7 @@ import { blankTemplates, type ImportSources } from "./spec/import.js";
 import { parseJsonCatalog, parseXlsxCatalog, type JsonCatalogPayload, type UploadParseResult } from "./spec/catalog-upload.js";
 import { parsePdfCatalog, PdfCatalogExtractError } from "./spec/pdf-catalog-extract.js";
 import {
-  applyStandardDiscountPatch, companyStaffAgentReply, renderNextQuestionPrompt,
+  applyStandardDiscountPatch, companyStaffAgentReply, onboardingReminder, renderNextQuestionPrompt,
 } from "./agents/company-staff-agent.js";
 import type { CompanyOverrides } from "./render/templates.js";
 import { rtaIntro, rtaQuoteNote } from "./quote/rta-disclosure.js";
@@ -1794,6 +1794,11 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     questionCompanyId: questionCompanyId || null,
     language,
     ...briefing,
+    // 家电种类/推定宽度这一轮走 applianceQuestions 交互卡问（多选/单选点击即答），
+    // 不要在 siteQuestions 里再用文字 Q# 问一遍同一件事——两条通道问同一个问题，
+    // 客户分不清该打字还是点选。
+    siteQuestions: briefing.siteQuestions.filter(
+      (q) => q.kind !== "appliance_kinds" && q.kind !== "appliance_width"),
     ...(showcaseSamples ? { intakeSamples: showcaseSamples } : {}),
     ...(applianceQuestions.length ? { applianceQuestions } : {}),
     ...(designPrompt ? { designPrompt, designSession } : {}),
@@ -3030,20 +3035,27 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
   }
 
   // FR-17：解读 + 纯文字 Q#（不附图提问，避免每轮重贴草图）
+  //
+  // 解读文字（`interpretation`）和后续引导语分成两条独立的助手消息，不拼成一条：
+  // `interpretation` 单独作为响应字段返回，客户端拿它单独发一条气泡；这里的
+  // `trailerBits` 只装"接下来怎么答"的引导语，不重复解读内容、也不内嵌 Q# 原文——
+  // Q# 的唯一呈现渠道是 `renderSiteQuestionsText(body.siteQuestions)`（客户端
+  // 另外调用），这里不再把前几条 Q# 文本抄一遍进消息正文，否则解读和 Q# 都会
+  // 各露面两次（曾经的真实 bug：客户端用字符串相等去重，拼接后的文本和单独
+  // 返回的 interpretation 不相等，去重形同虚设）。
   const interpretation = interpretations.join("\n");
   const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
-  const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
-  const assistantBits = [interpretation, ...sitePrompts];
+  const trailerBits: string[] = [];
   const suggestReupload = shouldSuggestReupload(plan!, extraction);
   // 识别失败 / 零墙段：1–2 轮内强制手输墙长/层高，推进 readyToDraw
   const needsManual = briefing.needsManualWalls
     || !plan!.parsedGeometry.wallRuns.some((r) => r.length > 0)
     || (extraction && extraction.status !== "ok" && extraction.status !== "notConfigured");
   if (suggestReupload) {
-    assistantBits.push(reuploadPrompt(fpLang));
+    trailerBits.push(reuploadPrompt(fpLang));
   }
   if (needsManual) {
-    assistantBits.push(msg(fpLang,
+    trailerBits.push(msg(fpLang,
       "Answer in text only — send wall lengths and ceiling in one message "
         + "(e.g. `<wall name> <inches>\", <wall name> <inches>\", ceiling <inches>\"`). "
         + "Then confirm each appliance with its width so we can ask whether to draw.",
@@ -3064,13 +3076,16 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     content: textPart ? `${textPart}\n${uploadLine}` : uploadLine,
     at,
   };
-  const interpretMsg: ChatMessage = {
-    role: "assistant",
-    content: await polishReplyTone(appCtx.llm, assistantBits.filter(Boolean).join("\n"), fpLang),
-    at,
-  };
+  // 润色一次、复用两处——`interpretation` 既进这条消息也单独作为响应字段返回给
+  // 客户端渲染气泡，两边必须字面相等，否则重蹈刚修的"客户端字符串去重形同虚设"覆辙。
+  const polishedInterpretation = await polishReplyTone(appCtx.llm, interpretation, fpLang);
+  const interpretMsg: ChatMessage = { role: "assistant", content: polishedInterpretation, at };
+  const trailerText = trailerBits.filter(Boolean).join("\n");
+  const trailerMsg: ChatMessage | undefined = trailerText
+    ? { role: "assistant", content: await polishReplyTone(appCtx.llm, trailerText, fpLang), at }
+    : undefined;
   await appCtx.repos.conversations.update(conv.id, {
-    messages: [...conv.messages, echoMsg, interpretMsg],
+    messages: [...conv.messages, echoMsg, interpretMsg, ...(trailerMsg ? [trailerMsg] : [])],
   });
 
   return c.json({
@@ -3080,14 +3095,16 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     questions: pendingQuestions(plan!),
     // 视觉抽取走没走、为什么没读出东西——四种情况看起来一样，要做的事完全不同
     extraction,
-    interpretation,
+    interpretation: polishedInterpretation,
     suggestReupload,
     intakeSamples: intakeSampleCards(fpLang),
     // FR-17.2：解读可用时前端勿再展示加墙/尺寸/形状 quick replies
     suppressGeometryIntake: briefing.geometryUsable,
     ...(extractionNote(extraction!, fpLang) ? { extractionNote: extractionNote(extraction!, fpLang) } : {}),
     ...briefing,
-    replies: [interpretMsg],
+    // 只放"引导语"，不放 interpretation——客户端已经单独用 body.interpretation
+    // 发那条气泡，replies 里再塞一遍就是同一段话露两次。
+    replies: trailerMsg ? [trailerMsg] : [],
   }, 201);
 });
 
@@ -3235,16 +3252,15 @@ app.post("/api/conversations/:id/floorplan-template", requireAccount, async (c) 
   const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
   const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
   const interpretation = [applied.interpretation, ...sitePrompts].filter(Boolean).join("\n");
+  // 润色一次、复用两处：进聊天消息的文本必须和响应里 `interpretation` 字段字面
+  // 相等，否则客户端按字符串比对去重会失效（同一句话在气泡和历史消息里对不上）。
+  const polishedInterpretation = await polishReplyTone(appCtx.llm, interpretation, fpLang);
   const echoMsg: ChatMessage = {
     role: "user",
     content: msg(fpLang, `[Picked floor-plan template: ${templateId}]`, `[选择户型模板：${templateId}]`),
     at,
   };
-  const interpretMsg: ChatMessage = {
-    role: "assistant",
-    content: await polishReplyTone(appCtx.llm, interpretation, fpLang),
-    at,
-  };
+  const interpretMsg: ChatMessage = { role: "assistant", content: polishedInterpretation, at };
   await appCtx.repos.conversations.update(conv.id, {
     messages: [...conv.messages, echoMsg, interpretMsg],
   });
@@ -3254,7 +3270,7 @@ app.post("/api/conversations/:id/floorplan-template", requireAccount, async (c) 
     ready: isLayoutReady(plan),
     // 完整性优先：拿不准的地方逐条追问，不静默跳过（FR-3）
     questions: pendingQuestions(plan),
-    interpretation,
+    interpretation: polishedInterpretation,
     intakeSamples: intakeSampleCards(fpLang),
     // FR-17.2：解读可用时前端勿再展示加墙/尺寸/形状 quick replies
     suppressGeometryIntake: briefing.geometryUsable,
@@ -3315,16 +3331,15 @@ app.post("/api/conversations/:id/design-input", requireAccount, async (c) => {
         "已导入设计数据——所有项都已标记为确认过的。"),
     ...sitePrompts,
   ].filter(Boolean).join("\n");
+  // 润色一次、复用两处：同上——聊天消息文本和响应里 `interpretation` 字段必须
+  // 字面相等，否则客户端按字符串比对去重会失效。
+  const polishedInterpretation = await polishReplyTone(appCtx.llm, interpretation, fpLang);
   const echoMsg: ChatMessage = {
     role: "user",
     content: msg(fpLang, "[Imported design input]", "[导入设计输入]"),
     at,
   };
-  const interpretMsg: ChatMessage = {
-    role: "assistant",
-    content: await polishReplyTone(appCtx.llm, interpretation, fpLang),
-    at,
-  };
+  const interpretMsg: ChatMessage = { role: "assistant", content: polishedInterpretation, at };
   await appCtx.repos.conversations.update(conv.id, {
     messages: [...conv.messages, echoMsg, interpretMsg],
   });
@@ -3333,7 +3348,7 @@ app.post("/api/conversations/:id/design-input", requireAccount, async (c) => {
     floorPlan: plan,
     ready: isLayoutReady(plan),
     questions: pendingQuestions(plan),
-    interpretation,
+    interpretation: polishedInterpretation,
     intakeSamples: intakeSampleCards(fpLang),
     suppressGeometryIntake: briefing.geometryUsable,
     ...briefing,
@@ -3459,6 +3474,10 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   return c.json({
     floorPlan: next, ready: isLayoutReady(next), questions: pendingQuestions(next),
     ...resolveBriefing,
+    // 家电种类/推定宽度这一轮走 applianceQuestions 交互卡问，不再用 siteQuestions
+    // 的文字 Q# 重复问一遍——见下面 applianceQuestions 的计算，两处覆盖同一件事。
+    siteQuestions: resolveBriefing.siteQuestions.filter(
+      (q) => q.kind !== "appliance_kinds" && q.kind !== "appliance_width"),
     ...(fitWarnings.length
       ? {
           applianceFitOk: false,
@@ -4377,8 +4396,34 @@ function staffThreadFor(companyId: string): CompanyStaffThread {
     ?? { id: companyId, companyId, messages: [], updatedAt: now() };
 }
 
-app.get("/api/company/:companyId/staff-chat", requireCompany, (c) => {
-  return c.json({ thread: staffThreadFor(param(c, "companyId")) });
+/**
+ * 每次打开这条常驻线程都重新判断入驻是否完成（发布过至少一版规格）——
+ * 没完成的话补一条提醒（首次是完整引导语，之后是"还差哪一条"）。不能指望
+ * 厂商员工自己记得上次聊到哪、或者主动开口问"要准备什么"。
+ *
+ * 用 dedupeKey 而不是整句去重：同一条追问反复出现在"最后一条消息"里时，
+ * 不会因为前缀/剩余条数变了就被误判成新内容而重复贴一遍。
+ */
+app.get("/api/company/:companyId/staff-chat", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const company = appCtx.repos.companies.byId(companyId)!;
+  const thread = staffThreadFor(companyId);
+  const session = appCtx.repos.onboardingSessions.all()
+    .find((s) => s.companyId === companyId && s.status !== "published");
+
+  const reminder = onboardingReminder(company.currentPublishedSpecVersionId, session, DEFAULT_LANGUAGE);
+  const last = thread.messages.at(-1);
+  const alreadyShown = !!reminder && last?.role === "assistant" && last.content.includes(reminder.dedupeKey);
+  if (!reminder || alreadyShown) return c.json({ thread });
+
+  const seeded: CompanyStaffThread = {
+    ...thread,
+    messages: [...thread.messages, { role: "assistant", content: reminder.text, at: now() }],
+    updatedAt: now(),
+    ...(session ? { activeOnboardingSessionId: session.id } : {}),
+  };
+  await appCtx.repos.companyStaffThreads.upsert(seeded);
+  return c.json({ thread: seeded });
 });
 
 /** 员工发一句话；后台 Agent 答复，并把能落地的意图（地址/折扣/追问答案）直接写库。 */

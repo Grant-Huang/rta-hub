@@ -2650,10 +2650,12 @@ async function sendWithAttachments(text) {
     return;
   }
   floorPlanId = body.floorPlan?.id;
+  // 服务端保证 replies 里不会再塞一遍 interpretation（各发各的一条气泡），
+  // 这里不用再靠字符串相等去猜"是不是同一句话"。
   if (body.interpretation) addMsg('assistant', body.interpretation);
   else if (body.extractionNote) addMsg('system', body.extractionNote);
   for (const r of body.replies || []) {
-    if (r.content && r.content !== body.interpretation) addMsg('assistant', r.content);
+    if (r.content) addMsg('assistant', r.content);
   }
   if (body.designBrief) applyDesignBrief(body.designBrief);
   if (body.geometryUsable || body.suppressGeometryIntake) {

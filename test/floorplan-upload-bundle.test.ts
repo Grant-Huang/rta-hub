@@ -71,6 +71,15 @@ test("text + 两个文件一次 POST → 201，用户消息含文字与两个文
   assert.ok(body.replies?.length >= 1);
   assert.equal(body.replies[0]!.role, "assistant");
   assert.ok(body.replies[0]!.content.length > 0);
+  // 解读文字只该单独发一条气泡；replies 里不该再把它拼进另一条消息里
+  // （曾经的真实 bug：客户端用字符串相等去重，拼接后的文本永远不等于
+  // 单独返回的 interpretation，等于把解读文字重复发了一遍）。
+  for (const reply of body.replies) {
+    assert.ok(
+      !reply.content.includes(body.interpretation),
+      `replies 不该包含 interpretation 原文，实际: ${reply.content}`,
+    );
+  }
 
   const get = await req(`/api/conversations/${id}`, { accountId: CONSUMER });
   assert.equal(get.status, 200);
