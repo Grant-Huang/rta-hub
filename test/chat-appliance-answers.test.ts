@@ -49,6 +49,23 @@ test("解析 fridge/stove/dishwasher 宽度并落库", () => {
   assert.equal(applied!.plan.appliances?.length, 3);
 });
 
+test("中文「数字在前」说法（36寸双门对开冰箱）也要解析出宽度，不落回推定值", () => {
+  // 回归：widthNear 原来只往关键词后面找数字，中文「N寸+描述+家电」这种
+  // 数字在关键词前的惯用语序会静默丢宽度，家电落成 assumed 33"，引出重复提问。
+  const parsed = parseAppliancesFromChat(
+    "36寸双门对开冰箱、30寸灶具、24寸洗碗机、30寸油烟机、30寸水槽柜",
+  );
+  const fridge = parsed.appliances.find((a) => a.kind === "refrigerator");
+  assert.equal(fridge?.width, 36);
+  assert.equal(fridge?.provenance, "customer");
+  const range = parsed.appliances.find((a) => a.kind === "range");
+  assert.equal(range?.width, 30);
+  assert.equal(range?.provenance, "customer");
+  const dishwasher = parsed.appliances.find((a) => a.kind === "dishwasher");
+  assert.equal(dishwasher?.width, 24);
+  assert.equal(dishwasher?.provenance, "customer");
+});
+
 test("budget range 不误判为灶具", () => {
   const parsed = parseAppliancesFromChat("Budget range CAD $10–20k is fine");
   assert.equal(parsed.appliances.length, 0);

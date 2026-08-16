@@ -281,6 +281,46 @@ test("「A墙120英寸，B墙96英寸」——字母墙名+中文墙字须落成
   assert.ok(!r!.applied.includes("plumbing"));
 });
 
+test("「主墙144英寸，侧墙120英寸」认得中文常用叫法，落成两段墙", () => {
+  const empty: FloorPlan = {
+    id: "fp_main_side",
+    conversationId: "c1",
+    sourceFile: { name: "chat-geometry.txt", mimeType: "text/plain", sizeBytes: 0 },
+    parseConfidence: 0.5,
+    parsedGeometry: { wallRuns: [], confidence: 0.5 },
+    unresolvedItems: [],
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const r = applyChatSiteAnswers(empty, "主墙144英寸，侧墙120英寸，层高96英寸", AT);
+  assert.ok(r);
+  const main = r!.plan.parsedGeometry.wallRuns.find((x) => x.label === "Main");
+  const side = r!.plan.parsedGeometry.wallRuns.find((x) => x.label === "Side");
+  assert.equal(main?.length, 144);
+  assert.equal(side?.length, 120);
+});
+
+test("窗户「距左墙54英寸」这类距离说法不得被误读成「左墙=54」（回归：把开口偏移量吞成墙长）", () => {
+  const empty: FloorPlan = {
+    id: "fp_offset",
+    conversationId: "c1",
+    sourceFile: { name: "chat-geometry.txt", mimeType: "text/plain", sizeBytes: 0 },
+    parseConfidence: 0.5,
+    parsedGeometry: { wallRuns: [], confidence: 0.5 },
+    unresolvedItems: [],
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const r = applyChatSiteAnswers(empty, "窗户宽36英寸，距左墙54英寸", AT);
+  const leftWall = r?.plan.parsedGeometry.wallRuns.find((x) => x.label === "Left");
+  assert.equal(leftWall, undefined);
+
+  // 真正的「左墙 120 寸」说法必须继续正常生效，不能被这次修复连坐误伤
+  const legit = applyChatSiteAnswers(empty, "左墙120英寸", AT);
+  const left = legit?.plan.parsedGeometry.wallRuns.find((x) => x.label === "Left");
+  assert.equal(left?.length, 120);
+});
+
 test("chatMentionsGeometry 识别「A墙120」（无需层高词也应建壳）", () => {
   assert.ok(chatMentionsGeometry("A墙120，B墙96"));
   assert.ok(chatMentionsGeometry("A墙 120cm"));

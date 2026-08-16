@@ -2362,14 +2362,14 @@ function onOptionClick(btn, card) {
   // 单选：立即提交并把这一题收起来
   btn.closest('.opts').querySelectorAll('.opt').forEach((b) => b.classList.remove('sel'));
   btn.classList.add('sel');
-  if (q.key === 'applianceWidths' || q.key === 'appliances') {
+  if (q.key === 'applianceWidths' || q.key === 'applianceHeights' || q.key === 'appliances') {
     submitApplianceAnswer(q, opt, card);
     return;
   }
   savePreference(q.key, opt.id, card._companyId, card, opt.label);
 }
 
-/** 家电种类/宽度走 resolve（状态在 FloorPlan 上，不是 preferences）。 */
+/** 家电种类/宽度/高度走 resolve（状态在 FloorPlan 上，不是 preferences）。 */
 async function submitApplianceAnswer(q, opt, card) {
   if (!floorPlanId) {
     card.insertAdjacentHTML('beforeend', `<div class="err">${esc(t('gateNeedFloor').replace(/<[^>]+>/g, ''))}</div>`);
@@ -2379,6 +2379,16 @@ async function submitApplianceAnswer(q, opt, card) {
   if (q.key === 'appliances') {
     // multi 题走 submitMulti；单选时 id 即 kind
     patch = { appliances: [{ kind: opt.id }] };
+  } else if (q.key === 'applianceHeights') {
+    // id 形如 refrigerator:height:70 或 refrigerator:height:unsure
+    const [kind, , heightTok] = String(opt.id).split(':');
+    if (!kind) return;
+    if (heightTok === 'unsure') {
+      patch = { appliances: [{ kind }] }; // 无 height → 服务端推定常见高
+    } else {
+      const height = Number(heightTok);
+      patch = { appliances: [{ kind, height }] };
+    }
   } else {
     // id 形如 refrigerator:36 或 refrigerator:unsure
     const [kind, widthTok] = String(opt.id).split(':');

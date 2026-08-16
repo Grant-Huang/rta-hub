@@ -373,6 +373,7 @@ const ORIENT_LABEL: Record<string, string> = {
   north: "North", south: "South", east: "East", west: "West",
   左: "Left", 右: "Right", 前: "Front", 后: "Back",
   东: "East", 南: "South", 西: "West", 北: "North",
+  主: "Main", 侧: "Side",
 };
 
 /**
@@ -438,11 +439,13 @@ export function applyChatWallLengths(
   // 光秃秃的字母（不带 wall/墙）必须紧跟一个分隔符（空格/墙/冒号/等号）才算墙名——
   // 否则厂商规格问答报出的型号列表（"B12、B15、B18…"）会被当成「墙 B 长 12」，
   // 制造出一段不存在的假墙，把整份几何搞坏（型号紧挨数字，中间没有任何分隔）。
+  // 前缀的「非单词字符」显式排除 距/离——否则「窗户距左墙54寸」这类量的是
+  // 洞口到墙角的距离，会被当成「左墙 = 54」误吞（真实墙长反而没机会写入）。
   const mentionRe = new RegExp(
-    `(?:^|[^\\w])(?:(left|right|back|front|long|short|north|south|east|west)\\s*(?:wall|leg)?`
+    `(?:^|[^\\w距离])(?:(left|right|back|front|long|short|north|south|east|west)\\s*(?:wall|leg)?`
       + `|wall\\s*([A-D])\\s*墙?`
       + `|([A-D])(?:\\s+|墙|[:=])`
-      + `|([东西南北左右前后])(?:侧)?墙)`
+      + `|([东西南北左右前后主侧])(?:侧)?墙)`
       + `${HEDGE_WORDS}[:=]?\\s*(\\d+(?:\\.\\d+)?)`
       + `(?:\\s*(ft|feet|'|尺|["″]|in(?:ch(?:es)?)?|寸|cm))?`
       + `(?!\\s*(?:["″]\\s*)?from)`,
