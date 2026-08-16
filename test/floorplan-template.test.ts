@@ -45,6 +45,7 @@ interface TemplateResponse {
   ready: boolean;
   questions: { id: string; question: string }[];
   siteQuestions: { q: number; kind: string; prompt: string }[];
+  designBrief: { confirmedFacts: { key: string; status: string }[] };
 }
 
 test("选 u-shaped-kitchen 模板 → 预填3段墙+门窗，全部待确认，未 ready", async () => {
@@ -68,13 +69,25 @@ test("选 u-shaped-kitchen 模板 → 预填3段墙+门窗，全部待确认，�
   assert.ok(allFeatures.some((f) => f.kind === "door"));
   assert.ok(allFeatures.some((f) => f.kind === "plumbing"));
 
-  // 预填不算确认：每段墙 + 每个特征都留了一条待确认项
+  // 预填不算确认：每段墙 + 每个特征 + 层高都留了一条待确认项（FR-15.5）
   const unresolved = body.floorPlan.unresolvedItems.filter((u) => !u.resolved);
   assert.equal(unresolved.filter((u) => u.target.kind === "wallRun").length, 3);
   assert.equal(unresolved.filter((u) => u.target.kind === "feature").length, allFeatures.length);
+  assert.ok(unresolved.some((u) => u.field === "ceilingHeight"),
+    "模板层高不能悄悄当成已确认——必须跟墙长/特征一样留一条待确认项");
 
   // 没有客户确认过任何东西，不该是 ready
   assert.equal(body.ready, false);
+
+  // 层高要出现在 Q# 待确认清单里，不能因为没有待确认项而被 site-questions 静默跳过
+  assert.ok(body.siteQuestions.some((q) => q.kind === "ceiling"),
+    "模板层高必须像墙长/门窗一样被主动问一句「对不对」，不能悄悄默认已确认");
+
+  // 已确认面板：层高必须是 needs_confirm（黄色/待确认），不能是 ok（绿色/已确认）——
+  // 否则客户会被误导以为 AI 已经从对话里读到了这个层高
+  const ceilingFact = body.designBrief.confirmedFacts.find((f) => f.key === "ceiling");
+  assert.ok(ceilingFact);
+  assert.equal(ceilingFact!.status, "needs_confirm");
 });
 
 test("选「其他」→ 维持零墙段，不套用任何模板", async () => {

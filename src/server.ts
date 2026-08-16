@@ -3169,8 +3169,20 @@ async function applyFloorplanTemplate(
   plan = resolveCeilingHeight(plan, template.ceilingHeight, at);
   if (carriedAppliances.length > 0) plan = { ...plan, appliances: carriedAppliances };
 
-  // 模板预填不是客户量的——每段墙长、每处门窗都留一条待确认项（FR-17.4 / FR-15.5）
-  const confirmItems: FloorPlan["unresolvedItems"] = [];
+  // 模板预填不是客户量的——每段墙长、每处门窗、层高都留一条待确认项（FR-17.4 / FR-15.5）。
+  // 层高之前漏了这一条：`resolveCeilingHeight` 只写值，不像墙长/特征那样自动带
+  // 待确认项，导致模板层高被 `readiness.ts`/`site-questions.ts` 当成客户已确认——
+  // 必须在这里显式补一条，跟 `ceilingFromVision`（视觉识图路径）的口径对齐。
+  const confirmItems: FloorPlan["unresolvedItems"] = [{
+    id: `tpl_${randomUUID().slice(0, 8)}`,
+    target: { kind: "global" },
+    field: "ceilingHeight",
+    reason: msg(lang,
+      `Confirm ceiling height is about ${template.ceilingHeight}" (from the ${template.id} template).`,
+      `请确认层高大约是 ${template.ceilingHeight}"（来自 ${template.id} 模板）。`),
+    suggestion: template.ceilingHeight,
+    resolved: false,
+  }];
   for (const r of plan.parsedGeometry.wallRuns) {
     confirmItems.push({
       id: `tpl_${randomUUID().slice(0, 8)}`,
