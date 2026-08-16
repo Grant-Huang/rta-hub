@@ -190,7 +190,7 @@ import { blankTemplates, type ImportSources } from "./spec/import.js";
 import { parseJsonCatalog, parseXlsxCatalog, type JsonCatalogPayload, type UploadParseResult } from "./spec/catalog-upload.js";
 import { parsePdfCatalog, PdfCatalogExtractError } from "./spec/pdf-catalog-extract.js";
 import {
-  applyStandardDiscountPatch, companyStaffAgentReply, renderNextQuestionPrompt,
+  applyStandardDiscountPatch, companyStaffAgentReply, renderNextQuestionPrompt, welcomeMessage,
 } from "./agents/company-staff-agent.js";
 import type { CompanyOverrides } from "./render/templates.js";
 import { rtaIntro, rtaQuoteNote } from "./quote/rta-disclosure.js";
@@ -4344,8 +4344,22 @@ function staffThreadFor(companyId: string): CompanyStaffThread {
     ?? { id: companyId, companyId, messages: [], updatedAt: now() };
 }
 
-app.get("/api/company/:companyId/staff-chat", requireCompany, (c) => {
-  return c.json({ thread: staffThreadFor(param(c, "companyId")) });
+/**
+ * 首次打开这条常驻线程时，把引导语种进去再返回——不能指望员工自己先开口问
+ * "要准备什么"，大多数新入驻的厂商根本不知道有这张清单。
+ */
+app.get("/api/company/:companyId/staff-chat", requireCompany, async (c) => {
+  const companyId = param(c, "companyId");
+  const thread = staffThreadFor(companyId);
+  if (thread.messages.length > 0) return c.json({ thread });
+
+  const seeded: CompanyStaffThread = {
+    ...thread,
+    messages: [{ role: "assistant", content: welcomeMessage(DEFAULT_LANGUAGE), at: now() }],
+    updatedAt: now(),
+  };
+  await appCtx.repos.companyStaffThreads.upsert(seeded);
+  return c.json({ thread: seeded });
 });
 
 /** 员工发一句话；后台 Agent 答复，并把能落地的意图（地址/折扣/追问答案）直接写库。 */

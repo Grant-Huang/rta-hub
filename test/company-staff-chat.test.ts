@@ -35,10 +35,17 @@ async function newCompany(): Promise<{ id: string; token: string }> {
   return { id, token: r.accessToken };
 }
 
-test("新公司的员工线程一开始是空的", async () => {
+test("新公司第一次打开线程会看到引导语，列出要备齐的资产和支持的文件格式", async () => {
   const { id, token } = await newCompany();
   const r = await req(`/api/company/${id}/staff-chat`, { company: token });
-  assert.deepEqual(r.thread.messages, []);
+  assert.equal(r.thread.messages.length, 1);
+  assert.equal(r.thread.messages[0].role, "assistant");
+  assert.match(r.thread.messages[0].content, /[Pp]rice matrix/);
+  assert.match(r.thread.messages[0].content, /\.xlsx/);
+
+  // 再打开一次不会重复种引导语
+  const again = await req(`/api/company/${id}/staff-chat`, { company: token });
+  assert.equal(again.thread.messages.length, 1);
 });
 
 test("说「门店地址是：...」直接落地到 CabinetCompany.storeAddress", async () => {

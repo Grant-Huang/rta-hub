@@ -248,6 +248,44 @@ function genericHelp(language: UiLanguage): StaffAgentOutcome {
 }
 
 /**
+ * 员工第一次打开这条常驻线程时看到的引导——主动列出发布一版规格前需要
+ * 备齐的资产，以及上传文件时系统认哪些格式。不是"等员工问了才说"，
+ * 因为大多数新入驻的厂商根本不知道要准备这些东西。
+ *
+ * 五金/配件加价项、运费规则**没有列进来**：这两类字段在类型和定价引擎里
+ * 已经存在，但目前既不在文件导入的表格里，也不在这里能识别的聊天意图
+ * 里——没有落地路径的东西不能写进引导语，写了就是承诺一个做不到的事。
+ */
+export function welcomeMessage(language: UiLanguage): string {
+  if (language === "zh") {
+    return "欢迎！在这里跟我聊几句，或者直接发文件，就能把产品规格和报价立起来。\n\n" +
+      "发布一版规格前需要备齐：\n" +
+      "1. 柜型清单——型号码、类型（地柜/吊柜/高柜/转角柜…）、可选宽高深尺寸\n" +
+      "2. 价格组——门板花色分档\n" +
+      "3. 门板样式——每种门板归属哪个价格组\n" +
+      "4. 价格矩阵——每个型号在每个价格组下的标价\n" +
+      "5. 箱体板材加价档（可选，如「全夹板 +20%」）\n\n" +
+      "门店地址、全店统一的标准折扣，直接跟我说一句就行（如「门店地址是：…」「标准折扣 15%」）。\n\n" +
+      "上传文件支持 .xlsx / .json（直接按表结构解析）；.pdf 也收，但要靠 AI 抽取，" +
+      "抽出来的内容我会挑出来跟你逐条确认。Word/.txt 暂不支持——表格结构不可靠，麻烦转存成 Excel。\n\n" +
+      "现在要发文件，还是先聊？";
+  }
+  return "Welcome! Chat with me here, or just send a file, to get your product specs and pricing live.\n\n" +
+    "Before a spec version can be published, I need:\n" +
+    "1. Module list — codes, types (base/wall/tall/corner…), available width/height/depth options\n" +
+    "2. Price groups — the door-finish price tiers\n" +
+    "3. Door styles — which price group each door style belongs to\n" +
+    "4. Price matrix — the list price for each module in each price group\n" +
+    "5. Box-material upcharge tiers (optional, e.g. \"plywood box +20%\")\n\n" +
+    'Store address and a storewide standard discount can just be said in chat ' +
+    '(e.g. "store address: …", "standard discount 15%").\n\n' +
+    "For uploads: .xlsx and .json are parsed directly from their table structure; .pdf is also accepted " +
+    "but goes through AI extraction, and I'll walk you through confirming anything it pulls out. " +
+    "Word/.txt aren't supported — there's no reliable table structure to read, so please save as Excel instead.\n\n" +
+    "Want to send a file now, or talk through it first?";
+}
+
+/**
  * 意图路由。**先**看这句话是不是明确的地址/折扣设置——不管当前是不是正卡在入驻
  * 追问上，员工都应该能随时插一句"门店地址是…"而不被当成在回答上一条追问
  * （追问答案本身是精确 token，不会被误判成地址/折扣意图，见 extractProfileIntent
