@@ -87,29 +87,30 @@ export function buildSiteQuestions(
   const deferGas = isDeferGas(req);
   const deferElectrical = isDeferElectrical(req);
   const deferIsland = isDeferIsland(req);
-  const questions: SiteQuestion[] = [];
-  let n = 1;
-
-  const add = (
-    partial: Omit<SiteQuestion, "q" | "prompt"> & { promptFor: (q: number) => string },
-  ) => {
-    const q = n++;
-    questions.push({
-      q,
-      id: partial.id,
-      kind: partial.kind,
-      ...(partial.wallRunId ? { wallRunId: partial.wallRunId } : {}),
-      ...(partial.wallLabel ? { wallLabel: partial.wallLabel } : {}),
-      prompt: partial.promptFor(q),
-      mark: partial.mark,
-    });
-  };
+  // 分批出题（不一次甩一屏），分三层优先级：
+  //   1. `blockingCandidates`——层高完全未知、或某段墙长度是 0：这是排布
+  //      连起点都没有的硬缺口，必须先问，别的问了也没用。
+  //   2. `confirmCandidates`——已经有一个值（读到的/模板预填的），只是要
+  //      客户扫一眼确认或改一改：墙长确认（`wall_confirm`）跟墙面特征
+  //      （上下水/窗/门/燃气/强电/岛台）是同一类"看一眼、对不对"的动作，
+  //      不管这个值是模板预填的还是识图读到的，捆成一批一起问，比拆开问
+  //      更符合客户"扫一遍现场"的思维，也是本来就有的核对性质。
+  //   3. `applianceCandidates`——家电种类/推定宽度，排最后，且现在都走
+  //      applianceQuestions 交互卡（server.ts 的 /messages、/resolve 会把
+  //      这里生成的家电文字题过滤掉），只有没有交互卡兜底的调用方（比如
+  //      上传处理器）才会真的把这一批发给客户看。
+  // 每批各自独立编号（Q1 起）；`buildSiteQuestions` 每轮重新计算，答完的
+  // 项目下一轮自然从候选集里消失，不需要额外维护"问到第几轮"的状态。
+  type Candidate = Omit<SiteQuestion, "q" | "prompt"> & { promptFor: (q: number) => string };
+  const blockingCandidates: Candidate[] = [];
+  const confirmCandidates: Candidate[] = [];
+  const applianceCandidates: Candidate[] = [];
 
   if (
     plan.parsedGeometry.ceilingHeight == null
     || plan.unresolvedItems.some((u) => u.field === "ceilingHeight" && !u.resolved)
   ) {
-    add({
+    blockingCandidates.push({
       id: "sq_ceiling",
       kind: "ceiling",
       mark: "Ceiling?",
@@ -125,7 +126,9 @@ export function buildSiteQuestions(
     if (isWallLengthPending(plan, run.id) || run.length <= 0) {
       const label = run.label;
       const len = run.length;
-      add({
+      // 长度是 0：连基本数字都没有，属于硬缺口；已经有长度但待确认：跟
+      // 墙面特征一样是"看一眼对不对"，归进 confirmCandidates。
+      (len <= 0 ? blockingCandidates : confirmCandidates).push({
         id: `sq_wall_${run.id}`,
         kind: len <= 0 ? "wall_length" : "wall_confirm",
         wallRunId: run.id,
@@ -143,7 +146,7 @@ export function buildSiteQuestions(
   if (geometryUsable && !needsManualWalls) {
     const plumbingPending = pendingFeatureConfirm(plan, "plumbing");
     if ((!runs.some((r) => hasKind(r, "plumbing")) && !deferPlumbing) || plumbingPending) {
-      add({
+      confirmCandidates.push({
         id: "sq_plumbing",
         kind: "plumbing",
         wallRunId: runs[0]?.id,
@@ -161,7 +164,7 @@ export function buildSiteQuestions(
 
     const windowPending = pendingFeatureConfirm(plan, "window");
     if ((!runs.some((r) => hasKind(r, "window")) && !deferWindows) || windowPending) {
-      add({
+      confirmCandidates.push({
         id: "sq_window",
         kind: "window",
         mark: "Window?",
@@ -177,7 +180,7 @@ export function buildSiteQuestions(
 
     const doorPending = pendingFeatureConfirm(plan, "door");
     if ((!runs.some((r) => hasKind(r, "door")) && !/no doors?|没有门|无门洞/i.test(req)) || doorPending) {
-      add({
+      confirmCandidates.push({
         id: "sq_door",
         kind: "door",
         mark: "Door?",
@@ -193,7 +196,7 @@ export function buildSiteQuestions(
 
     const gasPending = pendingFeatureConfirm(plan, "gas");
     if ((!runs.some((r) => hasKind(r, "gas")) && !deferGas) || gasPending) {
-      add({
+      confirmCandidates.push({
         id: "sq_gas",
         kind: "gas",
         mark: "Gas?",
@@ -209,7 +212,7 @@ export function buildSiteQuestions(
 
     const electricalPending = pendingFeatureConfirm(plan, "electrical");
     if ((!runs.some((r) => hasKind(r, "electrical")) && !deferElectrical) || electricalPending) {
-      add({
+      confirmCandidates.push({
         id: "sq_electrical",
         kind: "electrical",
         mark: "Electrical?",
@@ -228,7 +231,7 @@ export function buildSiteQuestions(
     }
 
     if (!runs.some((r) => isIsland(r)) && !deferIsland) {
-      add({
+      confirmCandidates.push({
         id: "sq_island",
         kind: "island",
         mark: "Island?",
@@ -243,7 +246,7 @@ export function buildSiteQuestions(
   const appliances = plan.appliances ?? [];
   // 只认 plan.appliances（与 readiness 同源）；聊天提及但未落库时仍出题，避免空转
   if (appliances.length === 0) {
-    add({
+    applianceCandidates.push({
       id: "sq_appliance_kinds",
       kind: "appliance_kinds",
       mark: "Appliances?",
@@ -257,7 +260,7 @@ export function buildSiteQuestions(
   } else {
     for (const a of assumedOnes(appliances)) {
       const label = applianceLabel(a.kind, lang);
-      add({
+      applianceCandidates.push({
         id: `sq_appliance_w_${a.kind}`,
         kind: "appliance_width",
         mark: `${label}?`,
@@ -270,6 +273,23 @@ export function buildSiteQuestions(
       });
     }
   }
+
+  const batch = blockingCandidates.length ? blockingCandidates
+    : confirmCandidates.length ? confirmCandidates
+      : applianceCandidates;
+  let n = 1;
+  const questions: SiteQuestion[] = batch.map((c) => {
+    const q = n++;
+    return {
+      q,
+      id: c.id,
+      kind: c.kind,
+      ...(c.wallRunId ? { wallRunId: c.wallRunId } : {}),
+      ...(c.wallLabel ? { wallLabel: c.wallLabel } : {}),
+      prompt: c.promptFor(q),
+      mark: c.mark,
+    };
+  });
 
   return { questions, geometryUsable, needsManualWalls };
 }

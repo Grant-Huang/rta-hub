@@ -475,13 +475,19 @@ export function interpretationSummary(
     parts.push(msg(lang, `Ceiling ~${ceil}".`, `层高约 ${ceil}"。`));
   }
   if (pending.length > 0) {
+    // 没被标 Q# 的墙已经算确认——这句话跟在"请确认 N 处"后面，说明白"不是
+    // 全部都还悬而未决，只有标了 Q# 的那几处需要你看一眼"。
     parts.push(msg(lang,
-      `Please confirm ${pending.length} item(s) I'm unsure about (see Q# on the diagram).`,
-      `有 ${pending.length} 处我拿不准，请按图上的 Q# 确认一下。`));
+      `Please confirm ${pending.length} item(s) I'm unsure about (see Q# on the diagram) — `
+        + "the rest is already confirmed and editable anytime in the Confirmed panel on the right.",
+      `有 ${pending.length} 处我拿不准，请按图上的 Q# 确认一下——`
+        + "其余的已经算确认，如需修改可在右侧「已确认」栏随时编辑。"));
   } else {
     parts.push(msg(lang,
-      "If a wall label doesn't match your room, tell me which is which.",
-      "如果墙名和你家对不上，告诉我哪面是哪面。"));
+      "If a wall label doesn't match your room, tell me which is which — "
+        + "otherwise this is already confirmed and editable anytime in the Confirmed panel on the right.",
+      "如果墙名和你家对不上，告诉我哪面是哪面——"
+        + "否则这些都已算确认，如需修改可在右侧「已确认」栏随时编辑。"));
   }
   return parts.join(lang === "zh" ? "" : " ");
 }

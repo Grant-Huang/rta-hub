@@ -766,8 +766,16 @@ test("家电信息记在户型上；没给宽度走推定值并如实标注", as
     method: "POST", accountId: CONSUMER,
     body: JSON.stringify({ addRun: { label: "北墙", length: 144 } }),
   });
-  const firstBody = await first.json() as { applianceQuestions: { key: string }[] };
+  const firstBody = await first.json() as {
+    applianceQuestions: { key: string }[];
+    siteQuestions: { kind: string }[];
+  };
   assert.equal(firstBody.applianceQuestions[0]?.key, "appliances");
+  // 家电种类只走交互卡，不该在 siteQuestions 里再用文字 Q# 问一遍同一件事
+  assert.ok(
+    !firstBody.siteQuestions.some((q) => q.kind === "appliance_kinds"),
+    "appliance_kinds 不该同时出现在 siteQuestions 里",
+  );
 
   const res = await req(`/api/floorplans/${floorPlan.id}/resolve`, {
     method: "POST", accountId: CONSUMER,
@@ -783,6 +791,7 @@ test("家电信息记在户型上；没给宽度走推定值并如实标注", as
     floorPlan: { appliances: { kind: string; width: number; provenance: string }[] };
     provenanceNote?: string;
     applianceQuestions: { prompt: string }[];
+    siteQuestions: { kind: string }[];
   };
 
   const fridge = body.floorPlan.appliances.find((a) => a.kind === "refrigerator");
@@ -795,6 +804,11 @@ test("家电信息记在户型上；没给宽度走推定值并如实标注", as
   assert.ok(
     body.applianceQuestions.some((q) => /冰箱|Refrigerator/i.test(q.prompt)),
     "推定的那个还该继续追问，客户给过的不该再问",
+  );
+  // 推定宽度的追问同样只走交互卡，不该在 siteQuestions 里再列一遍文字 Q#
+  assert.ok(
+    !body.siteQuestions.some((q) => q.kind === "appliance_width"),
+    "appliance_width 不该同时出现在 siteQuestions 里",
   );
 });
 
