@@ -161,7 +161,10 @@ window.RTA_UI = {
     switchedAcct: "Account switched; conversation rebuilt.",
     pricingAs: (from, to) => `${from} → priced as ${to}`,
     noResponse: "(no response)",
-    thinking: "Thinking…",
+    thinkingVerbs: [
+      "Thinking", "Pondering", "Mulling it over", "Working it out",
+      "Puzzling", "Reasoning", "Considering", "Sorting it out",
+    ],
     popular: "· popular",
     doneNone: "Done / none needed",
     skipQ: "Skip this question",
@@ -615,7 +618,10 @@ window.RTA_UI = {
     switchedAcct: "已切换账号，会话已重建。",
     pricingAs: (from, to) => `${from} → 按 ${to} 定价`,
     noResponse: "（无响应）",
-    thinking: "正在思考…",
+    thinkingVerbs: [
+      "思考中", "琢磨中", "推敲中", "盘算中",
+      "斟酌中", "分析中", "梳理中", "组织语言中",
+    ],
     popular: "· 常见选择",
     doneNone: "选好了 / 都不需要",
     skipQ: "跳过这一题",
