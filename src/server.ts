@@ -1083,6 +1083,10 @@ app.get("/ui-i18n.js", (c) => {
   c.header("content-type", "application/javascript; charset=utf-8");
   return c.body(readFileSync(path.join(__dirname, "../web/ui-i18n.js"), "utf-8"));
 });
+app.get("/artifact-blob.js", (c) => {
+  c.header("content-type", "application/javascript; charset=utf-8");
+  return c.body(readFileSync(path.join(__dirname, "../web/artifact-blob.js"), "utf-8"));
+});
 
 /** @openai/apps-sdk-ui 图标桥接产物（web-ui `npm run build` → web/vendor/apps-sdk-ui）。 */
 app.get("/vendor/apps-sdk-ui/*", (c) => {
