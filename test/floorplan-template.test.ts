@@ -45,7 +45,11 @@ interface TemplateResponse {
   ready: boolean;
   questions: { id: string; question: string }[];
   siteQuestions: { q: number; kind: string; prompt: string }[];
-  designBrief: { confirmedFacts: { key: string; status: string }[] };
+  designBrief: {
+    confirmedFacts: { key: string; status: string }[];
+    openItems: { id: string; status: string; brief: string; askHint?: string }[];
+    readyToAskDesign: boolean;
+  };
 }
 
 test("选 u-shaped-kitchen 模板 → 预填3段墙+门窗，全部待确认，未 ready", async () => {
@@ -88,6 +92,19 @@ test("选 u-shaped-kitchen 模板 → 预填3段墙+门窗，全部待确认，�
   const ceilingFact = body.designBrief.confirmedFacts.find((f) => f.key === "ceiling");
   assert.ok(ceilingFact);
   assert.equal(ceilingFact!.status, "needs_confirm");
+
+  // readiness 检查表的上下水/窗/门条目：模板预填≠客户确认，不能直接标 ok——
+  // 否则会被当成"已确认勿再问"喂给对话模型，模型就会把模板假设当事实复述
+  // 给客户、还跳过该问的确认（场景一测试报告 Critical Bug 的根因）。
+  const plumbingItem = body.designBrief.openItems.find((i) => i.id === "plumbing");
+  const windowsItem = body.designBrief.openItems.find((i) => i.id === "windows");
+  const doorsItem = body.designBrief.openItems.find((i) => i.id === "doors");
+  assert.ok(plumbingItem, "上下水是模板预填、未确认，必须出现在 openItems 里");
+  assert.equal(plumbingItem!.status, "needs_confirm");
+  assert.ok(windowsItem, "窗是模板预填、未确认，必须出现在 openItems 里");
+  assert.equal(windowsItem!.status, "needs_confirm");
+  assert.ok(doorsItem, "门洞是模板预填、未确认，必须出现在 openItems 里");
+  assert.equal(doorsItem!.status, "needs_confirm");
 });
 
 test("选「其他」→ 维持零墙段，不套用任何模板", async () => {

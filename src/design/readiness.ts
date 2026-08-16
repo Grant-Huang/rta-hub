@@ -11,7 +11,7 @@ import { isWallLengthPending } from "../floorplan/parse.js";
 import { assumedOnes, applianceLabel, type ApplianceKind } from "../floorplan/appliances.js";
 import { planAppliances } from "../layout/appliance-plan.js";
 import { missingFields, fieldLabel } from "../agents/orchestrator.js";
-import { geometrySuppressesIntake } from "./site-questions.js";
+import { geometrySuppressesIntake, pendingFeatureConfirm } from "./site-questions.js";
 import { chatConfirmedPlumbing, isDeferElectrical, isDeferGas, isDeferIsland } from "./chat-site-answers.js";
 import { isConfirmAssumedAppliances } from "./chat-appliance-answers.js";
 import { matchProvince, provinceByCode } from "./province-match.js";
@@ -279,15 +279,27 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
 
   // —— 上下水 ——
   const hasPlumbing = plan ? featureKind(plan, "plumbing").length > 0 : false;
+  // 户型模板预填的上下水带一条待确认项（FR-17.4）——"已经有了"不等于客户确认过，
+  // 不能直接标 ok，否则会被 confirmedBriefs 当成"已确认勿再问"喂给模型（FR-15.5）。
+  const plumbingPending = plan ? pendingFeatureConfirm(plan, "plumbing") : false;
   if (hasPlumbing && plan) {
     items.push({
       id: "plumbing",
       category: "site",
       critical: true,
-      status: "ok",
-      brief: msg(lang,
-        `Plumbing:\n${describeFeatures(plan, "plumbing", lang)}`,
-        `上下水：\n${describeFeatures(plan, "plumbing", lang)}`),
+      status: plumbingPending ? "needs_confirm" : "ok",
+      brief: plumbingPending
+        ? msg(lang,
+          `Plumbing (from template, not yet confirmed):\n${describeFeatures(plan, "plumbing", lang)}`,
+          `上下水（模板预填，尚未确认）：\n${describeFeatures(plan, "plumbing", lang)}`)
+        : msg(lang,
+          `Plumbing:\n${describeFeatures(plan, "plumbing", lang)}`,
+          `上下水：\n${describeFeatures(plan, "plumbing", lang)}`),
+      ...(plumbingPending ? {
+        askHint: msg(lang,
+          "The sink plumbing shown is from the template, not measured yet — does it look about right, or tell me the real wall/offset?",
+          "上下水位置是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和距离。"),
+      } : {}),
     });
   } else if (DEFER_PLUMBING.test(req)) {
     items.push({
@@ -328,15 +340,25 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
 
   // —— 窗 ——
   const hasWindows = plan ? featureKind(plan, "window").length > 0 : false;
+  const windowsPending = plan ? pendingFeatureConfirm(plan, "window") : false;
   if (hasWindows && plan) {
     items.push({
       id: "windows",
       category: "site",
       critical: false,
-      status: "ok",
-      brief: msg(lang,
-        `Windows:\n${describeFeatures(plan, "window", lang)}`,
-        `窗：\n${describeFeatures(plan, "window", lang)}`),
+      status: windowsPending ? "needs_confirm" : "ok",
+      brief: windowsPending
+        ? msg(lang,
+          `Windows (from template, not yet confirmed):\n${describeFeatures(plan, "window", lang)}`,
+          `窗（模板预填，尚未确认）：\n${describeFeatures(plan, "window", lang)}`)
+        : msg(lang,
+          `Windows:\n${describeFeatures(plan, "window", lang)}`,
+          `窗：\n${describeFeatures(plan, "window", lang)}`),
+      ...(windowsPending ? {
+        askHint: msg(lang,
+          "The window shown is from the template, not measured yet — does it look about right, or tell me the real wall/size?",
+          "窗户位置是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和尺寸。"),
+      } : {}),
     });
   } else if (DEFER_WINDOWS.test(req)) {
     items.push({
@@ -361,30 +383,50 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
 
   // —— 门洞（有则明确 offset/width）——
   const hasDoors = plan ? featureKind(plan, "door").length > 0 : false;
+  const doorsPending = plan ? pendingFeatureConfirm(plan, "door") : false;
   if (hasDoors && plan) {
     items.push({
       id: "doors",
       category: "site",
       critical: false,
-      status: "ok",
-      brief: msg(lang,
-        `Doors:\n${describeFeatures(plan, "door", lang)}`,
-        `门：\n${describeFeatures(plan, "door", lang)}`),
+      status: doorsPending ? "needs_confirm" : "ok",
+      brief: doorsPending
+        ? msg(lang,
+          `Doors (from template, not yet confirmed):\n${describeFeatures(plan, "door", lang)}`,
+          `门（模板预填，尚未确认）：\n${describeFeatures(plan, "door", lang)}`)
+        : msg(lang,
+          `Doors:\n${describeFeatures(plan, "door", lang)}`,
+          `门：\n${describeFeatures(plan, "door", lang)}`),
+      ...(doorsPending ? {
+        askHint: msg(lang,
+          "The door opening shown is from the template, not measured yet — does it look about right, or tell me the real wall/width?",
+          "门洞位置是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和宽度。"),
+      } : {}),
     });
   }
 
   // —— 燃气接口（接灶具）——
   const hasGas = plan ? featureKind(plan, "gas").length > 0 : false;
+  const gasPending = plan ? pendingFeatureConfirm(plan, "gas") : false;
   const deferredGas = isDeferGas(req);
   if (hasGas && plan) {
     items.push({
       id: "gas",
       category: "site",
       critical: true,
-      status: "ok",
-      brief: msg(lang,
-        `Gas hookup:\n${describeFeatures(plan, "gas", lang)}`,
-        `燃气接口：\n${describeFeatures(plan, "gas", lang)}`),
+      status: gasPending ? "needs_confirm" : "ok",
+      brief: gasPending
+        ? msg(lang,
+          `Gas hookup (from template, not yet confirmed):\n${describeFeatures(plan, "gas", lang)}`,
+          `燃气接口（模板预填，尚未确认）：\n${describeFeatures(plan, "gas", lang)}`)
+        : msg(lang,
+          `Gas hookup:\n${describeFeatures(plan, "gas", lang)}`,
+          `燃气接口：\n${describeFeatures(plan, "gas", lang)}`),
+      ...(gasPending ? {
+        askHint: msg(lang,
+          "The gas hookup shown is from the template, not measured yet — does it look about right, or tell me the real wall/position?",
+          "燃气接口是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和位置。"),
+      } : {}),
     });
   } else if (deferredGas) {
     items.push({
@@ -411,15 +453,25 @@ export function evaluateDesignReadiness(input: ReadinessInput): DesignReadiness 
 
   // —— 强电接口（接冰箱/烤箱；没有燃气时也接灶具）——
   const hasElectrical = plan ? featureKind(plan, "electrical").length > 0 : false;
+  const electricalPending = plan ? pendingFeatureConfirm(plan, "electrical") : false;
   if (hasElectrical && plan) {
     items.push({
       id: "electrical",
       category: "site",
       critical: true,
-      status: "ok",
-      brief: msg(lang,
-        `Electrical hookup:\n${describeFeatures(plan, "electrical", lang)}`,
-        `强电接口：\n${describeFeatures(plan, "electrical", lang)}`),
+      status: electricalPending ? "needs_confirm" : "ok",
+      brief: electricalPending
+        ? msg(lang,
+          `Electrical hookup (from template, not yet confirmed):\n${describeFeatures(plan, "electrical", lang)}`,
+          `强电接口（模板预填，尚未确认）：\n${describeFeatures(plan, "electrical", lang)}`)
+        : msg(lang,
+          `Electrical hookup:\n${describeFeatures(plan, "electrical", lang)}`,
+          `强电接口：\n${describeFeatures(plan, "electrical", lang)}`),
+      ...(electricalPending ? {
+        askHint: msg(lang,
+          "The electrical hookup shown is from the template, not measured yet — does it look about right, or tell me the real wall/position?",
+          "强电接口是模板预填的，还没实际确认——大致对吗？不对的话告诉我实际墙名和位置。"),
+      } : {}),
     });
   } else if (isDeferElectrical(req)) {
     items.push({

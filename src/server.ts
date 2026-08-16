@@ -1570,12 +1570,16 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
         .map((i) => i.askHint || i.brief)
         .slice(0, 3);
       const repeatedAsk = askedSameFieldsBefore(conv, nextReqs, openAsks);
+      // `needs_confirm` 明确是"还没客户确认，等着问一句"（模板/识图预填的墙长、
+      // 门窗、上下水…）——绝不能混进"已确认勿再问"这份清单喂给模型，否则模型
+      // 会把模板假设当成事实复述给客户，还跳过本该问的确认（FR-15.5 / 场景一
+      // 测试报告 Critical Bug）。这些项已经通过 `openAsks` 单独告诉模型要问。
       const confirmedBriefs = [
         ...readinessPre.confirmedFacts
-          .filter((f) => f.status === "ok" || f.status === "needs_confirm" || f.status === "deferred")
+          .filter((f) => f.status === "ok" || f.status === "deferred")
           .map((f) => `${f.label}: ${f.value}`),
         ...readinessPre.items
-          .filter((i) => i.status === "ok" || i.status === "deferred" || i.status === "needs_confirm")
+          .filter((i) => i.status === "ok" || i.status === "deferred")
           .map((i) => i.brief),
       ].filter((s, idx, arr) => s.trim() && arr.indexOf(s) === idx)
         .slice(0, 10);

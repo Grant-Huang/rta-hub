@@ -56,8 +56,12 @@ function hasKind(run: WallRun, kind: string): boolean {
 /**
  * 这类特征已经存在，但是不是客户确认的——户型模板预填的门/窗/上下水
  * 会带一条待确认项（FR-17.4），不能因为"已经有了"就当作已经问过。
+ *
+ * 导出给 `readiness.ts` 复用：那边的 plumbing/windows/doors/gas/electrical
+ * 检查项之前只看"特征是否存在"，没看这条待确认项，导致模板预填的值被
+ * 标成 `ok`（已确认）——跟这里的 Q# 判断口径不一致（FR-15.5）。
  */
-function pendingFeatureConfirm(plan: FloorPlan, kind: string): boolean {
+export function pendingFeatureConfirm(plan: FloorPlan, kind: string): boolean {
   return plan.unresolvedItems.some((u) =>
     !u.resolved && u.target.kind === "feature"
     && plan.parsedGeometry.wallRuns.some((r) => r.features.some(
