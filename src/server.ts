@@ -1793,6 +1793,11 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
     questionCompanyId: questionCompanyId || null,
     language,
     ...briefing,
+    // 家电种类/推定宽度这一轮走 applianceQuestions 交互卡问（多选/单选点击即答），
+    // 不要在 siteQuestions 里再用文字 Q# 问一遍同一件事——两条通道问同一个问题，
+    // 客户分不清该打字还是点选。
+    siteQuestions: briefing.siteQuestions.filter(
+      (q) => q.kind !== "appliance_kinds" && q.kind !== "appliance_width"),
     ...(showcaseSamples ? { intakeSamples: showcaseSamples } : {}),
     ...(applianceQuestions.length ? { applianceQuestions } : {}),
     ...(designPrompt ? { designPrompt, designSession } : {}),
@@ -3029,20 +3034,27 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
   }
 
   // FR-17：解读 + 纯文字 Q#（不附图提问，避免每轮重贴草图）
+  //
+  // 解读文字（`interpretation`）和后续引导语分成两条独立的助手消息，不拼成一条：
+  // `interpretation` 单独作为响应字段返回，客户端拿它单独发一条气泡；这里的
+  // `trailerBits` 只装"接下来怎么答"的引导语，不重复解读内容、也不内嵌 Q# 原文——
+  // Q# 的唯一呈现渠道是 `renderSiteQuestionsText(body.siteQuestions)`（客户端
+  // 另外调用），这里不再把前几条 Q# 文本抄一遍进消息正文，否则解读和 Q# 都会
+  // 各露面两次（曾经的真实 bug：客户端用字符串相等去重，拼接后的文本和单独
+  // 返回的 interpretation 不相等，去重形同虚设）。
   const interpretation = interpretations.join("\n");
   const briefing = await briefingPayload(conv.id, undefined, { includeSiteDiagram: false });
-  const sitePrompts = briefing.siteQuestions.slice(0, 4).map((q) => q.prompt);
-  const assistantBits = [interpretation, ...sitePrompts];
+  const trailerBits: string[] = [];
   const suggestReupload = shouldSuggestReupload(plan!, extraction);
   // 识别失败 / 零墙段：1–2 轮内强制手输墙长/层高，推进 readyToDraw
   const needsManual = briefing.needsManualWalls
     || !plan!.parsedGeometry.wallRuns.some((r) => r.length > 0)
     || (extraction && extraction.status !== "ok" && extraction.status !== "notConfigured");
   if (suggestReupload) {
-    assistantBits.push(reuploadPrompt(fpLang));
+    trailerBits.push(reuploadPrompt(fpLang));
   }
   if (needsManual) {
-    assistantBits.push(msg(fpLang,
+    trailerBits.push(msg(fpLang,
       "Answer in text only — send wall lengths and ceiling in one message "
         + "(e.g. `<wall name> <inches>\", <wall name> <inches>\", ceiling <inches>\"`). "
         + "Then confirm each appliance with its width so we can ask whether to draw.",
@@ -3063,13 +3075,13 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     content: textPart ? `${textPart}\n${uploadLine}` : uploadLine,
     at,
   };
-  const interpretMsg: ChatMessage = {
-    role: "assistant",
-    content: assistantBits.filter(Boolean).join("\n"),
-    at,
-  };
+  const interpretMsg: ChatMessage = { role: "assistant", content: interpretation, at };
+  const trailerText = trailerBits.filter(Boolean).join("\n");
+  const trailerMsg: ChatMessage | undefined = trailerText
+    ? { role: "assistant", content: trailerText, at }
+    : undefined;
   await appCtx.repos.conversations.update(conv.id, {
-    messages: [...conv.messages, echoMsg, interpretMsg],
+    messages: [...conv.messages, echoMsg, interpretMsg, ...(trailerMsg ? [trailerMsg] : [])],
   });
 
   return c.json({
@@ -3086,7 +3098,9 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
     suppressGeometryIntake: briefing.geometryUsable,
     ...(extractionNote(extraction!, fpLang) ? { extractionNote: extractionNote(extraction!, fpLang) } : {}),
     ...briefing,
-    replies: [interpretMsg],
+    // 只放"引导语"，不放 interpretation——客户端已经单独用 body.interpretation
+    // 发那条气泡，replies 里再塞一遍就是同一段话露两次。
+    replies: trailerMsg ? [trailerMsg] : [],
   }, 201);
 });
 
@@ -3450,6 +3464,10 @@ app.post("/api/floorplans/:id/resolve", requireAccount, async (c) => {
   return c.json({
     floorPlan: next, ready: isLayoutReady(next), questions: pendingQuestions(next),
     ...resolveBriefing,
+    // 家电种类/推定宽度这一轮走 applianceQuestions 交互卡问，不再用 siteQuestions
+    // 的文字 Q# 重复问一遍——见下面 applianceQuestions 的计算，两处覆盖同一件事。
+    siteQuestions: resolveBriefing.siteQuestions.filter(
+      (q) => q.kind !== "appliance_kinds" && q.kind !== "appliance_width"),
     ...(fitWarnings.length
       ? {
           applianceFitOk: false,
