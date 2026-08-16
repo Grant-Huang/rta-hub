@@ -9,6 +9,12 @@
  */
 import type { VisionExtractor, RawExtraction, RawWallRun } from "./parse.js";
 import { FLOORPLAN_TEMPLATES } from "../samples/templates.js";
+import {
+  createPaddleOcrExtractorFromEnv,
+  createPaddleOcrExtractorFromTestEnv,
+  formatOcrGroundingBlock,
+  type OcrExtractor,
+} from "./paddleocr.js";
 
 interface OllamaGenerateResponse {
   response?: string;
@@ -33,8 +39,26 @@ Set "templateGuess" to { "id": <one of those 5 ids>, "confidence": 0–1 }, or o
 System wall names are those slot labels (${slotNames}), never lettered A/B/C.`;
 }
 
+/**
+ * PaddleOCR 读到的文字，拼成一段给 VL 模型当"读数外援"的提示词片段。
+ * 只报文字与大致位置，墙/特征归属仍由 VL 模型自己判断（见 `paddleocr.ts` 顶部注释）。
+ */
+function ocrGroundingSection(ocrBlock?: string): string {
+  if (!ocrBlock) return "";
+  return `
+A separate OCR pass (dedicated text recognizer, not you) detected this text on the image, with
+position as percentage of image width/height from the top-left corner:
+${ocrBlock}
+
+OCR reads exact digits more reliably than a vision model, but it does NOT know which wall or
+feature a number belongs to — you still decide that from the drawing's layout. When your own
+reading and an OCR string refer to the same printed number, prefer the OCR digits. Ignore OCR
+noise that is not a dimension, label, or legend text.
+`;
+}
+
 /** 给视觉模型的抽取说明。数字示例会泄漏进输出，所以这里只写字段契约、不写样例对象。 */
-export function floorPlanVisionPrompt(hint?: string): string {
+export function floorPlanVisionPrompt(hint?: string, ocrBlock?: string): string {
   const base = `You are reading an architectural floor plan image to extract the KITCHEN for cabinet layout.
 
 The image may show a whole house (main floor + upper floor + garage). Focus on the room labeled Kitchen / KITCHEN / 厨房. Ignore bedrooms, garage, office, decks unless they are the only room shown.
@@ -64,7 +88,7 @@ Each wallRuns item:
 - features: array of { kind, offset, width, confidence }
 
 ${featureRulesBlock()}
-
+${ocrGroundingSection(ocrBlock)}
 Rules:
 - An island is NOT a fourth perimeter wall. Emit it as kind "island" with length (long side) and depth (short side). Island startsAtCorner and endsAtCorner are false.
 - Prefer 2–4 kitchen wall runs that form an L / U / galley from the drawing, plus a separate island run when one is drawn.
@@ -77,7 +101,7 @@ Rules:
 }
 
 /** 第一步：只读墙段 / 岛台 / 层高，不扫门窗上下水。 */
-export function floorPlanVisionWallsPrompt(hint?: string): string {
+export function floorPlanVisionWallsPrompt(hint?: string, ocrBlock?: string): string {
   const base = `You are reading an architectural floor plan image to extract the KITCHEN outline for cabinet layout.
 
 The image may show a whole house (main floor + upper floor + garage). Focus on the room labeled Kitchen / KITCHEN / 厨房. Ignore bedrooms, garage, office, decks unless they are the only room shown.
@@ -106,7 +130,7 @@ Each wallRuns item:
 - startsAtCorner / endsAtCorner: booleans
 - kind: "wall" (default) or "island"
 - depth: inches; only for kind "island" (the short side). Island belongs in wallRuns (kind "island") — there is no separate island field.
-
+${ocrGroundingSection(ocrBlock)}
 Rules:
 - A hatched or diagonally filled rectangle standing in the room (not on a wall) = island.
 - An island is NOT a fourth perimeter wall. Emit it as kind "island" with length (long side) and depth (short side). Island startsAtCorner and endsAtCorner are false.
@@ -150,7 +174,7 @@ export function compactWallList(raw: RawExtraction): string {
 }
 
 /** 第二步：墙已经锁定，只扫门窗上下水。 */
-export function floorPlanVisionFeaturesPrompt(walls: RawExtraction, hint?: string): string {
+export function floorPlanVisionFeaturesPrompt(walls: RawExtraction, hint?: string, ocrBlock?: string): string {
   const base = `You already extracted the kitchen wall runs from this floor plan. Do not change them.
 
 Locked wall runs (copy slot exactly; Do not change length, depth, kind, or slot):
@@ -159,7 +183,7 @@ ${compactWallList(walls)}
 Return ONLY a JSON object with wallRuns. Each item needs slot (same as above) and features: array of { kind, offset, width, confidence }.
 
 ${featureRulesBlock()}
-
+${ocrGroundingSection(ocrBlock)}
 Copy numbers from the drawing. Do not copy numbers from this prompt.`;
   return withHint(base, hint);
 }
@@ -223,8 +247,15 @@ export interface OllamaVisionOptions {
    * 默认两步：先墙后特征。`false` 退回单次提示词（A/B 对照用）。
    */
   twoStep?: boolean;
-  /** 每一步 Ollama 调用结束时回调，供 A/B 记耗时。 */
-  onTiming?: (info: { step: "oneshot" | "walls" | "features"; elapsedMs: number }) => void;
+  /** 每一步（含 OCR）调用结束时回调，供 A/B 记耗时。 */
+  onTiming?: (info: { step: "oneshot" | "walls" | "features" | "ocr"; elapsedMs: number }) => void;
+  /**
+   * PaddleOCR 读数外援（`paddleocr.ts`）。配了就在墙/特征两步提示词里都附一段
+   * OCR 读到的文字+位置；OCR 本身失败/超时不影响 VL 抽取——退回不带外援的老路径。
+   */
+  ocr?: OcrExtractor;
+  /** OCR 外援失败时的回调（不会抛出、不会中断抽取）。 */
+  onOcrError?: (err: unknown) => void;
 }
 
 /** 从环境变量装配；没配 base URL 就返回 undefined（上传降级为手动录入）。 */
@@ -233,8 +264,10 @@ export function createVisionExtractorFromEnv(
 ): VisionExtractor | undefined {
   const baseURL = env.OPENAI_BASE_URL_VISION?.trim();
   if (!baseURL) return undefined;
+  const ocr = createPaddleOcrExtractorFromEnv(env);
   return createOllamaVisionExtractor(baseURL, {
     ...(env.LLM_MODEL_VISION?.trim() ? { model: env.LLM_MODEL_VISION.trim() } : {}),
+    ...(ocr ? { ocr } : {}),
   });
 }
 
@@ -259,7 +292,8 @@ export function createVisionExtractorFromTestEnv(
     || "http://localhost:11434";
   const baseURL = rawBase.replace(/\/v1\/?$/, "");
   const model = env.LLM_MODEL_TEST_VISION?.trim() || "qwen2.5vl:latest";
-  return createOllamaVisionExtractor(baseURL, { model });
+  const ocr = createPaddleOcrExtractorFromTestEnv(env);
+  return createOllamaVisionExtractor(baseURL, { model, ...(ocr ? { ocr } : {}) });
 }
 
 export function createOllamaVisionExtractor(
@@ -280,22 +314,40 @@ export function createOllamaVisionExtractor(
     }
   };
 
+  /** OCR 是读数外援，不是必需依赖：失败/超时就退回不带外援的老路径，绝不中断抽取。 */
+  const runOcr = async (image: string, mimeType: string): Promise<string | undefined> => {
+    if (!opts.ocr) return undefined;
+    const t0 = Date.now();
+    try {
+      const tokens = await opts.ocr.extract({ image, mimeType });
+      return tokens ? formatOcrGroundingBlock(tokens) : undefined;
+    } catch (err) {
+      opts.onOcrError?.(err);
+      return undefined;
+    } finally {
+      opts.onTiming?.({ step: "ocr", elapsedMs: Date.now() - t0 });
+    }
+  };
+
   return {
     async extract({ image, mimeType, hint }): Promise<RawExtraction | undefined> {
       const b64 = stripDataUrl(image);
       if (!b64) return undefined;
+      const ocrBlock = await runOcr(image, mimeType);
 
       if (!twoStep) {
-        const parsed = await generate("oneshot", floorPlanVisionPrompt(hint), b64, mimeType);
+        const parsed = await generate("oneshot", floorPlanVisionPrompt(hint, ocrBlock), b64, mimeType);
         return parsed ? toRawExtraction(parsed) : undefined;
       }
 
-      const wallsParsed = await generate("walls", floorPlanVisionWallsPrompt(hint), b64, mimeType);
+      const wallsParsed = await generate("walls", floorPlanVisionWallsPrompt(hint, ocrBlock), b64, mimeType);
       if (!wallsParsed) return undefined;
       const walls = toRawExtraction(wallsParsed);
       if (!walls.wallRuns?.length) return walls;
 
-      const featParsed = await generate("features", floorPlanVisionFeaturesPrompt(walls, hint), b64, mimeType);
+      const featParsed = await generate(
+        "features", floorPlanVisionFeaturesPrompt(walls, hint, ocrBlock), b64, mimeType,
+      );
       if (!featParsed) return walls;
       return mergeWallsAndFeatures(walls, toRawExtraction(featParsed));
     },
