@@ -40,7 +40,7 @@ async function createConversation(): Promise<string> {
   return body.conversation.id;
 }
 
-interface WallRun { id: string; label: string; length: number; features: { kind: string }[] }
+interface WallRun { id: string; label: string; length: number; kind?: string; features: { kind: string }[] }
 interface MessagesResponse {
   replies: { content: string }[];
   floorPlanId?: string;
@@ -71,9 +71,9 @@ test("客户打字说「U-shape」→ 套用 U 型模板，回复里讲解主墙
   const planBody = await planRes.json() as FloorPlanResponse;
   const runs = planBody.floorPlan.parsedGeometry.wallRuns;
   assert.equal(runs.length, 3);
-  assert.deepEqual(runs.map((w) => w.length), [120, 144, 120]);
-  // 预填不算确认——都还留着待确认项
-  assert.ok(planBody.floorPlan.unresolvedItems.some((u) => !u.resolved));
+  // 只建墙面结构——客户只说了"U-shape"，从没报过任何尺寸，长度不能预填
+  // 模板的常见值（144"/120"），必须留空等客户实测。
+  assert.deepEqual(runs.map((w) => w.length), [0, 0, 0]);
 });
 
 test("客户打字说「galley kitchen」→ 套用走廊型模板（两段墙不相接）", async () => {
@@ -88,7 +88,8 @@ test("客户打字说「galley kitchen」→ 套用走廊型模板（两段墙�
   const planBody = await planRes.json() as FloorPlanResponse;
   const runs = planBody.floorPlan.parsedGeometry.wallRuns;
   assert.equal(runs.length, 2);
-  assert.deepEqual(runs.map((w) => w.length), [144, 144]);
+  // 走廊型两段墙的长度同样没有依据，不能预填 144"。
+  assert.deepEqual(runs.map((w) => w.length), [0, 0]);
 });
 
 test("「L-shape with an island」命中带岛台的模板，不是纯 L 型", async () => {
@@ -101,7 +102,12 @@ test("「L-shape with an island」命中带岛台的模板，不是纯 L 型", a
   const planRes = await req(`/api/floorplans/${body.floorPlanId}`, { accountId: CONSUMER });
   const planBody = await planRes.json() as FloorPlanResponse;
   const runs = planBody.floorPlan.parsedGeometry.wallRuns;
-  assert.ok(runs.some((w) => w.length === 72), "should include the 72\" island run");
+  // 客户选了带岛台的模板，说明"有岛台"这个结构性事实是客户确认过的——
+  // 但岛台具体尺寸（72x36 这类常见值）没有依据，不能预填，必须留 0 等客户
+  // 实测或后续在对话里报出来。
+  const island = runs.find((w) => w.kind === "island");
+  assert.ok(island, "should include an island wall run (structure), not a plain L-shape");
+  assert.equal(island!.length, 0, "island size should not be pre-filled");
 });
 
 test("没提户型名、只报墙长——不套模板，走原有的手输建墙路径", async () => {

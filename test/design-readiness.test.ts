@@ -384,3 +384,23 @@ test("视觉写入但未确认的墙长/层高/上下水在已确认 Tab 标 nee
   assert.equal(r.confirmedFacts.find((f) => f.key === "ceiling")?.status, "needs_confirm");
   assert.equal(r.confirmedFacts.find((f) => f.key.startsWith("plumbing:"))?.status, "needs_confirm");
 });
+
+test("上下水特征存在但还有待确认项（比如视觉识图读到、客户没确认过）——checklist 的 plumbing 项也要是 needs_confirm，不能只看'特征是否存在'就标 ok", () => {
+  // 这条对应的是 confirmedFacts（单条事实）之外，checklist 顶层 `items`
+  // 里的 "plumbing"/"windows"/"doors"/"gas"/"electrical" 五项——它们之前
+  // 只看 `featureKind(plan, kind).length > 0`，不看 unresolvedItems，
+  // 会被喂进 confirmedBriefs 当成"已确认勿再问"讲给对话模型听。
+  const plan = readyPlan();
+  plan.unresolvedItems = [
+    { id: "fpu_1", target: { kind: "feature", id: "wf_1" }, field: "plumbing", reason: "confirm", resolved: false },
+  ];
+  const r = evaluateDesignReadiness({ conversation: conv(), plan, language: "en" });
+  assert.equal(r.items.find((i) => i.id === "plumbing")?.status, "needs_confirm");
+
+  // 待确认项被消解后（客户真的确认过了），才应该变回 ok
+  plan.unresolvedItems = [
+    { id: "fpu_1", target: { kind: "feature", id: "wf_1" }, field: "plumbing", reason: "confirm", resolved: true },
+  ];
+  const r2 = evaluateDesignReadiness({ conversation: conv(), plan, language: "en" });
+  assert.equal(r2.items.find((i) => i.id === "plumbing")?.status, "ok");
+});

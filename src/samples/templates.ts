@@ -1,13 +1,18 @@
 /**
  * 户型模板的标准几何 —— FR-17.4。
  *
- * `catalog.ts` 里的 5 张 floorplan 示例图原本只是"照着手绘"的参考；这里给每张图
- * 配一份结构化尺寸（抄自 `README.md` 的标注要求），客户选"我家像这个"时可以
- * 直接预填，不用从空白开始手绘。
+ * `walls` 里的 `label`/`kind`/`startsAtCorner`（墙面**结构**：几段墙、罗盘
+ * 方位、是否转角相接、是否岛台）是客户选"我家像这个"这个动作本身就确认过
+ * 的事实，`server.ts` 的 `applyFloorplanTemplate` 会用它们建墙壳。
  *
- * 这些数字是模板给的标准值，不是客户量的——套用方（`server.ts` 的
- * `applyFloorplanTemplate`）必须给每一段墙、每一处门窗都留一条待确认项，
- * 不能因为填了数字就当成已确认（FR-15.5）。
+ * `length`/`depth`/`features`/`ceilingHeight` 这几个**数值**字段不是客户
+ * 量的，也不允许被 `applyFloorplanTemplate` 拿去预填客户的户型数据——没有
+ * 图、只凭客户点了个形状名，系统对这些数字没有任何依据，不能因为"常见"
+ * 就替客户填一个默认值（哪怕标成"待确认"也不行，那样客户容易把"系统猜的"
+ * 误当成"系统读到的"）。这几个数值字段目前**只**被视觉识图对齐模块
+ * （`src/floorplan/template-match.ts`）使用——客户真的上传了图、但某个字段
+ * 模型没能读出来时，用作待确认提示文案里的参考建议值，绝不直接写入已确认
+ * 数据。
  */
 import type { WallFeatureKind } from "../floorplan/types.js";
 

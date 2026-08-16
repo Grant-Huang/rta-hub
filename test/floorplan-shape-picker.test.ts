@@ -94,10 +94,15 @@ test("上传户型图之后，点/打 L-shape chip 原文应该真的换形状�
 
   const g = await req(`/api/floorplans/${body.floorPlanId}`, { accountId: CONSUMER });
   const gBody = await json<{ floorPlan: { parsedGeometry: { wallRuns: { length: number }[] } } }>(g);
+  // L-shape 模板只带来墙面结构（几段墙、罗盘方位）——不预填任何长度数字，
+  // 客户只报了形状，没报过尺寸，系统没依据替他填一个数（见 applyFloorplanTemplate
+  // 顶部注释）。这里验证的是"点选形状真的生效了、不是静默无反应"，不是
+  // "带来了预填数值"。
+  assert.equal(gBody.floorPlan.parsedGeometry.wallRuns.length, 2,
+    "L-shape 应该建出 2 段墙的结构（North/East）");
   assert.ok(
-    gBody.floorPlan.parsedGeometry.wallRuns.length > 0
-      && gBody.floorPlan.parsedGeometry.wallRuns.every((w) => w.length > 0),
-    "L-shape 模板应该带来预填的墙长，不再是空壳",
+    gBody.floorPlan.parsedGeometry.wallRuns.every((w) => w.length === 0),
+    "墙长没有任何依据，必须留空等客户实测，不能预填模板的常见值",
   );
 });
 

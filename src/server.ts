@@ -136,7 +136,9 @@ import type { BlockedEdit } from "./design/confirm-lock.js";
 import { renderSiteDiagram } from "./render/site-diagram.js";
 import { reviewSiteDiagram, type SiteDiagramReviewResult } from "./delivery/site-diagram-review.js";
 import { isAllowedSampleFile } from "./samples/catalog.js";
-import { floorplanTemplateById, matchKnownShape, SHAPE_WALL_EXPLANATION } from "./samples/templates.js";
+import {
+  floorplanTemplateById, matchKnownShape, SHAPE_SHORT_LABEL, SHAPE_WALL_EXPLANATION,
+} from "./samples/templates.js";
 import { matchesKnownTemplate, normalizeExtractionWithTemplate } from "./floorplan/template-match.js";
 import {
   floorplanFirstWelcome, intakeSampleCards, reuploadPrompt, shouldSuggestReupload, wantsShapeExample,
@@ -3135,12 +3137,23 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
 });
 
 /**
- * 套用户型模板：建墙壳（标准数值，全部标记待确认）+ 生成解读复述（含墙名讲解）。
+ * 套用户型模板：只按户型形状建墙壳的**结构**（有几段墙、罗盘方位、是否转角
+ * 相接、有没有岛台）——这些是客户点选"L-shape"这个动作本身就告诉我们的事实。
  *
- * 预填**不是**客户确认——每段墙、每处门窗都留一条待确认项，走跟手绘/上传一样的
- * Q# 核对（FR-15.5）。两个入口共用：`/floorplan-template`（客户点按钮，Phase 2
- * 之前的路径，仍保留给"其他"分支用）；主聊天入口客户直接打字点名户型
- * （见 `matchKnownShape` 调用处）。
+ * 不预填任何数值（墙长、层高、门窗/上下水/燃气/强电的位置宽度）：客户只说了
+ * 户型形状，从没报过任何尺寸，系统没有依据替他填一个"常见值"，哪怕这个值
+ * 常见到写进了参考图的标注说明（`src/samples/README.md`）——那只是手绘参考、
+ * 不是这位客户家里的实测数据。上传户型图走视觉识图（`ollama-vision.ts` /
+ * `template-match.ts`）不受影响：那条路径读的是客户真实上传的图，读到的值
+ * 仍然要走待确认，但至少有真实依据。
+ *
+ * 每段墙长度留 0（跟手绘/上传识别失败时的"未知"是同一种状态），交给既有的
+ * 缺口追问流程（`site-questions.ts` / `readiness.ts`）问客户要实测数字，
+ * 不生成任何"确认这个模板猜测"的待确认项。
+ *
+ * 两个入口共用：`/floorplan-template`（客户点按钮，Phase 2 之前的路径，仍
+ * 保留给"其他"分支用）；主聊天入口客户直接打字点名户型（见 `matchKnownShape`
+ * 调用处）。
  */
 async function applyFloorplanTemplate(
   conv: Conversation,
@@ -3156,78 +3169,36 @@ async function applyFloorplanTemplate(
   for (const old of previousPlans) await appCtx.repos.floorPlans.remove(old.id);
 
   let plan = createChatSourcedFloorPlan(conv.id, at);
-  const wallIds: string[] = [];
   for (const w of template.walls) {
     plan = addWallRun(plan, {
       label: w.label,
-      length: w.length,
+      // 只有形状结构（墙名/转角关系/是否岛台）来自客户选的户型；长度没有
+      // 任何依据，留 0 走"缺口"而不是"待确认"（FR-17.4）。
+      length: 0,
       ...(w.kind ? { kind: w.kind } : {}),
-      ...(w.depth !== undefined ? { depth: w.depth } : {}),
       ...(w.startsAtCorner !== undefined ? { startsAtCorner: w.startsAtCorner } : {}),
     }, at);
-    wallIds.push(plan.parsedGeometry.wallRuns[plan.parsedGeometry.wallRuns.length - 1]!.id);
   }
-  for (const f of template.features) {
-    plan = addFeature(plan, wallIds[f.wall]!, { kind: f.kind, offset: f.offset, width: f.width }, at);
-  }
-  plan = resolveCeilingHeight(plan, template.ceilingHeight, at);
   if (carriedAppliances.length > 0) plan = { ...plan, appliances: carriedAppliances };
 
-  // 模板预填不是客户量的——每段墙长、每处门窗、层高都留一条待确认项（FR-17.4 / FR-15.5）。
-  // 层高之前漏了这一条：`resolveCeilingHeight` 只写值，不像墙长/特征那样自动带
-  // 待确认项，导致模板层高被 `readiness.ts`/`site-questions.ts` 当成客户已确认——
-  // 必须在这里显式补一条，跟 `ceilingFromVision`（视觉识图路径）的口径对齐。
-  const confirmItems: FloorPlan["unresolvedItems"] = [{
-    id: `tpl_${randomUUID().slice(0, 8)}`,
-    target: { kind: "global" },
-    field: "ceilingHeight",
-    reason: msg(lang,
-      `Confirm ceiling height is about ${template.ceilingHeight}" (from the ${template.id} template).`,
-      `请确认层高大约是 ${template.ceilingHeight}"（来自 ${template.id} 模板）。`),
-    suggestion: template.ceilingHeight,
-    resolved: false,
-  }];
-  for (const r of plan.parsedGeometry.wallRuns) {
-    confirmItems.push({
-      id: `tpl_${randomUUID().slice(0, 8)}`,
-      target: { kind: "wallRun", id: r.id },
-      field: "length",
-      reason: msg(lang,
-        `Confirm "${r.label}" is about ${r.length}" (from the ${template.id} template).`,
-        `请确认「${r.label}」大约是 ${r.length}"（来自 ${template.id} 模板）。`),
-      suggestion: r.length,
-      resolved: false,
-    });
-    for (const f of r.features) {
-      confirmItems.push({
-        id: `tpl_${randomUUID().slice(0, 8)}`,
-        target: { kind: "feature", id: f.id },
-        field: f.kind,
-        reason: msg(lang,
-          `Confirm the ${f.kind} on "${r.label}" (from the template) — offset ${f.offset}", width ${f.width}".`,
-          `请确认「${r.label}」上的${f.kind}（模板预填）——距起点 ${f.offset}"，宽 ${f.width}"。`),
-        suggestion: f.offset,
-        resolved: false,
-      });
-    }
-  }
   plan = {
     ...plan,
-    unresolvedItems: [...plan.unresolvedItems, ...confirmItems],
     shapeTemplateId: template.id,
     updatedAt: at,
   };
   await appCtx.repos.floorPlans.upsert(plan);
 
-  const templateNote = lang === "zh" ? template.noteZh : template.noteEn;
+  const shapeLabel = SHAPE_SHORT_LABEL[template.id];
+  const shapeName = shapeLabel ? (lang === "zh" ? shapeLabel.zh : shapeLabel.en) : templateId;
   const wallExplain = SHAPE_WALL_EXPLANATION[template.id];
   const explainLine = wallExplain ? (lang === "zh" ? wallExplain.zh : wallExplain.en) : "";
   const interpretation = [
     msg(lang,
-      `Applied the "${templateId}" template as a starting point: ${templateNote} `
-        + "These are standard numbers, not measured — please confirm below.",
-      `已按「${templateId}」模板预填作为起点：${templateNote} `
-        + "这些是标准数值，不是量出来的——请在下面逐项确认。"),
+      `Got it — treating this as a ${shapeName} layout. `
+        + "No sizes assumed yet — I still need the actual measurements from you for each wall, ceiling height, "
+        + "and where things like plumbing/windows/doors are.",
+      `记下了——按${shapeName}的墙面结构来画。`
+        + "还没有任何尺寸数据——每段墙的实际长度、层高，以及上下水/窗/门的位置，都需要你来提供。"),
     explainLine,
   ].filter(Boolean).join("\n");
 
