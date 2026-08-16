@@ -7,6 +7,7 @@
 import type { Conversation, Province } from "../domain/types.js";
 import type { FloorPlan, WallRun } from "../floorplan/types.js";
 import { isIsland, isLayoutReady } from "../floorplan/types.js";
+import { isWallLengthPending } from "../floorplan/parse.js";
 import { assumedOnes, applianceLabel, type ApplianceKind } from "../floorplan/appliances.js";
 import { planAppliances } from "../layout/appliance-plan.js";
 import { missingFields, fieldLabel } from "../agents/orchestrator.js";
@@ -829,8 +830,7 @@ function buildConfirmedFacts(
       const depth = r.depth != null
         ? msg(lang, `, depth ${r.depth}"`, `，进深 ${r.depth}"`)
         : "";
-      const lengthPending = pending((u) =>
-        u.target.kind === "wallRun" && u.target.id === r.id && u.field === "length");
+      const lengthPending = isWallLengthPending(plan, r.id);
       facts.push({
         key: `wall:${r.id}`,
         label: msg(lang, `${kind} ${r.label}`, `${kind} ${r.label}`),

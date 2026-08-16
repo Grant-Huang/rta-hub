@@ -7,6 +7,7 @@
  */
 import type { FloorPlan, WallRun } from "../floorplan/types.js";
 import { isIsland } from "../floorplan/types.js";
+import { isWallLengthPending } from "../floorplan/parse.js";
 import {
   chatConfirmedPlumbing, isDeferElectrical, isDeferGas, isDeferIsland, isDeferPlumbing,
 } from "./chat-site-answers.js";
@@ -113,16 +114,15 @@ export function buildSiteQuestions(
       kind: "ceiling",
       mark: "Ceiling?",
       promptFor: (q) => msg(lang,
-        `Q${q}: What is the ceiling height in inches? (Reply e.g. "Q${q}: <inches>" or "ceiling <inches>")`,
-        `Q${q}: 层高多少英寸？（可直接回「Q${q}: <英寸数>」或「层高 <英寸数>」）`),
+        `Q${q}: What is the ceiling height in inches? (e.g. "ceiling 96")`,
+        `Q${q}: 层高多少英寸？（如「层高 96」）`),
     });
   }
 
   for (const run of runs) {
-    const lowConf = plan.unresolvedItems.some(
-      (u) => !u.resolved && u.target.kind === "wallRun" && u.target.id === run.id,
-    );
-    if (lowConf || run.length <= 0) {
+    // 只看长度是否待确认——同一面墙上还没定的门/窗/上下水分类走各自的 Q#，
+    // 不该让墙长这题被一起重新问一遍（见 parse.ts 的 isWallLengthPending 注释）。
+    if (isWallLengthPending(plan, run.id) || run.length <= 0) {
       const label = run.label;
       const len = run.length;
       add({

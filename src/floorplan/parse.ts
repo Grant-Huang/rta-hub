@@ -518,6 +518,19 @@ export function extractionNote(
   }
 }
 
+/**
+ * 这段墙的**长度**是否还有待确认项——只看 `field === "length"`，不看同一面墙上
+ * 其他待确认的特征（如门/窗分类还没定）。三处消费方（确认栏 `readiness.ts`、
+ * 导出 JSON 的 `wallRunProvenance`、Q# 生成的 `site-questions.ts`）都得用这同
+ * 一个判断，否则"长度已确认、特征待定"的墙会在三处显示不一致的确认状态。
+ * 与 `resolveWallLength` 写回时消解的 `field` 保持同一个字符串，别各写各的。
+ */
+export function isWallLengthPending(plan: FloorPlan, wallRunId: string): boolean {
+  return plan.unresolvedItems.some(
+    (u) => !u.resolved && u.target.kind === "wallRun" && u.target.id === wallRunId && u.field === "length",
+  );
+}
+
 /** 手动录入/修正一段墙的长度，同时消解对应的待确认项。 */
 export function resolveWallLength(plan: FloorPlan, wallRunId: string, length: number, at: string): FloorPlan {
   const value = quantize(length);

@@ -3045,11 +3045,9 @@ app.post("/api/conversations/:id/floorplan", requireAccount, async (c) => {
       "请只用文字回答——一条消息补齐墙长和层高"
         + "（例如：`<墙名> <英寸数>寸，<墙名> <英寸数>寸，层高 <英寸数>寸`）。"
         + "随后确认家电（或说「家电后定」），即可问你要不要出图。"));
-  } else if (sitePrompts.length) {
-    assistantBits.push(msg(fpLang,
-      "Please answer the numbered questions above in chat (text only).",
-      "请在对话里用文字回答上面的编号问题即可。"));
   }
+  // 上面每条 Q# 本身已经带了怎么答（示例/免答话术），这里不再补一句
+  // "请用文字回答编号问题"——同样的意思说两遍是啰嗦，不是更清楚。
   const names = files.map((f) => f.fileName).join(fpLang === "zh" ? "、" : ", ");
   const anyImage = files.some((f) => !!f.image);
   const textPart = typeof body.text === "string" ? body.text.trim() : "";
