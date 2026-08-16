@@ -106,7 +106,7 @@ import {
 } from "./delivery/adjusting.js";
 import { applyRepairStrategy, repairStrategiesFor } from "./layout/audit-repair.js";
 import { buildCabinetIndex } from "./layout/revision-intents.js";
-import { quickRepliesFor } from "./agents/quick-replies.js";
+import { isExplicitLayoutChoice, quickRepliesFor } from "./agents/quick-replies.js";
 import {
   buildEstimateDraft, buildIllustratedEstimate, catalogToPseudoModules, estimateCountsFromText, renderEstimateText,
 } from "./estimate/generic.js";
@@ -1391,6 +1391,20 @@ app.post("/api/conversations/:id/messages", requireAccount, async (c) => {
           replies.push({ role: "assistant", content: applied.interpretation, at });
         }
       }
+    } else if (isExplicitLayoutChoice(text)) {
+      // 已经有户型了（可能来自更早的照片上传或形状选择），但客户这次点的/打的
+      // 就是布局 chip 上原样那句话——是明确要求"换一个形状"，不是长句子里顺带
+      // 提一句（那种情况交给上面 `matchKnownShape` 的子串正则去挡，这里必须精确
+      // 匹配才触发）。之前这里被 `!planChat` 完全挡死，上传过户型图之后点布局
+      // chip 会静默没反应，跟客户"上传和选形状该是两条都能走的路"的预期不符。
+      const shapeId = matchKnownShape(text);
+      if (shapeId) {
+        const applied = await applyFloorplanTemplate(conv, shapeId, language, at);
+        if (applied) {
+          planChat = applied.plan;
+          replies.push({ role: "assistant", content: applied.interpretation, at });
+        }
+      }
     }
     const needShell = !planChat && (
       chatMentionsGeometry(combined)
@@ -2251,11 +2265,19 @@ app.get("/api/conversations/:id", requireAccount, (c) => {
   const companyId = c.req.query("companyId") || undefined;
   const readiness = designReadinessFor(conv.id, companyId);
   const plan = planForConversation(conv.id);
+  const geometryUsable = Boolean(plan?.parsedGeometry.wallRuns.some((r) => r.length > 0));
   return c.json({
     conversation: { ...conv, status: lifecycleStatus(conv) },
     language,
     rtaIntro: rtaIntro(language),
     welcome: floorplanFirstWelcome(language),
+    // 开场欢迎语明说"点下面的快捷选项"，但这句话之前只在客户发出第一条消息
+    // 之后才随 /messages 的响应给——新会话打开时按钮压根不存在，等于食言。
+    // 只在还没有对话历史、也还没有可用几何时给，跟前端 openConversation 只在
+    // history.length===0 时才展示 welcome 的判断对齐（FR-17：几何可用后不再甩）。
+    ...(conv.messages.length === 0 && !geometryUsable
+      ? { quickReplies: quickRepliesFor(["layout"], 1, language) }
+      : {}),
     intakeSamples: intakeSampleCards(language),
     // 切会话时前端必须恢复户型 id，否则同意出图会因 floorPlanId=null 卡死
     floorPlanId: plan?.id ?? null,

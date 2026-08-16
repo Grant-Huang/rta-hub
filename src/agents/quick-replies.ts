@@ -114,6 +114,22 @@ export function quickRepliesFor(
 }
 
 /**
+ * 文本是否**精确等于**某个布局 chip 上印的那句话（中英文都认，不分大小写）。
+ *
+ * 跟 `matchKnownShape`（`samples/templates.ts`，子串正则）不同：那个用来识别
+ * "还没有户型时客户打字点名"，宽松匹配没问题；这里用来判断"户型已经存在时，
+ * 客户是不是在明确要求换一个形状"——必须是点了 chip 或原样打出 chip 上那几个
+ * 字，不能是"我朋友家是U型的"这种长句子里顺带带到的字眼，否则会误重置
+ * 已经上传/确认过的真实户型。
+ */
+export function isExplicitLayoutChoice(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  return [...(CATALOG_EN.layout?.options ?? []), ...(CATALOG_ZH.layout?.options ?? [])]
+    .some((o) => o.toLowerCase() === t);
+}
+
+/**
  * 给 LLM 的提问纪律。
  *
  * 光有按钮不够：模型仍然会写出很长的括号列举。system prompt 里要明确要求短答案。

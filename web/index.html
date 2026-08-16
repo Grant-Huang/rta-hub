@@ -1668,6 +1668,9 @@ async function openConversation(id) {
     addMsg('assistant', body.welcome || t('welcomeFallback'));
     // 不再一开场就常驻展示户型缩略图（Phase 2）——户型是纯文字第一问，
     // 缩略图只在客户明确要求看示例时才出现（见 sendChat 对 intakeSamples 的处理）。
+    // 欢迎语说"点下面的快捷选项"，按钮就必须跟着这句话一起出现——
+    // 之前这里从来没渲染过 quickReplies，客户看到提示却找不到按钮。
+    renderQuickReplies(body.quickReplies || []);
   }
   for (const m of history) addMsg(m.role, m.content);
   await refreshConversations();
