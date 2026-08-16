@@ -1919,13 +1919,13 @@ function engagementConfirmedPayload(conv: Conversation, eg: CompanyEngagement) {
     } : {}),
     handoffRevision: eg.handoff.revision ?? 1,
     requirementsDigest: eg.handoff.requirementsDigest
-      ?? digestFromBriefSections(readiness.sections, lang).requirementsDigest,
+      ?? digestFromBriefSections(readiness.sections, readiness.confirmedFacts, lang).requirementsDigest,
   };
 }
 
 function briefHandoffBits(conversationId: string, companyId: string, language: UiLanguage) {
   const readiness = designReadinessFor(conversationId, companyId);
-  return digestFromBriefSections(readiness.sections, language);
+  return digestFromBriefSections(readiness.sections, readiness.confirmedFacts, language);
 }
 
 /** 按 URL 会话 + eid 取子轨；若会话 id 错位，在同账号下按 eid 找回。 */
